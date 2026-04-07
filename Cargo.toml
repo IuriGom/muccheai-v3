@@ -1,0 +1,170 @@
+[package]
+name = "muccheai-v3"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "muccheai"
+path = "src/main.rs"
+
+[profile.dev]
+# Aggressive bloat reduction for debug builds.
+# Full debuginfo is ~1 GB alone on a project this size.
+debug = 1
+# Minimal optimization reduces unoptimized codegen bloat without hurting compile times much.
+opt-level = 1
+
+[profile.release]
+strip = true
+lto = true
+
+[dependencies]
+sysinfo = { workspace = true }
+rustc_version = { workspace = true }
+chrono = { workspace = true }
+muccheai-types = { workspace = true }
+muccheai-policy-engine = { workspace = true }
+muccheai-sandbox = { workspace = true }
+muccheai-crypto = { workspace = true }
+muccheai-ui = { workspace = true }
+muccheai-build-verify = { workspace = true }
+muccheai-recovery = { workspace = true }
+muccheai-federation = { workspace = true }
+muccheai-tool-gateway = { workspace = true }
+muccheai-vault = { workspace = true }
+muccheai-mcp = { workspace = true }
+muccheai-memory = { workspace = true }
+serde = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+wasmtime = "29"
+wasmtime-wasi = "29"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+toml = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+ring = { workspace = true }
+axum = { version = "0.7", features = ["macros", "ws", "multipart"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "set-header", "limit"] }
+pdf-extract = "0.10"
+docx = "1.1"
+clap = { workspace = true }
+clap_complete = { workspace = true }
+tabled = { workspace = true }
+csv = { workspace = true }
+dirs = { workspace = true }
+libc = { workspace = true }
+rustyline = { workspace = true }
+console = { workspace = true }
+indicatif = { workspace = true }
+dialoguer = { workspace = true }
+url = { workspace = true }
+argon2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+subtle = { workspace = true }
+jsonschema = { workspace = true }
+zeroize = { workspace = true }
+sha3 = { workspace = true }
+hmac = { workspace = true }
+which = "6"
+regex = "1.10"
+urlencoding = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[workspace]
+members = [
+    "crates/muccheai-types",
+    "crates/muccheai-policy-engine",
+    "crates/muccheai-sandbox",
+    "crates/muccheai-crypto",
+    "crates/muccheai-ui",
+    "crates/muccheai-build-verify",
+    "crates/muccheai-recovery",
+    "crates/muccheai-federation",
+    "crates/muccheai-tool-gateway",
+    "crates/muccheai-vault",
+    "crates/muccheai-mcp",
+    "crates/muccheai-memory",
+]
+resolver = "2"
+
+[workspace.package]
+version = "3.2.0"
+edition = "2021"
+authors = ["MuccheAI Maintainers"]
+license = "MIT"
+repository = "https://github.com/IuriGom/muccheai-v3"
+rust-version = "1.80"
+
+[workspace.dependencies]
+muccheai-types = { path = "crates/muccheai-types" }
+muccheai-policy-engine = { path = "crates/muccheai-policy-engine" }
+muccheai-sandbox = { path = "crates/muccheai-sandbox" }
+muccheai-crypto = { path = "crates/muccheai-crypto" }
+muccheai-ui = { path = "crates/muccheai-ui" }
+muccheai-build-verify = { path = "crates/muccheai-build-verify" }
+muccheai-recovery = { path = "crates/muccheai-recovery" }
+muccheai-federation = { path = "crates/muccheai-federation" }
+muccheai-tool-gateway = { path = "crates/muccheai-tool-gateway" }
+muccheai-vault = { path = "crates/muccheai-vault" }
+muccheai-memory = { path = "crates/muccheai-memory" }
+muccheai-mcp = { path = "crates/muccheai-mcp" }
+
+anyhow = "1.0"
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
+clap_complete = "4.5"
+console = "0.15"
+criterion = { version = "0.5", features = ["html_reports"] }
+csv = "1.3"
+dialoguer = "0.11"
+dirs = "5.0"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+flate2 = "1.0"
+hex = "0.4"
+hmac = "0.12"
+indicatif = "0.17"
+jsonschema = "0.18"
+libc = "0.2"
+proptest = "1.5"
+pqcrypto-dilithium = "0.5"
+pqcrypto-kyber = "0.8"
+pqcrypto-traits = "0.3"
+rand = { version = "0.8", features = ["std_rng"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+ring = { version = "0.17", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+rustyline = "14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha3 = "0.10"
+subtle = "2.6"
+sysinfo = "0.30"
+tabled = "0.15"
+tempfile = "3.0"
+thiserror = "1.0"
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "io-util"] }
+toml = "0.8"
+tracing = "0.1"
+url = "2.5"
+urlencoding = "2.1"
+uuid = { version = "1.0", features = ["v4"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets", "getrandom"] }
+zeroize = { version = "1.8", features = ["derive"] }
+rustc_version = "0.4"
