@@ -1,0 +1,25 @@
+[package]
+name = "muccheai-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+sha3 = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }
+anyhow = { workspace = true }
+flate2 = { workspace = true }
+rand = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
