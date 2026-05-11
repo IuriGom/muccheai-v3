@@ -66,7 +66,7 @@ impl McpServer {
                     message: "Request too large".to_string(),
                     data: None,
                 }),
-            }).unwrap()
+            }).ok();
         }
         let req: JsonRpcRequest = match serde_json::from_str(request_json) {
             Ok(r) => r,
@@ -80,7 +80,7 @@ impl McpServer {
                         message: format!("Parse error: {}", e),
                         data: None,
                     }),
-                }).unwrap()
+                }).ok();
             }
         };
 
@@ -105,7 +105,7 @@ impl McpServer {
                             message: "Unauthorized: invalid or missing auth token".to_string(),
                             data: None,
                         }),
-                    }).unwrap()
+                    }).ok();
                 }
             }
         }
@@ -168,7 +168,11 @@ impl McpServer {
             },
         };
 
-        Ok(serde_json::to_value(result).unwrap())
+        serde_json::to_value(result).map_err(|e| JsonRpcError {
+            code: -32603,
+            message: format!("Serialization error: {}", e),
+            data: None,
+        })
     }
 
     fn handle_tools_list(&self) -> Result<serde_json::Value, JsonRpcError> {
@@ -177,7 +181,11 @@ impl McpServer {
             tools,
             next_cursor: None,
         };
-        Ok(serde_json::to_value(result).unwrap())
+        serde_json::to_value(result).map_err(|e| JsonRpcError {
+            code: -32603,
+            message: format!("Serialization error: {}", e),
+            data: None,
+        })
     }
 
     fn handle_tools_call(
