@@ -964,7 +964,8 @@ async fn run_web_server(bind: &str) {
             crate::plugin::PluginManager::new_disabled()
         })),
         backup_rate_limiter: Mutex::new(std::collections::HashMap::new()),
-                plugin_http_counters: Mutex::new(std::collections::HashMap::new()),
+        search_rate_limiter: Mutex::new(std::collections::HashMap::new()),
+        plugin_http_counters: Mutex::new(std::collections::HashMap::new()),
     });
 
     println!("🔐 Login with username 'admin' and your existing API key.");
