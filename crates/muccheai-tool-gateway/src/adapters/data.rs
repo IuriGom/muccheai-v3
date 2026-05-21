@@ -106,8 +106,16 @@ pub fn sqlite_query(params: &serde_json::Value) -> Result<ToolResult, ToolError>
     // Reject any query that is not a plain SELECT.
     let trimmed = query.trim();
 
+    // Reject Unicode homoglyphs that can bypass ASCII-based comment filters.
+    // U+2010–U+2015 are dash-like characters that look like `--`.
+    if trimmed.chars().any(|c| matches!(c, '\u{2010}'..='\u{2015}')) {
+        return Err(ToolError::CapabilityDenied(
+            "Query contains Unicode characters that may bypass filters".to_string()
+        ));
+    }
+
     // Strip ALL comment styles before checking keywords:
-    //   /* ... */  (C-style)
+    //   /* ... */  (C-style, including nested)
     //   -- ...     (line-style, including variations like `---`)
     //   # ...      (shell-style)
     let mut stripped = String::with_capacity(trimmed.len());
@@ -115,10 +123,17 @@ pub fn sqlite_query(params: &serde_json::Value) -> Result<ToolResult, ToolError>
     while let Some((_, c)) = chars.next() {
         if c == '/' && chars.peek().map(|(_, next)| *next) == Some('*') {
             chars.next(); // consume '*'
+            let mut depth = 1;
             while let Some((_, inner)) = chars.next() {
-                if inner == '*' && chars.peek().map(|(_, next)| *next) == Some('/') {
-                    chars.next(); // consume '/'
-                    break;
+                if inner == '/' && chars.peek().map(|(_, next)| *next) == Some('*') {
+                    chars.next();
+                    depth += 1;
+                } else if inner == '*' && chars.peek().map(|(_, next)| *next) == Some('/') {
+                    chars.next();
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
                 }
             }
         } else if c == '-' && chars.peek().map(|(_, next)| *next) == Some('-') {

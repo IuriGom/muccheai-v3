@@ -4,7 +4,9 @@ use muccheai_types::audit::*;
 use muccheai_types::Timestamp;
 use ed25519_dalek::Signer;
 use ring::rand::SecureRandom;
+use sha3::Digest;
 use std::path::PathBuf;
+use zeroize::Zeroize;
 
 /// Path to the audit log file.
 fn audit_log_path() -> PathBuf {
@@ -85,10 +87,31 @@ fn save_audit_key(key: &ForwardSecureKey) -> anyhow::Result<()> {
 }
 
 /// Derive the next forward-secure key and destroy the current one.
-fn evolve_key(current: &ForwardSecureKey) -> ForwardSecureKey {
-    let hash = muccheai_crypto::sha3_512(&current.key);
+/// Uses a random 32-byte nonce so that the chain is non-deterministic
+/// even if an attacker learns one key.
+fn evolve_key(current: &mut ForwardSecureKey) -> ForwardSecureKey {
+    let mut nonce = [0u8; 32];
+    if ring::rand::SystemRandom::new().fill(&mut nonce).is_err() {
+        // Fallback: if RNG fails, use the current time as entropy.
+        // This is suboptimal but better than panicking.
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_le_bytes();
+        nonce[..16].copy_from_slice(&ts);
+        nonce[16..24].copy_from_slice(&(current.key_id).to_le_bytes());
+    }
+    let mut hasher = sha3::Sha3_512::new();
+    hasher.update(b"muccheai-audit-key-v1");
+    hasher.update(&current.key);
+    hasher.update(&nonce);
+    hasher.update(&current.key_id.to_le_bytes());
+    let hash = hasher.finalize();
     let mut next_key = [0u8; 32];
     next_key.copy_from_slice(&hash[..32]);
+    // Destroy old key material
+    current.key.zeroize();
     ForwardSecureKey {
         key: next_key,
         key_id: current.key_id + 1,
@@ -97,7 +120,7 @@ fn evolve_key(current: &ForwardSecureKey) -> ForwardSecureKey {
 
 /// Append a security event to the audit log.
 pub fn append_audit_event(event: SecurityEvent) -> anyhow::Result<()> {
-    let log = load_audit_log()?;
+    let mut log = load_audit_log()?;
 
     let sequence = log.entries.len() as u64;
     let previous_hash = log.entries.last().map(|e| {
@@ -109,9 +132,10 @@ pub fn append_audit_event(event: SecurityEvent) -> anyhow::Result<()> {
 
     // Sign the entry with Ed25519 using the current forward-secure key
     let entry_bytes = serde_json::to_vec(&(sequence, &event, timestamp.0)).unwrap_or_default();
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&log.current_key.key);
+    let mut signing_key = ed25519_dalek::SigningKey::from_bytes(&log.current_key.key);
     let verifying_key = signing_key.verifying_key().to_bytes().to_vec();
     let sig = signing_key.sign(&entry_bytes).to_bytes().to_vec();
+    signing_key.to_bytes().zeroize();
 
     let entry = LogEntry {
         sequence,
@@ -140,8 +164,8 @@ pub fn append_audit_event(event: SecurityEvent) -> anyhow::Result<()> {
         std::fs::set_permissions(&log_path, perms)?;
     }
 
-    // Evolve the forward-secure key
-    let next_key = evolve_key(&log.current_key);
+    // Evolve the forward-secure key (destroys the old key)
+    let next_key = evolve_key(&mut log.current_key);
     save_audit_key(&next_key)?;
 
     Ok(())

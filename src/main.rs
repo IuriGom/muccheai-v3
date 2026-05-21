@@ -195,7 +195,11 @@ async fn main() {
             VaultCommands::Status => cli::vault::vault_status(),
             VaultCommands::Seal => println!("Not yet implemented: vault seal"),
             VaultCommands::Unseal => println!("Not yet implemented: vault unseal"),
-            VaultCommands::Rotate => cli::vault::vault_rotate(),
+            VaultCommands::Rotate => {
+                if let Err(e) = cli::vault::vault_rotate() {
+                    println!("✗ {e}");
+                }
+            }
             VaultCommands::Recover { share } => {
                 let inputs: Vec<cli::vault::ShareInput> = share
                     .iter()
@@ -206,7 +210,9 @@ async fn main() {
                         Some(cli::vault::ShareInput { index, value })
                     })
                     .collect();
-                cli::vault::vault_recover(inputs);
+                if let Err(e) = cli::vault::vault_recover(inputs) {
+                    println!("✗ {e}");
+                }
             }
         },
         Commands::Verify => {
@@ -850,13 +856,11 @@ fn verify_build() -> anyhow::Result<String> {
         hex::encode(&build_hash[..16])
     ));
 
-    let canary = WarrantCanary {
-        date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
-        statement: "No gag orders received as of today".to_string(),
-        signatures: vec![],
-    };
-    let canary_status = check_warrant_canary(&canary);
-    report.push_str(&format!("  ✓ Warrant canary: {:?}\n", canary_status));
+    // Warrant canary is placeholder data — no maintainer signatures configured.
+    report.push_str("  ⚠ Warrant canary: PLACEHOLDER (no maintainer signatures configured)\n");
+
+    // CI attestation requires configured GitHub/GitLab repositories.
+    report.push_str("  ⚠ CI attestation: NOT CONFIGURED (no CI systems verified)\n");
 
     let attestation = BuildAttestation {
         git_commit: [0u8; 20],

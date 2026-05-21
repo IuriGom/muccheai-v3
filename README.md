@@ -110,12 +110,12 @@ You can add custom rules with `muccheai policy add`.
 
 ### Approval Tiers
 
-| Tier | Friction |
-|------|----------|
-| Standard | Dialog with 3-second delay |
-| Secure | Re-type summary, 5-second delay |
-| Hardware | YubiKey or hardware token required |
-| Multi-Device | M-of-N devices must approve |
+| Tier | Status | Friction |
+|------|--------|----------|
+| Standard | ✅ Implemented | Dialog with 3-second delay |
+| Secure | ✅ Implemented | Re-type summary, 5-second delay |
+| Hardware | 🚧 Planned | YubiKey or hardware token required |
+| Multi-Device | 🚧 Planned | M-of-N devices must approve |
 
 ## Configuration
 

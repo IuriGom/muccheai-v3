@@ -22,11 +22,14 @@ use subtle::ConstantTimeEq;
 /// Constant-time comparison of two byte slices.
 /// Uses the `subtle` crate to prevent compiler optimizations from
 /// introducing timing side-channels.
+/// Constant-time equality comparison that does NOT leak length information.
+/// Hashes both inputs with SHA3-256 so that the comparison is always over
+/// fixed-length 32-byte digests, regardless of input size.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.ct_eq(b).into()
+    use sha3::Digest;
+    let a_hash = sha3::Sha3_256::digest(a);
+    let b_hash = sha3::Sha3_256::digest(b);
+    a_hash.ct_eq(&b_hash).into()
 }
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};

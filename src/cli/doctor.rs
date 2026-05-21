@@ -27,6 +27,9 @@ pub async fn run() -> anyhow::Result<()> {
     print!("  Ollama... ");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(5)
         .build()?;
     match client
         .get(format!("{}/api/tags", config.ollama_host))

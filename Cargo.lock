@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-build-verify"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-crypto"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "criterion",
  "ed25519-dalek",
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-federation"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "muccheai-crypto",
  "muccheai-types",
@@ -1715,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-mcp"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "muccheai-types",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-memory"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-policy-engine"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-recovery"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-sandbox"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "libc",
  "muccheai-crypto",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-tool-gateway"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "csv",
  "dirs",
@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-types"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "chrono",
  "proptest",
@@ -1837,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-ui"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "ed25519-dalek",
  "muccheai-crypto",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-v3"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1887,6 +1887,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "sha3",
  "subtle",
  "sysinfo",
  "tabled",
@@ -1903,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "muccheai-vault"
-version = "3.0.5-alpha.2"
+version = "3.1.0-alpha.2"
 dependencies = [
  "hmac",
  "muccheai-types",

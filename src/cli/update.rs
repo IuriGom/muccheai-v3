@@ -11,6 +11,9 @@ pub async fn run() -> anyhow::Result<()> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(5)
         .build()?;
 
     match client

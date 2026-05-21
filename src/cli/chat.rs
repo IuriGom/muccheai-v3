@@ -34,7 +34,7 @@ async fn run_single_message(msg: &str, config: &MuccheConfig) -> anyhow::Result<
     let mut gateway = ToolGateway::new(keypair.pubkey.clone());
     register_adapters(&mut gateway, &config.allowed_tools);
     let mut trusted_ui = TrustedUi::new();
-    let mut memory = MemoryEngine::new("muccheai").unwrap();
+    let mut memory = MemoryEngine::new("muccheai")?;
 
     let result = process_message(msg, &sandbox, &mut policy_engine, &mut trusted_ui, &gateway, config, &mut memory, &keypair);
     sandbox.stop()?;
@@ -49,7 +49,7 @@ async fn start_repl(config: &MuccheConfig) -> anyhow::Result<()> {
     register_adapters(&mut gateway, &config.allowed_tools);
     let mut trusted_ui = TrustedUi::new();
     let _store = MemoryStore::new().ok();
-    let mut memory = MemoryEngine::new("muccheai").unwrap();
+    let mut memory = MemoryEngine::new("muccheai")?;
     let structured_memory = StructuredMemoryManager::new().ok();
 
     let persona_name = if config.current_persona.is_empty() {
@@ -62,7 +62,11 @@ async fn start_repl(config: &MuccheConfig) -> anyhow::Result<()> {
         .iter()
         .find(|p| p.name == persona_name)
         .cloned()
-        .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap());
+        .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap_or(crate::config::Persona {
+            name: "default".to_string(),
+            description: "Default assistant".to_string(),
+            system_prompt: "You are a helpful assistant.".to_string(),
+        }));
 
     println!(
         "🐄 MuccheAI v3.0 — Persona: {} — Type /help for commands",
@@ -323,7 +327,11 @@ fn process_message(
         .iter()
         .find(|p| p.name == config.current_persona)
         .cloned()
-        .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap());
+        .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap_or(crate::config::Persona {
+            name: "default".to_string(),
+            description: "Default assistant".to_string(),
+            system_prompt: "You are a helpful assistant.".to_string(),
+        }));
     process_message_with_history(
         text, sandbox, policy_engine, trusted_ui, gateway, config, &persona, &mut history, None, memory, keypair,
     )

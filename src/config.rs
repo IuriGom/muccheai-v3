@@ -733,6 +733,17 @@ impl MuccheConfig {
                 if content.len() > MAX_CONFIG_SIZE {
                     return Err(anyhow::anyhow!("Config file too large (max {} bytes)", MAX_CONFIG_SIZE));
                 }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::metadata(&path)?.permissions();
+                    if perms.mode() & 0o777 != 0o600 {
+                        return Err(anyhow::anyhow!(
+                            "Config file permissions are {:o} (expected 0o600). Refusing to load.",
+                            perms.mode() & 0o777
+                        ));
+                    }
+                }
                 raw_content = content;
                 config = toml::from_str(&raw_content)?;
             }

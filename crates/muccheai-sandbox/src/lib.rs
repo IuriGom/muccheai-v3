@@ -362,16 +362,40 @@ impl LlmSandbox {
         })
     }
 
-    /// Call Ollama API for real inference
-    fn call_ollama(
+    /// Build a safely delimited prompt with injection-pattern detection.
+    /// Rejects common prompt-injection payloads that attempt to override
+    /// system instructions.
+    fn build_safe_prompt(
         &self,
         prompt: &ValidatedPrompt,
-        seed: u64,
     ) -> std::result::Result<String, InferenceError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| InferenceError::OllamaNotRunning(e.to_string()))?;
+        let user_text = &prompt.text;
+
+        // Reject known prompt-injection patterns.
+        let lower = user_text.to_lowercase();
+        let forbidden_patterns = [
+            "ignore previous instructions",
+            "ignore all prior",
+            "ignore the above",
+            "system prompt:",
+            "you are now",
+            "you are a",
+            "</system>",
+            "</user>",
+            "</instruction>",
+            "</sys>",
+            "[system]",
+            "[/system]",
+            "<<|",
+            "|>>",
+        ];
+        for pat in &forbidden_patterns {
+            if lower.contains(pat) {
+                return Err(InferenceError::InvalidModelOutput(
+                    format!("Prompt contains forbidden pattern: {}", pat)
+                ));
+            }
+        }
 
         let system_prompt = format!(
             "You are a structured action parser. Extract the user's intent and respond with ONLY a single JSON object. \
@@ -385,11 +409,38 @@ impl LlmSandbox {
             .map(|ctx| format!("Context:\n{}\n\n", ctx))
             .unwrap_or_default();
 
-        let full_prompt = format!("{}{}\n\nUser request: {}\n\nJSON response:", memory_prefix, system_prompt, prompt.text);
+        // Use XML-like delimiters to separate system instructions from user input.
+        // This makes it harder for the user to break out of the user context.
+        let full_prompt = format!(
+            "{}<|system|>\n{}\n<|/system|>\n<|user|>\n{}\n<|/user|>\n<|response|>\n",
+            memory_prefix, system_prompt, user_text
+        );
+
+        Ok(full_prompt)
+    }
+
+    /// Call Ollama API for real inference.
+    /// ⚠ OS-level sandboxing (VM/container) is not yet implemented.
+    ///    This runs the HTTP request in the parent process with best-effort
+    ///    restrictions (no redirects, timeouts, injection filtering).
+    fn call_ollama(
+        &self,
+        prompt: &ValidatedPrompt,
+        seed: u64,
+    ) -> std::result::Result<String, InferenceError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_max_idle_per_host(5)
+            .build()
+            .map_err(|e| InferenceError::OllamaNotRunning(e.to_string()))?;
+
+        let safe_prompt = self.build_safe_prompt(prompt)?;
 
         let request = OllamaRequest {
             model: self.config.ollama_model.clone(),
-            prompt: full_prompt,
+            prompt: safe_prompt,
             stream: false,
             format: "json".to_string(),
             options: OllamaOptions {
@@ -428,7 +479,8 @@ impl LlmSandbox {
         Ok(cleaned)
     }
 
-    /// Async version of Ollama API call
+    /// Async version of Ollama API call.
+    /// ⚠ OS-level sandboxing (VM/container) is not yet implemented.
     pub async fn call_ollama_async(
         &self,
         prompt: &ValidatedPrompt,
@@ -436,26 +488,17 @@ impl LlmSandbox {
     ) -> std::result::Result<String, InferenceError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_max_idle_per_host(5)
             .build()
             .map_err(|e| InferenceError::OllamaNotRunning(e.to_string()))?;
 
-        let system_prompt = format!(
-            "You are a structured action parser. Extract the user's intent and respond with ONLY a single JSON object. \
-             The JSON must match this schema: {}. \
-             Do not include markdown code fences, explanations, or any text outside the JSON object. \
-             Example: {{\"tool_id\":\"email\",\"method\":\"send\",\"params\":{{\"to\":\"john@example.com\",\"subject\":\"Hello\"}}}}",
-            prompt.output_schema
-        );
-
-        let memory_prefix = prompt.memory_context.as_ref()
-            .map(|ctx| format!("Context:\n{}\n\n", ctx))
-            .unwrap_or_default();
-
-        let full_prompt = format!("{}{}\n\nUser request: {}\n\nJSON response:", memory_prefix, system_prompt, prompt.text);
+        let safe_prompt = self.build_safe_prompt(prompt)?;
 
         let request = OllamaRequest {
             model: self.config.ollama_model.clone(),
-            prompt: full_prompt,
+            prompt: safe_prompt,
             stream: false,
             format: "json".to_string(),
             options: OllamaOptions {

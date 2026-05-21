@@ -293,79 +293,114 @@ fn is_internal_url(url: &str) -> bool {
         Err(_) => return true, // Reject unparseable URLs
     };
 
-    let host = match parsed.host_str() {
-        Some(h) => h.to_lowercase(),
-        None => return true,
-    };
-
-    if host == "localhost" {
+    // Reject non-HTTP(S) schemes outright.
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return true;
     }
 
-    // Block decimal IP addresses (e.g. 2130706433 = 127.0.0.1)
-    // Also block short all-numeric hosts that may resolve internally
-    if host.chars().all(|c| c.is_ascii_digit()) {
-        return true;
-    }
-
-    // Block hex/octal IP forms that std::net::IpAddr does not parse
-    if host.starts_with("0x") || host.starts_with("0X") {
-        return true;
-    }
-    if host.chars().all(|c| c.is_ascii_digit() || c == '.') && host.starts_with('0') && host.len() > 1 && host != "0.0.0.0" {
-        return true;
-    }
-
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        let blocked = match ip {
-            std::net::IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+    // Use url::Host for proper IP parsing (handles IPv4-mapped IPv6, etc.)
+    match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => {
+            return v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_documentation();
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            if v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast() {
+                return true;
             }
-            std::net::IpAddr::V6(v6) => {
-                // Check standard IPv6 categories
-                if v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
-                    || v6.is_unicast_link_local() || v6.is_multicast() {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                if v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_multicast()
+                    || v4.is_broadcast() {
                     return true;
                 }
-                // Check IPv4-mapped IPv6 addresses (dotted-decimal form)
-                if let Some(v4) = v6.to_ipv4_mapped() {
-                    if v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() {
-                        return true;
-                    }
-                }
-                // Check IPv4-translated IPv6 addresses (::ffff:0:0/96)
-                // and compressed hex forms like ::ffff:7f00:1
-                let segs = v6.segments();
-                if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0
-                    && segs[4] == 0 && segs[5] == 0xffff {
-                    // IPv4-mapped or translated: last 32 bits are IPv4
-                    let v4_bytes = [(segs[6] >> 8) as u8, (segs[6] & 0xff) as u8,
-                                    (segs[7] >> 8) as u8, (segs[7] & 0xff) as u8];
-                    let v4 = std::net::Ipv4Addr::from(v4_bytes);
-                    if v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() {
-                        return true;
-                    }
-                }
-                false
             }
-        };
-        if blocked {
-            return true;
+            return false;
         }
-    }
+        Some(url::Host::Domain(domain)) => {
+            let host = domain.to_lowercase();
 
-    if host.starts_with("127.") || host.starts_with("0.") || host.starts_with("10.")
-        || host.starts_with("192.168.") || host.starts_with("169.254.")
-        || host == "[::1]" || host.starts_with("[::ffff:")
-        || host.starts_with("[fc") || host.starts_with("[fd")
-        || host.starts_with("[fe80:") || host.starts_with("[ff")
-    {
-        return true;
-    }
+            // Strip trailing dot used to bypass suffix checks.
+            let host = host.strip_suffix('.').unwrap_or(&host);
 
-    false
+            if host == "localhost" {
+                return true;
+            }
+
+            // Block decimal IP addresses (e.g. 2130706433 = 127.0.0.1)
+            if host.chars().all(|c| c.is_ascii_digit()) {
+                return true;
+            }
+
+            // Block hex/octal IP forms that std::net::IpAddr does not parse
+            if host.starts_with("0x") || host.starts_with("0X") {
+                return true;
+            }
+            if host.chars().all(|c| c.is_ascii_digit() || c == '.')
+                && host.starts_with('0')
+                && host.len() > 1
+                && host != "0.0.0.0" {
+                return true;
+            }
+
+            // Also try parsing as IP in case Url parsed a bare IP as a domain
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                let blocked = match ip {
+                    std::net::IpAddr::V4(v4) => {
+                        v4.is_loopback()
+                            || v4.is_private()
+                            || v4.is_link_local()
+                            || v4.is_unspecified()
+                            || v4.is_multicast()
+                            || v4.is_broadcast()
+                            || v4.is_documentation()
+                    }
+                    std::net::IpAddr::V6(v6) => {
+                        v6.is_loopback()
+                            || v6.is_unspecified()
+                            || v6.is_unique_local()
+                            || v6.is_unicast_link_local()
+                            || v6.is_multicast()
+                    }
+                };
+                if blocked {
+                    return true;
+                }
+            }
+
+            // String prefix blocks for common internal ranges
+            if host.starts_with("127.")
+                || host.starts_with("0.")
+                || host.starts_with("10.")
+                || host.starts_with("172.")
+                || host.starts_with("192.168.")
+                || host.starts_with("169.254.")
+                || host == "[::1]"
+                || host.starts_with("[::ffff:")
+                || host.starts_with("[fc")
+                || host.starts_with("[fd")
+                || host.starts_with("[fe80:")
+                || host.starts_with("[ff")
+            {
+                return true;
+            }
+
+            false
+        }
+        None => true,
+    }
 }
 
 /// Resolve a hostname and verify none of the returned IPs are internal.

@@ -9,15 +9,22 @@ pub fn vault_status() {
 }
 
 /// Rotate vault keys.
-pub fn vault_rotate() {
-    println!("Rotating vault keys...");
-    println!("  (Not yet fully implemented — stub)");
+///
+/// ⚠ NOT YET IMPLEMENTED. This is a placeholder for future Shamir re-sharing.
+/// Calling this function will return an error.
+pub fn vault_rotate() -> anyhow::Result<()> {
+    anyhow::bail!(
+        "Vault key rotation is not yet implemented. Create a new vault and migrate secrets manually."
+    )
 }
 
 /// Recover vault from shares.
-pub fn vault_recover(_shares: Vec<ShareInput>) {
-    println!("Recovering vault from shares...");
-    println!("  (Not yet fully implemented — stub)");
+///
+/// ⚠ NOT YET IMPLEMENTED. This is a placeholder for future Shamir recovery.
+pub fn vault_recover(_shares: Vec<ShareInput>) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "Vault recovery from shares is not yet implemented."
+    )
 }
 
 /// A single share input for recovery.

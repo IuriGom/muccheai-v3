@@ -184,7 +184,7 @@ impl HybridIndex {
             }
         }
 
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         hits.truncate(limit);
         Ok(hits)
     }
@@ -264,7 +264,7 @@ fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
 fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
 
