@@ -1,0 +1,37 @@
+syntax = "proto3";
+package llm_sandbox;
+
+message InferenceRequest {
+  bytes validated_prompt = 1;
+  bytes model_hash = 2;
+  string schema_name = 3;
+  uint64 seed = 4;
+}
+
+message StructuredSuggestion {
+  bytes json_payload = 1;
+  bytes model_hash = 2;
+  uint64 inference_time_ms = 3;
+  bytes integrity_proof = 4;
+}
+
+message IntegrityCheck {
+  bytes model_weights_path = 1;
+  bytes expected_hash = 2;
+}
+
+message IntegrityResult {
+  bool valid = 1;
+  bytes computed_hash = 2;
+  string algorithm = 3;
+}
+
+message InferenceError {
+  string code = 1;
+  string message = 2;
+}
+
+service LlmSandbox {
+  rpc Inference(InferenceRequest) returns (StructuredSuggestion);
+  rpc VerifyIntegrity(IntegrityCheck) returns (IntegrityResult);
+}

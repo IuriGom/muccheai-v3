@@ -1,0 +1,21 @@
+[package]
+name = "muccheai-vault"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+muccheai-types = { workspace = true }
+
+ring = { workspace = true }
+sha3 = { workspace = true }
+hmac = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Security.framework bindings for Keychain/Secure Enclave

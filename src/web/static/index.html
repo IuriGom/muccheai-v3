@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>MuccheAI — Secure AI Agent</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/style.css?v=9">
+</head>
+<body>
+    <!-- API Key Entry Modal -->
+    <div id="apiKeyModal" class="api-key-modal" style="display:none;">
+        <div class="api-key-modal-content">
+            <h3>🔐 Enter API Key</h3>
+            <p>The API key was printed in your terminal when you ran <code>muccheai web</code>.</p>
+            <form>
+                <input type="password" id="apiKeyInput" placeholder="Paste your API key here" autocomplete="off">
+                <button type="submit" class="btn btn-primary">Connect</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- First Use — Name Your AI Modal -->
+    <div id="nameAiModal" class="api-key-modal" style="display:none;">
+        <div class="api-key-modal-content">
+            <h3>👋 Welcome</h3>
+            <p>I'm your AI assistant. What would you like to call me?</p>
+            <form>
+                <input type="text" id="aiNameInput" placeholder="e.g. MuccheAI, Assistant, etc." autocomplete="off" maxlength="30">
+                <button type="submit" class="btn btn-primary">Start</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- API Key Slide-out Panel -->
+    <div id="apiPanelBackdrop" class="slide-panel-backdrop"></div>
+    <div id="apiPanel" class="slide-panel">
+        <div class="slide-panel-header">
+            <h3>⚙️ AI Providers</h3>
+            <button class="btn-icon">✕</button>
+        </div>
+        <div class="slide-panel-body">
+            <div id="agentsList" class="agents-list"></div>
+            <div class="agent-form">
+                <h4>Add Provider</h4>
+                <select id="agentProvider">
+                    <option value="ollama">Ollama</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                </select>
+                <input type="text" id="agentName" placeholder="Name (e.g. My Ollama)">
+                <label>Model <span class="tooltip-icon" data-tip="The AI model identifier (e.g. qwen3:14b, gpt-4, claude-3-sonnet).">?</span></label>
+                <input type="text" id="agentModel" placeholder="Model (e.g. qwen3:14b)">
+                <label>Base URL <span class="tooltip-icon" data-tip="The provider's API base URL. Leave empty to use the default.">?</span></label>
+                <input type="text" id="agentBaseUrl" placeholder="Base URL">
+                <label>API Key <span class="tooltip-icon" data-tip="Provider API key or token. Required for OpenAI/Anthropic; leave empty for local Ollama.">?</span></label>
+                <input type="password" id="agentApiKey" placeholder="API Key (if needed)">
+                <div class="btn-row">
+                    <button class="btn btn-primary">Save</button>
+                    <button class="btn btn-secondary">Test</button>
+                </div>
+                <div id="agentTestResult" class="test-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Research Chats Modal -->
+    <div id="researchModal" class="modal">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>🔍 Research Chats</h3>
+                <button class="btn-icon" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.75rem;">Ask anything about your chat history. The AI will analyze all your past conversations.</p>
+                <div style="background:rgba(255,200,0,0.1);border:1px solid rgba(255,200,0,0.3);border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.8rem;color:var(--text-dim);">
+                    ⚠️ <strong>Privacy Warning:</strong> Research sends your chat history to the configured LLM provider. Do not use for sensitive data.
+                </div>
+                <input type="text" id="researchQuery" class="form-input" placeholder="e.g., What topics have I discussed most?">
+                <div id="researchResult" style="margin-top:1rem;white-space:pre-wrap;"></div>
+                <div id="researchLoading" style="display:none;margin-top:1rem;text-align:center;color:var(--text-dim);">Analyzing...</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="runResearchBtn">Research</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3>⚙️ Settings</h3>
+                <button class="btn-icon">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label>Language / Idioma / 语言</label>
+                    <select id="settingLanguage">
+                        <option value="en">English</option>
+                        <option value="pt">Português (Brasil)</option>
+                        <option value="zh">中文 (简体)</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label for="settingAiName">AI Name</label>
+                    <div class="input-row">
+                        <input type="text" id="settingAiName" placeholder="MuccheAI" maxlength="30">
+                        <button class="btn btn-secondary" id="renameAiBtn">Rename</button>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label>Model</label>
+                    <select id="settingModel">
+                        <option value="qwen3:14b">qwen3:14b</option>
+                        <option value="llama3.2">llama3.2</option>
+                        <option value="gpt-4">gpt-4</option>
+                        <option value="claude-3-sonnet">claude-3-sonnet</option>
+                        <option value="mistral">mistral</option>
+                        <option value="codellama">codellama</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label>Temperature: <span id="tempValue">0.7</span>
+                        <span class="tooltip-icon" data-tip="Controls creativity. Lower = more focused and deterministic. Higher = more creative and random.">?</span>
+                    </label>
+                    <input type="range" id="settingTemp" min="0" max="1" step="0.05" value="0.7">
+                </div>
+                <div class="setting-group">
+                    <label>Max Tokens <span class="tooltip-icon" data-tip="Maximum number of tokens the AI will generate in one response.">?</span></label>
+                    <input type="number" id="settingMaxTokens" value="1024" min="1" max="8192">
+                </div>
+                <div class="setting-group">
+                    <label>Sandbox Memory Limit (MB) <span class="tooltip-icon" data-tip="Memory limit for the sandbox in megabytes.">?</span></label>
+                    <input type="number" id="settingMemLimit" value="512" min="128" max="8192">
+                </div>
+                <div class="setting-group toggle-row">
+                    <label>Dual Verification <span class="tooltip-icon" data-tip="Runs inference twice and compares results to detect tampering.">?</span></label>
+                    <label class="switch">
+                        <input type="checkbox" id="settingDualVerify" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-group toggle-row">
+                    <label>Auto-Approve Low Risk <span class="tooltip-icon" data-tip="Automatically approves actions marked as low risk without asking.">?</span></label>
+                    <label class="switch">
+                        <input type="checkbox" id="settingAutoApprove">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="setting-group toggle-row">
+                    <label>Show Reasoning</label>
+                    <label class="switch">
+                        <input type="checkbox" id="settingShowReasoning" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-cow">  ^__^
+ (oo)\\_______
+ (__)\\       )\\/\\
+     ||----w |
+     ||     ||</div>
+                <h1>MuccheAI</h1>
+                <span>v3.0 — Secure AI Agent</span>
+            </div>
+            <nav class="nav-section">
+                <div class="nav-label">Agent</div>
+                <a href="#chat" class="nav-item active" data-tab="chat">
+                    <span class="nav-icon">💬</span> Chat
+                </a>
+                <a href="#memory" class="nav-item" data-tab="memory">
+                    <span class="nav-icon">🧠</span> Memory
+                </a>
+                <a href="#personas" class="nav-item" data-tab="personas">
+                    <span class="nav-icon">🎭</span> Personas
+                </a>
+                <a href="#mcp" class="nav-item" data-tab="mcp">
+                    <span class="nav-icon">🔌</span> MCP
+                </a>
+            </nav>
+            <nav class="nav-section">
+                <div class="nav-label">System</div>
+                <a href="#status" class="nav-item" data-tab="status">
+                    <span class="nav-icon">📊</span> Status
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span> Settings
+                </a>
+            </nav>
+
+            <!-- Chat History -->
+            <div class="nav-section" id="chatHistorySection">
+                <div class="nav-label" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>History</span>
+                    <button class="btn-icon" id="researchChatsBtn" title="Research chats">🔍</button>
+                </div>
+                <input type="text" class="chat-history-search" id="chatHistorySearch" placeholder="Search chats...">
+                <div id="chatHistoryList"></div>
+            </div>
+
+            <!-- Real-time Status Sidebar -->
+            <div class="status-sidebar" id="statusSidebar">
+                <div class="status-toggle" id="statusToggle" title="Collapse/expand status">
+                    <span class="status-toggle-label">Status</span>
+                    <span class="status-toggle-arrow">▾</span>
+                </div>
+                <div class="status-content" id="statusContent">
+                    <div class="status-item">
+                        <span class="status-dot" id="ollamaDot"></span>
+                        <span class="status-label">Ollama</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-dot green" id="pqcDot"></span>
+                        <span class="status-label">PQC Keys</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Rules</span>
+                        <span class="status-val" id="ruleCount">—</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Tokens</span>
+                        <span class="status-val" id="tokenCount">—</span>
+                    </div>
+                    <div class="status-audit" id="lastAudit">—</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="btn-icon" id="sidebarToggleBtn" title="Toggle sidebar">☰</button>
+                    <h2 id="pageTitle">Chat</h2>
+                    <div class="persona-selector">
+                        <select id="personaSelect">
+                            <option>Loading...</option>
+                        </select>
+                    </div>
+                    <div class="agent-selector">
+                        <select id="agentSelect">
+                            <option>Loading...</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="topbar-right">
+                    <button class="btn-icon" id="darkModeBtn" title="Toggle dark mode">🌙</button>
+                    <button class="btn-icon" id="logoutBtn" title="Logout">🚪</button>
+                    <button class="btn btn-secondary mobile-menu-btn">☰</button>
+                    <button class="btn btn-secondary" id="apiPanelToggleBtn">⚙️ AI Setup</button>
+                    <button class="btn btn-secondary" id="newChatBtn">+ New Chat</button>
+                </div>
+            </header>
+
+            <div class="content">
+                <!-- Chat Tab -->
+                <section class="tab active" id="tab-chat">
+                    <div class="chat-layout">
+                        <div class="chat-panel">
+                            <div id="cloudPrivacyWarning" style="display:none;background:rgba(255,200,0,0.1);border:1px solid rgba(255,200,0,0.3);border-radius:6px;padding:0.5rem 0.75rem;margin:0.5rem 1rem;font-size:0.8rem;color:var(--text-dim);">
+                                ⚠️ <strong>Privacy Warning:</strong> This chat sends messages to an external cloud provider. Do not share sensitive data.
+                            </div>
+                            <div class="chat-messages" id="messages">
+                                <div class="welcome-message">
+                                    <h2>🐄 Welcome to MuccheAI</h2>
+                                    <p>Your local, secure AI agent. Select a persona and start chatting.</p>
+                                </div>
+                            </div>
+                            <div class="chat-input-area">
+                                <div id="typingIndicator" class="typing-indicator hidden">
+                                    <span></span><span></span><span></span>
+                                    <span id="typingWord" class="typing-word"></span>
+                                </div>
+                                <div class="chat-input">
+                                    <input type="text" id="input" placeholder="Message MuccheAI..." autocomplete="off">
+                                    <button id="send">➤</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Memory Tab -->
+                <section class="tab" id="tab-memory">
+                    <div class="page-container">
+                        <div class="page-header">
+                            <h2>🧠 Memory</h2>
+                            <div class="memory-subtabs">
+                                <button class="subtab-btn active" id="subtab-memories">Memories</button>
+                                <button class="subtab-btn" id="subtab-queue">Approval Queue <span id="queueBadge" class="badge" style="display:none;">0</span></button>
+                            </div>
+                        </div>
+
+                        <!-- Memories Subtab -->
+                        <div id="memory-subtab-memories" class="memory-subtab-content">
+                            <div class="memory-add-form">
+                                <h3>Add Memory</h3>
+                                <select id="memoryTypeSelect">
+                                    <option value="Fact">Fact</option>
+                                    <option value="Preference">Preference</option>
+                                </select>
+                                <input type="text" id="memoryKeyInput" placeholder="Key (e.g., birthday, timezone)">
+                                <input type="text" id="memoryValueInput" placeholder="Value">
+                                <button>Save</button>
+                            </div>
+                            <div class="memory-sections">
+                                <div class="memory-section">
+                                    <h3>📌 Facts</h3>
+                                    <div id="factsList" class="memory-list"></div>
+                                </div>
+                                <div class="memory-section">
+                                    <h3>⚙️ Preferences</h3>
+                                    <div id="preferencesList" class="memory-list"></div>
+                                </div>
+                                <div class="memory-section">
+                                    <h3>📋 Task History</h3>
+                                    <div id="taskHistoryList" class="memory-list"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Approval Queue Subtab -->
+                        <div id="memory-subtab-queue" class="memory-subtab-content" style="display:none;">
+                            <div id="queueList" class="queue-list"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Personas Tab -->
+                <section class="tab" id="tab-personas">
+                    <div class="page-container">
+                        <h2>🎭 Personas</h2>
+                        <p class="page-desc">Choose a persona to change how MuccheAI responds.</p>
+                        <div class="persona-grid" id="personaGrid"></div>
+                    </div>
+                </section>
+
+                <!-- MCP Tab -->
+                <section class="tab" id="tab-mcp">
+                    <div class="page-container">
+                        <h2>🔌 MCP Registry</h2>
+                        <p class="page-desc">Manage Model Context Protocol (MCP) servers to extend MuccheAI with external tools.</p>
+                        <div class="mcp-add-form">
+                            <h3>Add MCP Server</h3>
+                            <select id="mcpPreset">
+                                <option value="">-- Select a famous MCP server --</option>
+                                <option value="github">GitHub</option>
+                                <option value="filesystem">Filesystem</option>
+                                <option value="brave-search">Brave Search</option>
+                                <option value="slack">Slack</option>
+                                <option value="fetch">Fetch</option>
+                                <option value="puppeteer">Puppeteer</option>
+                                <option value="postgres">PostgreSQL</option>
+                                <option value="sqlite">SQLite</option>
+                                <option value="custom">Custom (manual)</option>
+                            </select>
+                            <select id="mcpTransport">
+                                <option value="stdio">stdio (local command)</option>
+                                <option value="http">HTTP/SSE (remote URL)</option>
+                            </select>
+                            <input type="text" id="mcpName" placeholder="Server name (e.g. pieces, brave)" autocomplete="off">
+                            <div id="mcpStdioFields">
+                                <input type="text" id="mcpCommand" placeholder="Command (e.g. mcp-remote, npx)" autocomplete="off">
+                                <input type="text" id="mcpArgs" placeholder="Arguments (comma-separated)" autocomplete="off">
+                            </div>
+                            <div id="mcpHttpFields" style="display:none;">
+                                <input type="text" id="mcpUrl" placeholder="URL (e.g. http://localhost:39300/mcp)" autocomplete="off">
+                                <input type="password" id="mcpApiKey" placeholder="API Key (optional)" autocomplete="off">
+                            </div>
+                            <button class="btn btn-primary" id="mcpAddBtn">Add Server</button>
+                        </div>
+                        <div class="mcp-list" id="mcpList"></div>
+                    </div>
+                </section>
+
+                <!-- Status Tab -->
+                <section class="tab" id="tab-status">
+                    <div class="page-container">
+                        <h2>📊 System Status</h2>
+                        <div class="status-grid" id="statusGrid"></div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="/app.js?v=9"></script>
+
+    <!-- Approval Notification Toast -->
+    <div id="approvalToast" class="approval-toast" style="display:none;">
+        <span>⏳ Memory approval queue pending</span>
+        <button class="btn btn-secondary" id="approvalToastBtn">Go to Memory</button>
+        <button class="btn-icon" id="approvalToastDismiss" title="Dismiss">✕</button>
+    </div>
+    <div id="versionBadge" style="position:fixed;bottom:8px;right:12px;font-size:11px;color:var(--text-tertiary,#888);opacity:0.7;pointer-events:none;z-index:9999;">MuccheAI</div>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[package]
+name = "muccheai-sandbox"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+muccheai-types = { workspace = true }
+muccheai-crypto = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+libc = "0.2"
+tempfile = "3"
+

@@ -1,0 +1,30 @@
+syntax = "proto3";
+package tool_gateway;
+
+message ToolExecution {
+  string tool_id = 1;
+  string method = 2;
+  bytes params = 3;
+  bytes capability_token = 4;
+}
+
+message ExecutionResult {
+  bool success = 1;
+  bytes result = 2;
+  uint64 execution_time_ms = 3;
+  string audit_log_id = 4;
+}
+
+message ScopeQuery {
+  string tool_id = 1;
+}
+
+message ScopeResult {
+  repeated string allowed_methods = 1;
+  repeated string resource_patterns = 2;
+}
+
+service ToolGateway {
+  rpc ExecuteTool(ToolExecution) returns (ExecutionResult);
+  rpc QueryScope(ScopeQuery) returns (ScopeResult);
+}

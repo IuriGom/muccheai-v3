@@ -1,0 +1,101 @@
+syntax = "proto3";
+package policy_engine;
+
+message ActionProposal {
+  string tool_id = 1;
+  string method = 2;
+  bytes params = 3; // JSON-encoded parameters
+  bytes requester_pubkey = 4;
+  uint64 timestamp_ms = 5;
+  bytes nonce = 6;
+}
+
+message CapabilitySet {
+  repeated CapabilityToken tokens = 1;
+}
+
+message CapabilityToken {
+  bytes token_id = 1;
+  string tool_id = 2;
+  string method = 3;
+  repeated string resource_ids = 4;
+  uint64 not_before_ms = 5;
+  uint64 not_after_ms = 6;
+  bytes issuer_pubkey = 7;
+  bytes classical_signature = 8;
+  bytes pq_signature = 9;
+  bytes nonce = 10;
+}
+
+message PolicyRules {
+  repeated PolicyRule rules = 1;
+  string default_action = 2; // "deny" or "allow"
+}
+
+message PolicyRule {
+  string id = 1;
+  string tool_id = 2;
+  string method = 3;
+  repeated string resource_patterns = 4;
+  string action = 5; // "allow" or "deny"
+  bytes conditions = 6; // JSON-encoded conditions
+}
+
+message ValidationResult {
+  bool approved = 1;
+  oneof result {
+    CapabilityToken token = 2;
+    RejectionReason rejection = 3;
+  }
+}
+
+message RejectionReason {
+  string code = 1;
+  string description = 2;
+  bytes logged_entry = 3;
+}
+
+message CapabilityRequest {
+  string parent_token_id = 1;
+  string tool_id = 2;
+  string method = 3;
+  repeated string resource_ids = 4;
+  uint64 ttl_seconds = 5;
+}
+
+message RevocationRequest {
+  bytes token_id = 1;
+  bytes issuer_signature = 2;
+}
+
+message RevocationResult {
+  bool success = 1;
+  uint32 revoked_derived = 2;
+}
+
+message AuditQuery {
+  uint64 from_ms = 1;
+  uint64 to_ms = 2;
+  string tool_id = 3;
+  bytes requester_pubkey = 4;
+}
+
+message AuditEntries {
+  repeated LogEntry entries = 1;
+  bytes merkle_root = 2;
+}
+
+message LogEntry {
+  uint64 sequence = 1;
+  bytes previous_hash = 2;
+  uint64 timestamp_ms = 3;
+  bytes event_hash = 4;
+  bytes signature = 5;
+}
+
+service PolicyEngine {
+  rpc ValidateAction(ActionProposal) returns (ValidationResult);
+  rpc MintCapability(CapabilityRequest) returns (CapabilityToken);
+  rpc RevokeCapability(RevocationRequest) returns (RevocationResult);
+  rpc QueryAuditLog(AuditQuery) returns (AuditEntries);
+}
