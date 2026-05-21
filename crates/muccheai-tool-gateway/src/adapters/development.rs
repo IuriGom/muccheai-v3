@@ -214,6 +214,7 @@ pub fn git_run(params: &serde_json::Value) -> Result<ToolResult, ToolError> {
 ///
 /// If you need file inspection, use the `csv.read`, `json.transform`,
 /// or `sqlite.query` adapters instead.
+#[cfg(feature = "shell")]
 pub fn shell_run(_params: &serde_json::Value) -> Result<ToolResult, ToolError> {
     Err(ToolError::CapabilityDenied(
         "Shell execution is disabled for security reasons. ".to_string()

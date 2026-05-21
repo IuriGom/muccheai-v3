@@ -217,7 +217,6 @@ pub struct ConfigResponse {
     pub ollama_url: String,
     pub ollama_model: String,
     pub web_bind_address: String,
-    pub api_key: String,
     pub policy_rules: Vec<String>,
 }
 
@@ -498,7 +497,7 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
     if lower.starts_with("0x") || lower.starts_with("0X") {
         return Err("SSRF blocked: hex IP addresses are not allowed".to_string());
     }
-    if lower.chars().all(|c| c.is_ascii_digit() || c == '.') && lower.starts_with('0') && lower.len() > 1 && lower != "0.0.0.0" {
+    if lower.chars().all(|c| c.is_ascii_digit() || c == '.') && lower.starts_with('0') && lower.len() > 1 {
         return Err("SSRF blocked: octal IP addresses are not allowed".to_string());
     }
     if lower.chars().all(|c| c.is_ascii_digit()) {
@@ -554,6 +553,7 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
         || lower.starts_with("172.26.") || lower.starts_with("172.27.")
         || lower.starts_with("172.28.") || lower.starts_with("172.29.")
         || lower.starts_with("172.30.") || lower.starts_with("172.31.")
+        || lower == "0.0.0.0"
     {
         return Err("SSRF blocked: internal addresses are not allowed".to_string());
     }
@@ -615,6 +615,58 @@ async fn validate_no_ssrf_dns(url: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Build a reqwest client that pins the resolved IP for a given base URL,
+/// preventing DNS rebinding attacks where a hostname resolves to different
+/// IPs between validation and request time.
+async fn build_pinned_client(base_url: &str) -> Result<reqwest::Client, String> {
+    let parsed = url::Url::parse(base_url)
+        .map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = parsed.host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+
+    // Skip pinning for pure IP addresses (already checked by validate_no_ssrf).
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return reqwest::Client::builder()
+            .timeout(Duration::from_secs(90))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e));
+    }
+
+    let port = parsed.port_or_known_default()
+        .unwrap_or(443);
+
+    let addrs = tokio::net::lookup_host(format!("{}:{}", host, port))
+        .await
+        .map_err(|e| format!("DNS resolution failed: {}", e))?;
+    let addr = addrs.into_iter().next()
+        .ok_or_else(|| "DNS resolution returned no addresses".to_string())?;
+
+    // Double-check the resolved IP is not internal (defense in depth).
+    let ip = addr.ip();
+    let blocked = match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                || v4.is_unspecified() || v4.is_broadcast()
+                || v4.is_documentation() || v4.is_multicast()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                || v6.is_unicast_link_local() || v6.is_multicast()
+        }
+    };
+    if blocked {
+        return Err("SSRF blocked: resolved IP is internal".to_string());
+    }
+
+    reqwest::Client::builder()
+        .resolve(host, addr)
+        .timeout(Duration::from_secs(90))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+}
+
 /// Rate limiting middleware for /api/chat
 /// Skips GET requests and allows up to 100 requests per minute per IP.
 async fn rate_limit_middleware(
@@ -668,8 +720,6 @@ async fn chat(
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
-    let client = &state.http_client;
-
     let config = state.config.lock().await;
     let persona = config
         .personas
@@ -698,7 +748,8 @@ async fn chat(
     system_prompt.push_str("\n\n--- Diary Instruction ---\n");
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
-    // Inject approved structured memories into the system prompt so the LLM can reference them
+    // Inject approved structured memories into the system prompt so the LLM can reference them.
+    // Values are sanitized to prevent prompt injection via crafted memory content.
     {
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all();
@@ -707,16 +758,7 @@ async fn chat(
             let facts: Vec<_> = memories.iter().filter(|e| e.memory_type == MemoryType::Fact).collect();
             if !facts.is_empty() {
                 for e in facts {
-                    let val = match &e.value {
-                        MemoryValue::ShortString(s) => s.clone(),
-                        MemoryValue::Bool(b) => b.to_string(),
-                        MemoryValue::I64(v) => v.to_string(),
-                        MemoryValue::U64(v) => v.to_string(),
-                        MemoryValue::F64(v) => v.to_string(),
-                        MemoryValue::JsonObject(m) => serde_json::to_string(m).unwrap_or_default(),
-                        MemoryValue::Timestamp(t) => t.0.to_string(),
-                        MemoryValue::Bytes(_) => "(binary)".to_string(),
-                    };
+                    let val = sanitize_memory_for_prompt(&e.value);
                     system_prompt.push_str(&format!("- {}: {}\n", e.key, val));
                 }
             } else {
@@ -727,16 +769,7 @@ async fn chat(
             let prefs: Vec<_> = memories.iter().filter(|e| e.memory_type == MemoryType::Preference).collect();
             if !prefs.is_empty() {
                 for e in prefs {
-                    let val = match &e.value {
-                        MemoryValue::ShortString(s) => s.clone(),
-                        MemoryValue::Bool(b) => b.to_string(),
-                        MemoryValue::I64(v) => v.to_string(),
-                        MemoryValue::U64(v) => v.to_string(),
-                        MemoryValue::F64(v) => v.to_string(),
-                        MemoryValue::JsonObject(m) => serde_json::to_string(m).unwrap_or_default(),
-                        MemoryValue::Timestamp(t) => t.0.to_string(),
-                        MemoryValue::Bytes(_) => "(binary)".to_string(),
-                    };
+                    let val = sanitize_memory_for_prompt(&e.value);
                     system_prompt.push_str(&format!("- {}: {}\n", e.key, val));
                 }
             } else {
@@ -782,7 +815,7 @@ async fn chat(
         }
     };
 
-    let text = match call_provider(&client, &agent, provider, &system_prompt, &req.message, temperature, max_tokens, &history).await {
+    let text = match call_provider(&agent, provider, &system_prompt, &req.message, temperature, max_tokens, &history).await {
         Ok(t) => t,
         Err(_e) => {
             tracing::error!("LLM provider error: {}", _e);
@@ -902,7 +935,6 @@ async fn chat(
 
 /// Call the configured LLM provider and return the generated text.
 async fn call_provider(
-    client: &reqwest::Client,
     agent: &crate::config::AgentConfig,
     provider: &str,
     system_prompt: &str,
@@ -922,6 +954,7 @@ async fn call_provider(
                 tracing::error!("SSRF DNS blocked for openai base_url: {}", e);
                 return Err("Provider configuration rejected".to_string());
             }
+            let pinned_client = build_pinned_client(base_url).await?;
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
             let mut messages: Vec<serde_json::Value> = vec![
                 serde_json::json!({"role": "system", "content": system_prompt}),
@@ -940,7 +973,7 @@ async fn call_provider(
                 "max_tokens": max_tokens
             });
 
-            let mut req_builder = client.post(&url).json(&body);
+            let mut req_builder = pinned_client.post(&url).json(&body);
             if let Some(key) = &agent.api_key {
                 req_builder = req_builder.header("Authorization", format!("Bearer {}", key));
             }
@@ -994,6 +1027,7 @@ async fn call_provider(
                 tracing::error!("SSRF DNS blocked for anthropic base_url: {}", e);
                 return Err("Provider configuration rejected".to_string());
             }
+            let pinned_client = build_pinned_client(base_url).await?;
             let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
             let mut messages: Vec<serde_json::Value> = Vec::new();
             for msg in history {
@@ -1010,7 +1044,7 @@ async fn call_provider(
                 "max_tokens": max_tokens
             });
 
-            let mut req_builder = client.post(&url).json(&body);
+            let mut req_builder = pinned_client.post(&url).json(&body);
             if let Some(key) = &agent.api_key {
                 req_builder = req_builder.header("x-api-key", key);
             }
@@ -1057,7 +1091,15 @@ async fn call_provider(
         _ => {
             // Default to Ollama
             let base_url = agent.base_url.as_deref().unwrap_or("http://localhost:11434");
-            // Ollama is intentionally a local service — skip SSRF checks for localhost
+            if let Err(e) = validate_no_ssrf(base_url) {
+                tracing::error!("SSRF blocked for ollama base_url: {}", e);
+                return Err("Provider configuration rejected".to_string());
+            }
+            if let Err(e) = validate_no_ssrf_dns(base_url).await {
+                tracing::error!("SSRF DNS blocked for ollama base_url: {}", e);
+                return Err("Provider configuration rejected".to_string());
+            }
+            let pinned_client = build_pinned_client(base_url).await?;
             let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
             let mut messages: Vec<serde_json::Value> = vec![
                 serde_json::json!({"role": "system", "content": system_prompt}),
@@ -1082,7 +1124,7 @@ async fn call_provider(
 
             // First, quickly check if Ollama is responsive and model exists
             let tags_url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-            let tags_resp = client.get(&tags_url).timeout(Duration::from_secs(5)).send().await;
+            let tags_resp = pinned_client.get(&tags_url).timeout(Duration::from_secs(5)).send().await;
             match tags_resp {
                 Ok(r) if r.status().is_success() => {
                     let tags_body = r.text().await.unwrap_or_default();
@@ -1108,7 +1150,7 @@ async fn call_provider(
                 }
             }
 
-            let resp = client.post(&url).json(&body).send().await.map_err(|e| {
+            let resp = pinned_client.post(&url).json(&body).send().await.map_err(|e| {
                 if e.is_timeout() {
                     tracing::error!("Ollama timed out for model {}: {}", agent.model, e);
                     "Ollama timed out. The model may be loading into memory.".to_string()
@@ -1156,6 +1198,32 @@ async fn call_provider(
 
 /// Extract memory proposals from LLM text and return cleaned text + proposals.
 /// Format: <memory type="Fact" key="KEY">VALUE</memory>
+/// Sanitize a memory value before injecting it into the LLM system prompt.
+/// Prevents prompt injection by stripping angle brackets (tags), newlines,
+/// and backticks that could be used to inject instructions or break formatting.
+fn sanitize_memory_for_prompt(value: &MemoryValue) -> String {
+    let raw = match value {
+        MemoryValue::ShortString(s) => s.clone(),
+        MemoryValue::Bool(b) => b.to_string(),
+        MemoryValue::I64(v) => v.to_string(),
+        MemoryValue::U64(v) => v.to_string(),
+        MemoryValue::F64(v) => v.to_string(),
+        MemoryValue::JsonObject(m) => serde_json::to_string(m).unwrap_or_default(),
+        MemoryValue::Timestamp(t) => t.0.to_string(),
+        MemoryValue::Bytes(_) => "(binary)".to_string(),
+    };
+    const MAX_LEN: usize = 256;
+    let mut sanitized: String = raw
+        .chars()
+        .filter(|c| *c != '<' && *c != '>' && *c != '`' && *c != '\n' && *c != '\r')
+        .collect();
+    if sanitized.len() > MAX_LEN {
+        sanitized.truncate(MAX_LEN);
+        sanitized.push_str("…");
+    }
+    sanitized
+}
+
 fn extract_memory_proposals(text: &str) -> (String, Vec<(MemoryType, String, String)>) {
     let mut cleaned = String::with_capacity(text.len());
     let mut proposals = Vec::new();
@@ -1790,7 +1858,6 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
         ollama_url: "***REDACTED***".to_string(),
         ollama_model: config.ollama_model.clone(),
         web_bind_address: config.web_bind_address.clone(),
-        api_key: "***REDACTED***".to_string(),
         policy_rules: policy.list_rules(),
     })
 }

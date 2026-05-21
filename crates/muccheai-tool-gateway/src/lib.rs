@@ -465,6 +465,7 @@ impl ToolGateway {
             }],
         });
 
+        #[cfg(feature = "shell")]
         self.register_adapter(ToolAdapter {
             name: "shell",
             methods: vec![ToolMethod {
@@ -892,11 +893,22 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "shell")]
     fn test_shell_disabled() {
         let gw = ToolGateway::new(dummy_pubkey());
         // Shell execution is disabled for security reasons.
         let result = gw.execute_tool("shell", "run", br#"{"command":"ls -la"}"#);
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "shell"))]
+    fn test_shell_not_compiled() {
+        let gw = ToolGateway::new(dummy_pubkey());
+        // Shell adapter is not compiled into the binary.
+        let result = gw.execute_tool("shell", "run", br#"{"command":"ls -la"}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown tool: shell"));
     }
 
     #[test]

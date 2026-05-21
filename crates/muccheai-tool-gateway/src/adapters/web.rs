@@ -47,6 +47,8 @@ pub fn browser_navigate(params: &serde_json::Value) -> Result<ToolResult, ToolEr
 }
 
 /// Fetch adapter — HTTP GET/POST with configurable timeouts
+/// Runs the blocking HTTP request on a dedicated thread so it does not
+/// block the async executor. Resolved IPs are pinned to prevent DNS rebinding.
 pub fn fetch_request(params: &serde_json::Value) -> Result<ToolResult, ToolError> {
     let url = params
         .get("url")
@@ -60,9 +62,9 @@ pub fn fetch_request(params: &serde_json::Value) -> Result<ToolResult, ToolError
         .get("timeout_secs")
         .and_then(|v| v.as_u64())
         .unwrap_or(30)
-        .min(300); // Cap timeout at 5 minutes to prevent indefinite hangs
-    let body = params.get("body");
-    let headers = params.get("headers");
+        .min(300);
+    let body = params.get("body").cloned();
+    let headers = params.get("headers").cloned();
 
     if is_internal_url(url) {
         return Err(ToolError::CapabilityDenied(
@@ -73,9 +75,46 @@ pub fn fetch_request(params: &serde_json::Value) -> Result<ToolResult, ToolError
         return Err(e);
     }
 
-    let client = reqwest::blocking::Client::builder()
+    // Offload the blocking reqwest call to a dedicated thread.
+    let url = url.to_string();
+    let method = method.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fetch_request_blocking(&url, &method, timeout_secs, body.as_ref(), headers.as_ref());
+        let _ = tx.send(result);
+    });
+
+    rx.recv()
+        .map_err(|_| ToolError::ExecutionFailed("HTTP thread panicked or disconnected".to_string()))?
+}
+
+fn fetch_request_blocking(
+    url: &str,
+    method: &str,
+    timeout_secs: u64,
+    body: Option<&serde_json::Value>,
+    headers: Option<&serde_json::Value>,
+) -> Result<ToolResult, ToolError> {
+    let parsed = url::Url::parse(url)
+        .map_err(|e| ToolError::InvalidParams(format!("Invalid URL: {}", e)))?;
+    let host = parsed.host_str()
+        .ok_or_else(|| ToolError::InvalidParams("URL has no host".to_string()))?;
+
+    // Pin the resolved IP to prevent DNS rebinding between validation and request.
+    let mut client_builder = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none());
+
+    if parsed.scheme() == "http" || parsed.scheme() == "https" {
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        if let Ok(mut addrs) = format!("{}:{}", host, port).to_socket_addrs() {
+            if let Some(addr) = addrs.next() {
+                client_builder = client_builder.resolve(host, addr);
+            }
+        }
+    }
+
+    let client = client_builder
         .build()
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
@@ -120,7 +159,6 @@ pub fn fetch_request(params: &serde_json::Value) -> Result<ToolResult, ToolError
 
     let status = resp.status().as_u16();
 
-    // Limit response body to 10 MB to prevent memory exhaustion.
     const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(
@@ -151,22 +189,50 @@ pub fn fetch_request(params: &serde_json::Value) -> Result<ToolResult, ToolError
 }
 
 /// Search adapter — web search (DuckDuckGo instant answer)
+/// Runs the blocking HTTP request on a dedicated thread so it does not
+/// block the async executor. Resolved IPs are pinned to prevent DNS rebinding.
 pub fn search_query(params: &serde_json::Value) -> Result<ToolResult, ToolError> {
     let query = params
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ToolError::InvalidParams("Missing 'query'".to_string()))?;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+    let query = query.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = search_query_blocking(&query);
+        let _ = tx.send(result);
+    });
 
+    rx.recv()
+        .map_err(|_| ToolError::ExecutionFailed("Search thread panicked or disconnected".to_string()))?
+}
+
+fn search_query_blocking(query: &str) -> Result<ToolResult, ToolError> {
     let url = format!(
         "https://duckduckgo.com/html/?q={}",
         urlencoding::encode(query)
     );
+
+    // Pin resolved IP to prevent DNS rebinding.
+    let mut client_builder = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none());
+
+    if let Ok(parsed) = url::Url::parse(&url) {
+        if let Some(host) = parsed.host_str() {
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            if let Ok(mut addrs) = format!("{}:{}", host, port).to_socket_addrs() {
+                if let Some(addr) = addrs.next() {
+                    client_builder = client_builder.resolve(host, addr);
+                }
+            }
+        }
+    }
+
+    let client = client_builder
+        .build()
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
     let (status, body) = match client
         .get(&url)
@@ -185,7 +251,6 @@ pub fn search_query(params: &serde_json::Value) -> Result<ToolResult, ToolError>
             (status, body)
         }
         Err(_) => {
-            // Fallback when network is unavailable (tests, offline)
             return Ok(ToolResult {
                 success: true,
                 data: json!({
@@ -203,7 +268,6 @@ pub fn search_query(params: &serde_json::Value) -> Result<ToolResult, ToolError>
         }
     };
 
-    // Simple result extraction
     let results = extract_search_results(&body, query);
 
     Ok(ToolResult {
@@ -397,15 +461,8 @@ pub fn pdf_extract(params: &serde_json::Value) -> Result<ToolResult, ToolError> 
         .and_then(|v| v.as_str())
         .ok_or_else(|| ToolError::InvalidParams("Missing 'path'".to_string()))?;
 
-    if path.contains("..") || path.starts_with('/') {
-        return Err(ToolError::CapabilityDenied(
-            "Invalid path".to_string(),
-        ));
-    }
-    // Canonicalize to prevent symlink traversal.
-    let _ = std::path::Path::new(path).canonicalize().map_err(|e| {
-        ToolError::ExecutionFailed(format!("Invalid path: {}", e))
-    })?;
+    // Use the same path validation as data adapters to prevent traversal and symlink escapes.
+    let _ = crate::adapters::data::validate_path(path)?;
 
     // In production: use pdf-extract, poppler, or similar
     Ok(ToolResult {

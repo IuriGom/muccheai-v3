@@ -267,9 +267,11 @@ fn ask_and_execute(
     };
 
     let params_bytes = serde_json::to_vec(&proposal.params).unwrap_or_default();
-    let result = gateway
-        .execute(&proposal.tool_id, &proposal.method, &params_bytes, &token)
-        .map_err(|e| anyhow::anyhow!("Execution failed: {e}"))?;
+    // Wrap synchronous tool execution in block_in_place so that blocking
+    // HTTP adapters (fetch, search) do not stall the async runtime.
+    let result = tokio::task::block_in_place(|| {
+        gateway.execute(&proposal.tool_id, &proposal.method, &params_bytes, &token)
+    }).map_err(|e| anyhow::anyhow!("Execution failed: {e}"))?;
 
     if result.success {
         println!("✓ Executed. Queued.");
