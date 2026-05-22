@@ -527,19 +527,17 @@ impl MuccheConfig {
 
     /// Extract the raw `api_key = "..."` value from TOML text.
     /// Used for backward-compat migration when the field is #[serde(skip)].
+    /// Parses the TOML properly instead of using string splitting to avoid
+    /// false positives on comments or values containing quotes.
     fn extract_api_key_from_raw_toml(content: &str) -> Option<String> {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("api_key") {
-                if let Some(eq) = trimmed.find('=') {
-                    let val = trimmed[eq + 1..].trim().trim_matches('"');
-                    if !val.is_empty() {
-                        return Some(val.to_string());
-                    }
-                }
-            }
+        #[derive(serde::Deserialize)]
+        struct RawConfig {
+            api_key: Option<String>,
         }
-        None
+        toml::from_str::<RawConfig>(content)
+            .ok()
+            .and_then(|raw| raw.api_key)
+            .filter(|s| !s.is_empty())
     }
 
     /// Load and decrypt the master API key from the sidecar file.
@@ -727,16 +725,13 @@ impl MuccheConfig {
         let mut config: MuccheConfig;
         let mut raw_content = String::new();
 
-        match std::fs::read_to_string(&path) {
-            Ok(content) => {
-                const MAX_CONFIG_SIZE: usize = 1_048_576;
-                if content.len() > MAX_CONFIG_SIZE {
-                    return Err(anyhow::anyhow!("Config file too large (max {} bytes)", MAX_CONFIG_SIZE));
-                }
+        match std::fs::OpenOptions::new().read(true).open(&path) {
+            Ok(mut file) => {
+                use std::io::Read;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let perms = std::fs::metadata(&path)?.permissions();
+                    let perms = file.metadata()?.permissions();
                     if perms.mode() & 0o777 != 0o600 {
                         return Err(anyhow::anyhow!(
                             "Config file permissions are {:o} (expected 0o600). Refusing to load.",
@@ -744,7 +739,11 @@ impl MuccheConfig {
                         ));
                     }
                 }
-                raw_content = content;
+                const MAX_CONFIG_SIZE: usize = 1_048_576;
+                file.read_to_string(&mut raw_content)?;
+                if raw_content.len() > MAX_CONFIG_SIZE {
+                    return Err(anyhow::anyhow!("Config file too large (max {} bytes)", MAX_CONFIG_SIZE));
+                }
                 config = toml::from_str(&raw_content)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

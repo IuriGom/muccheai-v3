@@ -87,8 +87,9 @@ pub struct AppState {
     pub policy: Mutex<PolicyEngine>,
     /// Tool gateway
     pub gateway: Mutex<ToolGateway>,
-    /// Bearer token for API authentication
-    pub auth_token: String,
+    /// Bearer token for API authentication. Wrapped in Zeroizing so the
+    /// plaintext is cleared from RAM when the AppState is dropped.
+    pub auth_token: zeroize::Zeroizing<String>,
     /// CSRF token for web form protection
     pub csrf_token: Mutex<String>,
     /// Per-IP rate limiter: (last_request, count_in_window)
@@ -486,6 +487,11 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url)
         .map_err(|e| format!("Invalid URL: {}", e))?;
 
+    // Reject non-HTTP(S) schemes to align with the tool-gateway adapter.
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("SSRF blocked: only http and https schemes are allowed".to_string());
+    }
+
     let host = parsed.host_str()
         .ok_or_else(|| "URL has no host".to_string())?;
 
@@ -512,7 +518,7 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
         let blocked = match ip {
             std::net::IpAddr::V4(v4) => {
                 v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-                    || v4.is_multicast() || v4.is_broadcast()
+                    || v4.is_multicast() || v4.is_broadcast() || v4.is_documentation()
             }
             std::net::IpAddr::V6(v6) => {
                 if v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
@@ -521,7 +527,8 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
                 }
                 if let Some(v4) = v6.to_ipv4_mapped() {
                     if v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() {
+                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                        || v4.is_documentation() {
                         return Err("SSRF blocked: internal IP addresses are not allowed".to_string());
                     }
                 }
@@ -534,7 +541,8 @@ fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
                                     (segs[7] >> 8) as u8, (segs[7] & 0xff) as u8];
                     let v4 = std::net::Ipv4Addr::from(v4_bytes);
                     if v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() {
+                        || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                        || v4.is_documentation() {
                         return Err("SSRF blocked: internal IP addresses are not allowed".to_string());
                     }
                 }
@@ -654,8 +662,16 @@ async fn build_pinned_client(base_url: &str) -> Result<reqwest::Client, String> 
                 || v4.is_documentation() || v4.is_multicast()
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
-                || v6.is_unicast_link_local() || v6.is_multicast()
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                || v6.is_unicast_link_local() || v6.is_multicast() {
+                true
+            } else if let Some(v4) = v6.to_ipv4_mapped() {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                    || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                    || v4.is_documentation()
+            } else {
+                false
+            }
         }
     };
     if blocked {

@@ -87,14 +87,8 @@ pub fn notifications_send(params: &serde_json::Value) -> Result<ToolResult, Tool
                     || c == '!'
                     || c == '?'
                     || c == ':'
-                    || c == ';'
                     || c == '-'
                     || c == '_'
-                    || c == '/'
-                    || c == '('
-                    || c == ')'
-                    || c == '['
-                    || c == ']'
             })
         };
         if !is_safe(message) || !is_safe(title) {
@@ -109,10 +103,20 @@ pub fn notifications_send(params: &serde_json::Value) -> Result<ToolResult, Tool
             r#"display notification "{}" with title "{}""#,
             safe_message, safe_title
         );
-        let _ = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output();
+        // Pass the script via stdin instead of -e to avoid any command-line
+        // injection or argument-parsing issues.
+        use std::io::Write;
+        if let Ok(mut child) = std::process::Command::new("osascript")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(script.as_bytes());
+            }
+            let _ = child.wait_with_output();
+        }
     }
 
     Ok(ToolResult {

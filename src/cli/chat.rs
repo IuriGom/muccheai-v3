@@ -209,7 +209,8 @@ fn process_message_with_history(
         memory_context: None,
     };
 
-    let suggestion = match sandbox.inference(&prompt) {
+    // Wrap blocking sandbox inference to avoid stalling the async runtime.
+    let suggestion = match tokio::task::block_in_place(|| sandbox.inference(&prompt)) {
         Ok(s) => s,
         Err(e) => return Err(anyhow::anyhow!("Inference failed: {e}")),
     };

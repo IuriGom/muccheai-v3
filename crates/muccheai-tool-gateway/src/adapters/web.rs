@@ -323,7 +323,21 @@ fn is_internal_url(url: &str) -> bool {
                     || v4.is_link_local()
                     || v4.is_unspecified()
                     || v4.is_multicast()
-                    || v4.is_broadcast() {
+                    || v4.is_broadcast()
+                    || v4.is_documentation() {
+                    return true;
+                }
+            }
+            // Block IPv4-translated IPv6 addresses (::ffff:0:0/96).
+            let segs = v6.segments();
+            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0
+                && segs[4] == 0 && segs[5] == 0xffff {
+                let v4_bytes = [(segs[6] >> 8) as u8, (segs[6] & 0xff) as u8,
+                                (segs[7] >> 8) as u8, (segs[7] & 0xff) as u8];
+                let v4 = std::net::Ipv4Addr::from(v4_bytes);
+                if v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                    || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                    || v4.is_documentation() {
                     return true;
                 }
             }
@@ -368,11 +382,19 @@ fn is_internal_url(url: &str) -> bool {
                             || v4.is_documentation()
                     }
                     std::net::IpAddr::V6(v6) => {
-                        v6.is_loopback()
+                        if v6.is_loopback()
                             || v6.is_unspecified()
                             || v6.is_unique_local()
                             || v6.is_unicast_link_local()
-                            || v6.is_multicast()
+                            || v6.is_multicast() {
+                            true
+                        } else if let Some(v4) = v6.to_ipv4_mapped() {
+                            v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                                || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                                || v4.is_documentation()
+                        } else {
+                            false
+                        }
                     }
                 };
                 if blocked {

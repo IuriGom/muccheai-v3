@@ -546,8 +546,8 @@ fn run_demo() {
     println!("  ✓ Memory encryption: {}", if sandbox_config.memory_encryption { "enabled" } else { "disabled" });
 
     let mut sandbox = LlmSandbox::new(sandbox_config);
-    sandbox.start().expect("Failed to start sandbox");
-    println!("  ✓ Sandbox started");
+    // Demo mode: do not spawn real sandbox processes or make real HTTP calls.
+    println!("  ✓ Sandbox configured (demo — process isolation skipped)");
 
     println!("\nInitializing intrusion recovery...");
     let recovery = IncidentResponse::new();
@@ -605,10 +605,15 @@ fn run_demo() {
         max_tokens: 512,
         memory_context: None,
     };
-    let suggestion = sandbox.inference(&prompt).expect("Inference failed");
-    println!("  ✓ Structured output: {}", String::from_utf8_lossy(&suggestion.json_payload));
+    // Demo mode: skip real LLM inference and use mock structured output.
+    let mock_payload = serde_json::json!({
+        "tool_id": "email",
+        "method": "send",
+        "params": { "to": "john@example.com", "subject": "Meeting tomorrow" }
+    });
+    println!("  ✓ Structured output: {}", mock_payload);
     println!("  ✓ Dual verification: semantic similarity check passed");
-    println!("  ✓ Inference time: {} ms", suggestion.inference_time_ms);
+    println!("  ✓ Inference time: 42 ms (demo)");
 
     // Step 3: Parse action proposal
     let proposal = ActionProposal {
@@ -721,8 +726,8 @@ fn run_demo() {
     println!("  ✓ TTL: 24 hours");
     println!("  ✓ Max uses: 10");
 
-    // Cleanup
-    sandbox.stop().expect("Failed to stop sandbox");
+    // Cleanup (demo — no real process to stop)
+    let _ = sandbox;
 
     // Final verification
     println!("\n═══════════════════════════════════════════════════════════════");
@@ -805,7 +810,7 @@ async fn run_web_server(bind: &str) {
         sandbox: Mutex::new(sandbox),
         policy: Mutex::new(policy),
         gateway: Mutex::new(gateway),
-        auth_token: config.api_key.clone(),
+        auth_token: zeroize::Zeroizing::new(config.api_key.clone()),
         csrf_token: Mutex::new(csrf_token),
         rate_limiter: Mutex::new(std::collections::HashMap::new()),
         config: Mutex::new(config.clone()),
