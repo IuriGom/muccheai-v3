@@ -26,6 +26,7 @@ use crate::memory_store::MemoryStore;
 #[cfg(unix)]
 mod file_lock {
     use std::fs::File;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
 
@@ -35,9 +36,26 @@ mod file_lock {
 
     impl FileLock {
         pub fn acquire(path: &Path) -> anyhow::Result<Self> {
-            let file = File::create(path)?;
+            // Reject symlinks to prevent TOCTOU attacks.
+            if let Ok(meta) = std::fs::symlink_metadata(path) {
+                if meta.file_type().is_symlink() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "lock path is a symlink",
+                    )
+                    .into());
+                }
+            }
+            // Open with O_NOFOLLOW so that even if a symlink is created
+            // between the metadata check and the open, the call fails safely.
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)?;
             let fd = file.as_raw_fd();
-            let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            let ret = flock_raw(fd, libc::LOCK_EX);
             if ret != 0 {
                 return Err(std::io::Error::last_os_error().into());
             }
@@ -48,10 +66,15 @@ mod file_lock {
     impl Drop for FileLock {
         fn drop(&mut self) {
             let fd = self._file.as_raw_fd();
-            unsafe {
-                let _ = libc::flock(fd, libc::LOCK_UN);
-            };
+            let _ = flock_raw(fd, libc::LOCK_UN);
         }
+    }
+
+    /// SAFETY: `flock` is a valid POSIX syscall. The fd is guaranteed to be
+    /// valid because it comes from an owned `File` that outlives this call.
+    #[inline]
+    fn flock_raw(fd: std::os::unix::io::RawFd, op: i32) -> i32 {
+        unsafe { libc::flock(fd, op) }
     }
 }
 

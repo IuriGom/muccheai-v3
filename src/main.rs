@@ -418,7 +418,14 @@ async fn main() {
                 match crate::config::MuccheConfig::load() {
                     Ok(mut config) => {
                         match key.as_str() {
-                            "ollama_host" => config.ollama_host = value,
+                            "ollama_host" => {
+                                // Prevent SSRF via malicious Ollama host configuration.
+                                if crate::web::validate_no_ssrf(&value).is_err() {
+                                    eprintln!("Invalid ollama_host: SSRF validation failed");
+                                    std::process::exit(1);
+                                }
+                                config.ollama_host = value;
+                            }
                             "ollama_model" => config.ollama_model = value,
                             "web_bind_address" => config.web_bind_address = value,
                             "approval_tier" => config.approval_tier = value,
@@ -772,15 +779,29 @@ async fn run_web_server(bind: &str) {
     let keypair: muccheai_types::crypto_primitives::HybridKeypair = config.keypair.clone().into();
     let policy = PolicyEngine::new(config.policy_rules.clone(), keypair.clone());
     let gateway = ToolGateway::new(keypair.pubkey.clone());
-    let memory = MemoryEngine::new("muccheai").unwrap();
-    let structured_memory = crate::structured_memory::StructuredMemoryManager::new()
-        .expect("Failed to initialize structured memory");
+    let memory = match MemoryEngine::new("muccheai") {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to initialize memory engine: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let structured_memory = match crate::structured_memory::StructuredMemoryManager::new() {
+        Ok(sm) => sm,
+        Err(e) => {
+            eprintln!("Failed to initialize structured memory: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Ensure bootstrap soul files exist
-    let workspace = dirs::home_dir()
-        .expect("home dir")
-        .join(".muccheai")
-        .join("workspace");
+    let workspace = match dirs::home_dir() {
+        Some(h) => h.join(".muccheai").join("workspace"),
+        None => {
+            eprintln!("HOME directory not found");
+            std::process::exit(1);
+        }
+    };
     if let Err(e) = crate::structured_memory::ensure_bootstrap_files(&workspace) {
         eprintln!("Warning: failed to create bootstrap files: {}", e);
     }
@@ -788,10 +809,16 @@ async fn run_web_server(bind: &str) {
     // Cache SOUL.md content for the system prompt (keep it small to avoid Ollama slowdown)
     let bootstrap_context = std::fs::read_to_string(workspace.join("SOUL.md")).unwrap_or_default();
 
-    let http_client = reqwest::Client::builder()
+    let http_client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .build()
-        .expect("HTTP client must build");
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to build HTTP client: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Discover MCP tools from configured servers at startup
     let mcp_tools_cache = web::init_mcp_tools().await;
@@ -801,10 +828,11 @@ async fn run_web_server(bind: &str) {
 
     // Generate a random CSRF token for web form protection
     let mut csrf_buf = [0u8; 32];
-    ring::rand::SystemRandom::new()
-        .fill(&mut csrf_buf)
-        .expect("CSPRNG must succeed");
-    let csrf_token = hex::encode(csrf_buf);
+    if ring::rand::SystemRandom::new().fill(&mut csrf_buf).is_err() {
+        eprintln!("CSPRNG failure: unable to generate CSRF token");
+        std::process::exit(1);
+    }
+    let csrf_token = zeroize::Zeroizing::new(hex::encode(csrf_buf));
 
     let state = Arc::new(web::AppState {
         sandbox: Mutex::new(sandbox),

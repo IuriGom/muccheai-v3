@@ -90,8 +90,9 @@ pub struct AppState {
     /// Bearer token for API authentication. Wrapped in Zeroizing so the
     /// plaintext is cleared from RAM when the AppState is dropped.
     pub auth_token: zeroize::Zeroizing<String>,
-    /// CSRF token for web form protection
-    pub csrf_token: Mutex<String>,
+    /// CSRF token for web form protection. Wrapped in Zeroizing so the
+    /// plaintext is cleared from RAM when the AppState is dropped.
+    pub csrf_token: Mutex<zeroize::Zeroizing<String>>,
     /// Per-IP rate limiter: (last_request, count_in_window)
     pub rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
     /// Runtime configuration
@@ -419,11 +420,19 @@ async fn index() -> Html<&'static str> {
 /// Used for session ownership verification without storing the raw token.
 fn hash_auth_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
-    if let Some(token) = auth.strip_prefix("Bearer ") {
-        Some(hex::encode(muccheai_crypto::sha3_512(token.as_bytes())))
-    } else {
-        None
+    let bytes = auth.as_bytes();
+    let prefix = b"Bearer ";
+    if bytes.len() < prefix.len() {
+        return None;
     }
+    // Constant-time prefix check: always hash the same amount of work
+    // regardless of whether the prefix matches.
+    let has_prefix = constant_time_eq(&bytes[..prefix.len()], prefix);
+    if !has_prefix {
+        return None;
+    }
+    let token = &auth[prefix.len()..];
+    Some(hex::encode(muccheai_crypto::sha3_512(token.as_bytes())))
 }
 
 /// Bearer token authentication middleware + CSRF protection for mutating requests
@@ -441,15 +450,31 @@ async fn auth_middleware(
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    let token_valid = match auth_header {
-        Some(header) if header.starts_with("Bearer ") => {
-            let token = &header[7..];
-            !token.is_empty() && constant_time_eq(token.as_bytes(), state.auth_token.as_bytes())
+    let token_valid = auth_header.map_or(false, |header| {
+        let bytes = header.as_bytes();
+        let prefix = b"Bearer ";
+        if bytes.len() < prefix.len() {
+            // Perform dummy work to keep timing uniform with the success path.
+            let _ = constant_time_eq(&bytes, &[]);
+            return false;
         }
-        _ => false,
-    };
+        let has_prefix = constant_time_eq(&bytes[..prefix.len()], prefix);
+        let token = std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("");
+        has_prefix && !token.is_empty() && constant_time_eq(token.as_bytes(), state.auth_token.as_bytes())
+    });
 
     if !token_valid {
+        let client_ip = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+        tracing::warn!(
+            target: "security",
+            "Authentication failed: method={} uri={} client={}",
+            method,
+            uri,
+            client_ip
+        );
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error":"Missing or invalid Authorization header"})),
@@ -483,7 +508,7 @@ async fn auth_middleware(
 
 /// Validate that a URL does not point to internal/private addresses.
 /// Uses proper URL parsing to avoid substring-based bypasses.
-fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
+pub fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url)
         .map_err(|e| format!("Invalid URL: {}", e))?;
 
@@ -879,9 +904,13 @@ async fn chat(
     let mut sessions = state.chat_sessions.lock().await;
     let session_id = req.session_id.clone().unwrap_or_else(|| {
         let mut buf = [0u8; 16];
-        ring::rand::SystemRandom::new()
-            .fill(&mut buf)
-            .expect("CSPRNG must succeed");
+        if ring::rand::SystemRandom::new().fill(&mut buf).is_err() {
+            // Fallback: use timestamp + counter if CSPRNG fails.
+            return format!("session-{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0));
+        }
         format!("session-{}", hex::encode(buf))
     });
 
@@ -1439,6 +1468,7 @@ pub async fn init_mcp_tools() -> Vec<CachedMcpTool> {
                 tracing::warn!("Failed to discover tools from MCP server '{}': {}", name, e);
             }
         }
+        client.disconnect().await;
     }
 
     cached
@@ -1457,6 +1487,7 @@ async fn execute_mcp_tool_call(
         .call_tool(tool_name, args)
         .await
         .map_err(|e| format!("Tool call failed: {}", e))?;
+    client.disconnect().await;
 
     if result.success {
         let text = result
@@ -1570,8 +1601,14 @@ async fn process_mcp_tool_calls(
                             timestamp: Timestamp::now(),
                             nonce: {
                                 let mut n = [0u8; 16];
-                                let rng = ring::rand::SystemRandom::new();
-                                rng.fill(&mut n).expect("CSPRNG must succeed");
+                                if ring::rand::SystemRandom::new().fill(&mut n).is_err() {
+                                    // Fallback: use timestamp bytes if CSPRNG fails.
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis())
+                                        .unwrap_or(0);
+                                    n.copy_from_slice(&ts.to_be_bytes());
+                                }
                                 n.to_vec()
                             },
                         };
@@ -1721,13 +1758,22 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
     };
 
     // Check Ollama connectivity outside of any lock.
-    let ollama_connected = {
-        let client = reqwest::Client::builder()
+    // Validate the URL first to prevent SSRF if ollama_host has been tampered with.
+    let ollama_connected = if validate_no_ssrf(&ollama_host).is_ok()
+        && validate_no_ssrf_dns(&ollama_host).await.is_ok()
+    {
+        match reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
-            .expect("reqwest Client builder should not fail with standard configuration");
-        let url = format!("{}/api/tags", ollama_host);
-        matches!(client.get(&url).send().await, Ok(r) if r.status().is_success())
+        {
+            Ok(client) => {
+                let url = format!("{}/api/tags", ollama_host);
+                matches!(client.get(&url).send().await, Ok(r) if r.status().is_success())
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
     };
 
     let policy_rule_count = policy_rules.len();
@@ -2228,7 +2274,7 @@ async fn test_connection(
 /// Get CSRF token for web form protection.
 async fn get_csrf(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let token = state.csrf_token.lock().await;
-    Json(serde_json::json!({ "csrf_token": token.clone() }))
+    Json(serde_json::json!({ "csrf_token": token.clone().to_string() }))
 }
 
 /// Get settings.
@@ -2614,7 +2660,7 @@ async fn test_mcp_server(Path(name): Path<String>) -> Json<McpTestResponse> {
     };
 
     let mut client = muccheai_mcp::McpClient::new(transport);
-    match client.connect().await {
+    let result = match client.connect().await {
         Ok(_) => match client.discover_tools().await {
             Ok(tools) => {
                 let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
@@ -2635,14 +2681,22 @@ async fn test_mcp_server(Path(name): Path<String>) -> Json<McpTestResponse> {
             message: "Connection failed".to_string(),
             tools: vec![],
         }),
-    }
+    };
+    client.disconnect().await;
+    result
 }
 
 /// Start the web server.
 /// If MUCCHEAI_TLS_CERT and MUCCHEAI_TLS_KEY environment variables are set,
 /// serves over HTTPS; otherwise serves over HTTP with a security warning.
 pub async fn serve(addr: &str, state: Arc<AppState>) {
-    let addr = addr.parse::<SocketAddr>().expect("invalid bind address");
+    let addr = match addr.parse::<SocketAddr>() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("❌ Invalid bind address '{}': {}", addr, e);
+            std::process::exit(1);
+        }
+    };
 
     let cert_path = std::env::var("MUCCHEAI_TLS_CERT").ok();
     let key_path = std::env::var("MUCCHEAI_TLS_KEY").ok();
@@ -2651,10 +2705,13 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
         match axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await {
             Ok(config) => {
                 println!("🔒 MuccheAI Control Panel running at https://{}", addr);
-                axum_server::tls_rustls::bind_rustls(addr, config)
+                if let Err(e) = axum_server::tls_rustls::bind_rustls(addr, config)
                     .serve(router(state).into_make_service_with_connect_info::<SocketAddr>())
                     .await
-                    .expect("TLS server failed to start");
+                {
+                    eprintln!("❌ TLS server failed to start: {}", e);
+                    std::process::exit(1);
+                }
                 return;
             }
             Err(e) => {
@@ -2666,10 +2723,13 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
 
     println!("🌐 MuccheAI Control Panel running at http://{}", addr);
     println!("⚠️  SECURITY WARNING: Running without TLS. Set MUCCHEAI_TLS_CERT and MUCCHEAI_TLS_KEY for HTTPS.");
-    axum_server::bind(addr)
+    if let Err(e) = axum_server::bind(addr)
         .serve(router(state).into_make_service_with_connect_info::<SocketAddr>())
         .await
-        .expect("HTTP server failed to start");
+    {
+        eprintln!("❌ HTTP server failed to start: {}", e);
+        std::process::exit(1);
+    }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

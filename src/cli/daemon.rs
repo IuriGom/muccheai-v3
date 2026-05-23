@@ -8,10 +8,26 @@ fn pid_file() -> PathBuf {
     home.join(".muccheai").join("daemon.pid")
 }
 
+/// Reject the path if it or any parent component is a symlink.
+fn reject_symlink_path(path: &std::path::Path) -> Result<(), String> {
+    for component in path.ancestors() {
+        if let Ok(meta) = std::fs::symlink_metadata(component) {
+            if meta.file_type().is_symlink() {
+                return Err(format!("Path component is a symlink: {}", component.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check if the daemon is currently running.
 /// Uses safe process existence checks without `unsafe` blocks.
 pub fn is_daemon_running() -> bool {
-    let Ok(pid_str) = std::fs::read_to_string(pid_file()) else {
+    let pid_path = pid_file();
+    if reject_symlink_path(&pid_path).is_err() {
+        return false;
+    }
+    let Ok(pid_str) = std::fs::read_to_string(pid_path) else {
         return false;
     };
     let Ok(pid) = pid_str.trim().parse::<u32>() else {
@@ -45,8 +61,13 @@ pub fn daemon_start() -> Result<(), String> {
         return Err("Daemon is already running".to_string());
     }
 
+    let pid_path = pid_file();
+    if let Err(e) = reject_symlink_path(&pid_path) {
+        return Err(e);
+    }
+
     // Ensure the directory exists before spawning.
-    if let Some(parent) = pid_file().parent() {
+    if let Some(parent) = pid_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
@@ -71,7 +92,7 @@ pub fn daemon_start() -> Result<(), String> {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(pid_file())
+        .open(pid_path)
         .map_err(|e| format!("Failed to create PID file (daemon may already be starting): {}", e))?;
     let mut file = std::io::BufWriter::new(file);
     write!(file, "{}", pid).map_err(|e| e.to_string())?;

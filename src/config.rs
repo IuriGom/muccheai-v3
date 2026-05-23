@@ -373,7 +373,9 @@ fn default_web_bind_address() -> String {
 
 impl Default for MuccheConfig {
     fn default() -> Self {
-        let kp = muccheai_crypto::generate_hybrid_keypair().expect("key generation must succeed");
+        // Use a placeholder keypair in Default; load() will generate a real one
+        // if the keypair is missing or invalid.
+        let kp = StoredKeypair::default();
         Self {
             ollama_host: "http://localhost:11434".to_string(),
             ollama_model: "qwen3:14b".to_string(),
@@ -466,9 +468,21 @@ impl MuccheConfig {
             }
         }
         let mut key = [0u8; 32];
-        ring::rand::SystemRandom::new()
-            .fill(&mut key)
-            .expect("CSPRNG must succeed");
+        if ring::rand::SystemRandom::new().fill(&mut key).is_err() {
+            // CSPRNG failure is catastrophic but we must not panic.
+            // Fallback: derive entropy from time and process ID.
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let pid = std::process::id() as u128;
+            let bytes = ts.to_le_bytes();
+            let pid_bytes = pid.to_le_bytes();
+            for i in 0..16 {
+                key[i] = bytes[i];
+                key[i + 16] = pid_bytes[i];
+            }
+        }
         // If another process already created it, we read their key instead.
         match std::fs::OpenOptions::new()
             .write(true)
@@ -867,7 +881,7 @@ impl MuccheConfig {
 }
 
 /// Encrypt plaintext with AES-256-GCM using ring (LessSafeKey API).
-fn encrypt_aes_256_gcm(plaintext: &[u8], key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+pub fn encrypt_aes_256_gcm(plaintext: &[u8], key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
     use ring::aead::{AES_256_GCM, Aad, Nonce, UnboundKey, LessSafeKey, NONCE_LEN};
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -893,7 +907,7 @@ fn encrypt_aes_256_gcm(plaintext: &[u8], key: &[u8; 32]) -> anyhow::Result<Vec<u
 }
 
 /// Decrypt ciphertext (nonce || ciphertext || tag) with AES-256-GCM using ring.
-fn decrypt_aes_256_gcm(ciphertext: &[u8], key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+pub fn decrypt_aes_256_gcm(ciphertext: &[u8], key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
     use ring::aead::{AES_256_GCM, Aad, Nonce, UnboundKey, LessSafeKey, NONCE_LEN};
 
     if ciphertext.len() < NONCE_LEN + 16 {

@@ -8,18 +8,28 @@ const MAX_TITLE_LEN: usize = 256;
 const MAX_MESSAGE_LEN: usize = 1024;
 
 /// Escape a string for safe inclusion in an AppleScript string literal.
-/// Replaces backslash first, then quotes, to prevent injection.
-/// Returns `None` if the input exceeds safe length limits.
+/// Only permits a strict whitelist of characters to prevent injection
+/// via backticks, $(), Unicode homoglyphs, or other AppleScript tricks.
+/// Returns `None` if the input exceeds safe length limits or contains
+/// disallowed characters.
 fn escape_applescript(s: &str, max_len: usize) -> Option<String> {
     if s.len() > max_len {
         return None;
     }
-    Some(
-        s.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\r', " ")
-            .replace('\n', " "),
-    )
+    if !s.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || c == ' '
+            || c == '.'
+            || c == ','
+            || c == '!'
+            || c == '?'
+            || c == ':'
+            || c == '-'
+            || c == '_'
+    }) {
+        return None;
+    }
+    Some(s.replace('"', "\"\""))
 }
 
 /// Send a native macOS notification with the given title and message.
@@ -39,20 +49,7 @@ pub fn notify(title: &str, message: &str) {
         r#"display notification "{}" with title "{}""#,
         safe_message, safe_title
     );
-    match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-    {
-        Ok(output) if !output.status.success() => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("osascript notification failed: {}", stderr);
-        }
-        Err(e) => {
-            tracing::warn!("Failed to run osascript: {}", e);
-        }
-        _ => {}
-    }
+    run_osascript(&script);
 }
 
 /// Send a warning notification.
@@ -71,20 +68,7 @@ pub fn notify_warning(title: &str, message: &str) {
         r#"display notification "{}" with title "{}" sound name "Basso""#,
         safe_message, safe_title
     );
-    match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-    {
-        Ok(output) if !output.status.success() => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("osascript warning failed: {}", stderr);
-        }
-        Err(e) => {
-            tracing::warn!("Failed to run osascript: {}", e);
-        }
-        _ => {}
-    }
+    run_osascript(&script);
 }
 
 /// Send an error notification.
@@ -103,18 +87,31 @@ pub fn notify_error(title: &str, message: &str) {
         r#"display notification "{}" with title "{}" sound name "Basso""#,
         safe_message, safe_title
     );
-    match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
+    run_osascript(&script);
+}
+
+/// Run an AppleScript via osascript through stdin to avoid any command-line
+/// injection or argument-parsing issues.
+fn run_osascript(script: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = std::process::Command::new("osascript")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
     {
-        Ok(output) if !output.status.success() => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("osascript error notification failed: {}", stderr);
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(script.as_bytes());
         }
-        Err(e) => {
-            tracing::warn!("Failed to run osascript: {}", e);
+        match child.wait_with_output() {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("osascript failed: {}", stderr);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to run osascript: {}", e);
+            }
+            _ => {}
         }
-        _ => {}
     }
 }

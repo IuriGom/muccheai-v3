@@ -9,10 +9,48 @@ use muccheai_types::memory::MemoryEntry;
 
 use crate::config::MuccheConfig;
 
+/// Load the machine-bound encryption key from disk.
+fn load_machine_key() -> Option<[u8; 32]> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let path = home.join(".muccheai").join(".machine_key");
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() == 32 {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        Some(key)
+    } else {
+        None
+    }
+}
+
+/// Encrypt a line if a machine key is available; otherwise return plaintext.
+fn encrypt_line(plaintext: &str) -> String {
+    match load_machine_key() {
+        Some(key) => match crate::config::encrypt_aes_256_gcm(plaintext.as_bytes(), &key) {
+            Ok(ciphertext) => format!("enc:{}", hex::encode(ciphertext)),
+            Err(_) => plaintext.to_string(),
+        },
+        None => plaintext.to_string(),
+    }
+}
+
+/// Decrypt a line if it has the `enc:` prefix; otherwise return plaintext.
+fn decrypt_line(line: &str) -> Option<String> {
+    if let Some(hex_ct) = line.strip_prefix("enc:") {
+        let ciphertext = hex::decode(hex_ct).ok()?;
+        let key = load_machine_key()?;
+        let plaintext = crate::config::decrypt_aes_256_gcm(&ciphertext, &key).ok()?;
+        String::from_utf8(plaintext).ok()
+    } else {
+        Some(line.to_string())
+    }
+}
+
 /// Simple cross-process advisory file lock (Unix only).
 #[cfg(unix)]
 mod file_lock {
     use std::fs::File;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
 
@@ -22,9 +60,26 @@ mod file_lock {
 
     impl FileLock {
         pub fn acquire(path: &Path) -> anyhow::Result<Self> {
-            let file = File::create(path)?;
+            // Reject symlinks to prevent TOCTOU attacks.
+            if let Ok(meta) = std::fs::symlink_metadata(path) {
+                if meta.file_type().is_symlink() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "lock path is a symlink",
+                    )
+                    .into());
+                }
+            }
+            // Open with O_NOFOLLOW so that even if a symlink is created
+            // between the metadata check and the open, the call fails safely.
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)?;
             let fd = file.as_raw_fd();
-            let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            let ret = flock_raw(fd, libc::LOCK_EX);
             if ret != 0 {
                 return Err(std::io::Error::last_os_error().into());
             }
@@ -35,10 +90,15 @@ mod file_lock {
     impl Drop for FileLock {
         fn drop(&mut self) {
             let fd = self._file.as_raw_fd();
-            unsafe {
-                let _ = libc::flock(fd, libc::LOCK_UN);
-            };
+            let _ = flock_raw(fd, libc::LOCK_UN);
         }
+    }
+
+    /// SAFETY: `flock` is a valid POSIX syscall. The fd is guaranteed to be
+    /// valid because it comes from an owned `File` that outlives this call.
+    #[inline]
+    fn flock_raw(fd: std::os::unix::io::RawFd, op: i32) -> i32 {
+        unsafe { libc::flock(fd, op) }
     }
 }
 
@@ -112,7 +172,7 @@ impl MemoryStore {
         }
         for e in &entries {
             let line = serde_json::to_string(e)?;
-            writeln!(file, "{}", line)?;
+            writeln!(file, "{}", encrypt_line(&line))?;
         }
         drop(file);
         std::fs::rename(&tmp_path, &self.path)?;
@@ -162,7 +222,7 @@ impl MemoryStore {
         let mut file = File::create(&tmp_path)?;
         for entry in entries {
             let line = serde_json::to_string(&entry)?;
-            writeln!(file, "{}", line)?;
+            writeln!(file, "{}", encrypt_line(&line))?;
         }
         drop(file);
         #[cfg(unix)]
@@ -197,7 +257,8 @@ impl MemoryStore {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(entry) = serde_json::from_str::<MemoryEntry>(&line) {
+            let plaintext = decrypt_line(&line).unwrap_or(line);
+            if let Ok(entry) = serde_json::from_str::<MemoryEntry>(&plaintext) {
                 entries.push(entry);
             }
         }

@@ -166,6 +166,17 @@ impl McpClient {
         &self.tools
     }
 
+    /// Gracefully disconnect from the MCP server.
+    /// Sends EOF via stdin (for stdio transports) and waits for the child
+    /// to exit before returning.
+    pub async fn disconnect(&mut self) {
+        if let Some(ref mut handle) = self.handle {
+            handle.shutdown().await;
+        }
+        self.handle = None;
+        self.initialized = false;
+    }
+
     /// Whether the client is connected and initialized
     pub fn is_connected(&self) -> bool {
         self.initialized

@@ -56,9 +56,40 @@ enum TransportKind {
     },
 }
 
+impl TransportHandle {
+    /// Graceful shutdown: close stdin (signalling EOF to the child) and
+    /// wait up to 2 seconds for the process to exit before force-killing.
+    pub async fn shutdown(&mut self) {
+        if let TransportKind::Stdio { child, stdin, .. } = &mut self.kind {
+            // Close stdin to signal EOF; many MCP servers exit on stdin close.
+            let _ = stdin.shutdown().await;
+            // Give the child a grace period to exit cleanly.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                child.wait(),
+            )
+            .await
+            {
+                Ok(Ok(_status)) => {
+                    tracing::debug!("MCP child exited gracefully");
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("MCP child wait error: {}", e);
+                    let _ = child.start_kill();
+                }
+                Err(_) => {
+                    tracing::warn!("MCP child did not exit within grace period; force-killing");
+                    let _ = child.start_kill();
+                }
+            }
+        }
+    }
+}
+
 impl Drop for TransportHandle {
     fn drop(&mut self) {
         if let TransportKind::Stdio { child, .. } = &mut self.kind {
+            // Safety net: if shutdown() was not called, force-kill immediately.
             let _ = child.start_kill();
         }
     }
