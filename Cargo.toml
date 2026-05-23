@@ -85,7 +85,7 @@ version = "3.2.0"
 edition = "2021"
 authors = ["MuccheAI Maintainers"]
 license = "MIT"
-repository = "https://github.com/IuriGom/muccheai-v3.0.5"
+repository = "https://github.com/IuriGom/muccheai-v3"
 rust-version = "1.80"
 
 [workspace.dependencies]

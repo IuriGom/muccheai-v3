@@ -467,30 +467,27 @@ async fn auth_middleware(
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    let token_valid = auth_header.map_or(false, |header| {
-        let bytes = header.as_bytes();
-        let prefix = b"Bearer ";
-        // Uniform work: always compute prefix match, token emptiness, and
-        // token correctness, without short-circuiting, so the timing profile
-        // is identical for missing prefix, wrong prefix, empty token, and
-        // wrong token paths.
-        let has_prefix = if bytes.len() >= prefix.len() {
-            muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
-        } else {
-            let mut padded = [0u8; 7];
-            padded[..bytes.len()].copy_from_slice(bytes);
-            muccheai_crypto::constant_time::eq(&padded, prefix)
-        };
-        let token = if bytes.len() > prefix.len() {
-            std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("")
-        } else {
-            ""
-        };
-        let token_nonempty = !token.is_empty();
-        let token_correct = muccheai_crypto::constant_time::eq(token.as_bytes(), state.auth_token.as_bytes());
-        // Use bitwise AND to avoid short-circuit evaluation.
-        has_prefix & token_nonempty & token_correct
-    });
+    // Always execute the full token validation path, even when the header is
+    // missing, so the timing profile is identical for "no header", "wrong
+    // prefix", "empty token", and "wrong token".
+    let bytes = auth_header.map(|h| h.as_bytes()).unwrap_or(b"");
+    let prefix = b"Bearer ";
+    let has_prefix = if bytes.len() >= prefix.len() {
+        muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
+    } else {
+        let mut padded = [0u8; 7];
+        let len = bytes.len().min(7);
+        padded[..len].copy_from_slice(&bytes[..len]);
+        muccheai_crypto::constant_time::eq(&padded, prefix)
+    };
+    let token = if bytes.len() > prefix.len() {
+        std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("")
+    } else {
+        ""
+    };
+    let token_nonempty = !token.is_empty();
+    let token_correct = muccheai_crypto::constant_time::eq(token.as_bytes(), state.auth_token.as_bytes());
+    let token_valid = has_prefix & token_nonempty & token_correct;
 
     if !token_valid {
         let client_ip = headers
@@ -1888,11 +1885,15 @@ async fn incidents() -> Json<IncidentsResponse> {
 
 /// Build verification status
 async fn build_verify() -> Json<BuildVerifyResponse> {
-    // Derive a deterministic commit hash from the build version so the
-    // endpoint exercises real verification logic instead of a zeroed stub.
-    let version_hash = muccheai_crypto::sha3_512(env!("CARGO_PKG_VERSION").as_bytes());
+    // Use the actual git commit hash from build.rs, or a placeholder if
+    // the repository is not available at build time.
+    let hex_commit = env!("GIT_COMMIT_HASH");
     let mut commit = [0u8; 20];
-    commit.copy_from_slice(&version_hash[..20]);
+    if hex_commit != "unknown" && hex_commit.len() >= 40 {
+        for i in 0..20 {
+            commit[i] = u8::from_str_radix(&hex_commit[i*2..i*2+2], 16).unwrap_or(0);
+        }
+    }
     let result = tokio::task::spawn_blocking(move || {
         let verification = MultiCiVerification::new(commit);
         verification.verify_build()
@@ -2620,11 +2621,14 @@ async fn delete_mcp_server(
     }
 }
 
-async fn test_mcp_server(Path(name): Path<String>) -> Json<McpTestResponse> {
-    let mut cfg = ToolConfig::load();
-    crate::config::decrypt_mcp_keys(&mut cfg);
+async fn test_mcp_server(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Json<McpTestResponse> {
+    let cfg = state.tool_config.lock().await;
     let server = match cfg
         .mcp
+        .as_ref()
         .and_then(|m| m.servers.get(&name).cloned())
     {
         Some(s) => s,
@@ -2801,7 +2805,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let csp = tower_http::set_header::SetResponseHeaderLayer::overriding(
         axum::http::header::CONTENT_SECURITY_POLICY,
         axum::http::HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
         ),
     );
     let xcto = tower_http::set_header::SetResponseHeaderLayer::overriding(

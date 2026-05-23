@@ -194,12 +194,15 @@ impl McpTransport {
                     }
                 }
                 // Verify the command is in a trusted system directory.
-                // The absolute-path and symlink checks above already prevent most
-                // impersonation attacks; the prefix check is the final guard.
+                // Canonicalize first to prevent path traversal (e.g. /usr/bin/../tmp/npx).
+                let canonical = std::fs::canonicalize(command)
+                    .map_err(|e| anyhow::anyhow!("Cannot canonicalize MCP command path: {}", e))?;
+                let canonical_str = canonical.to_str()
+                    .ok_or_else(|| anyhow::anyhow!("MCP command path is not valid UTF-8"))?;
                 let trusted_prefixes = ["/usr/bin/", "/usr/local/bin/", "/bin/", "/opt/homebrew/bin/"];
-                if !trusted_prefixes.iter().any(|p| command.starts_with(p)) {
+                if !trusted_prefixes.iter().any(|p| canonical_str.starts_with(p)) {
                     return Err(anyhow::anyhow!(
-                        "MCP stdio command must be in a trusted system directory: {}", command
+                        "MCP stdio command must be in a trusted system directory: {}", canonical_str
                     ));
                 }
                 let invalid_chars = [';', '|', '&', '$', '`', '<', '>', '(', ')', '{', '}', '*', '?', '[', ']', '\\', '\'', '"'];

@@ -40,6 +40,16 @@ use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCo
 
 #[tokio::main]
 async fn main() {
+    // Require a password for machine-key derivation.  Without this the
+    // 32-byte key file is the raw AES-256 key — anyone who can read the
+    // file (root, backups, etc.) owns all encrypted data.
+    if std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
+        eprintln!("ERROR: MUCCHEAI_KEY_PASSWORD environment variable is not set.");
+        eprintln!("       Set it before starting MuccheAI to enable Argon2id key derivation.");
+        eprintln!("       Example: export MUCCHEAI_KEY_PASSWORD=$(openssl rand -base64 32)");
+        std::process::exit(1);
+    }
+
     // Hidden internal daemon mode — bypass clap so the child process doesn't
     // need to parse unknown arguments. Only trigger if __daemon is the first
     // Internal daemon entry point. Never invoke directly; use `muccheai daemon start`.

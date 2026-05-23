@@ -23,8 +23,8 @@ MuccheAI is a personal AI assistant that runs locally on your machine. It chats 
 Requires Rust 1.80+. Tested on macOS — Linux and Windows support is planned (focus on Linux because I don't have a microslop machine).
 
 ```bash
-git clone https://github.com/IuriGom/muccheai-v3.0.5
-cd muccheai-v3.0.5
+git clone https://github.com/IuriGom/muccheai-v3
+cd muccheai-v3
 make install
 ```
 
