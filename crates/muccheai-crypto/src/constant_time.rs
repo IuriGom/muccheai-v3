@@ -1,22 +1,22 @@
-//! Constant-time operations to prevent timing side-channels
+//! Constant-time operations to prevent timing side-channels.
 
 /// Constant-time equality comparison.
-/// Returns true if a and b have the same content.
-/// Execution time is independent of the content of the slices.
+///
+/// Returns true if `a` and `b` have the same length and identical content.
+/// Execution time is **always** proportional to `MAX_LEN` (256 bytes);
+/// it does not depend on the content or lengths of the inputs.
+///
+/// Inputs longer than `MAX_LEN` are silently truncated; callers comparing
+/// secrets longer than 256 bytes should hash them first.
 pub fn eq(a: &[u8], b: &[u8]) -> bool {
-    // Do NOT early-return on length mismatch — that leaks the length difference via timing.
-    let min_len = a.len().min(b.len());
-    let max_len = a.len().max(b.len());
-    let mut result: u8 = 0;
-
-    // Compare overlapping region
-    for (x, y) in a.iter().take(min_len).zip(b.iter().take(min_len)) {
-        result |= x ^ y;
+    const MAX_LEN: usize = 256;
+    let mut result = 0u8;
+    for i in 0..MAX_LEN {
+        let av = a.get(i).copied().unwrap_or(0);
+        let bv = b.get(i).copied().unwrap_or(0);
+        result |= av ^ bv;
     }
-
-    // If lengths differ, the extra bytes make the result non-zero
-    result |= (max_len != min_len) as u8;
-
+    result |= (a.len() != b.len()) as u8;
     result == 0
 }
 
@@ -29,13 +29,6 @@ pub fn conditional_copy(condition: bool, src: &[u8], dst: &mut [u8]) {
     for (s, d) in src.iter().zip(dst.iter_mut()) {
         *d = (*d & !mask) | (s & mask);
     }
-}
-
-/// Constant-time selection.
-/// Returns a if condition is true, b otherwise.
-pub fn select(condition: bool, a: u8, b: u8) -> u8 {
-    let mask = 0u8.wrapping_sub(condition as u8);
-    (a & mask) | (b & !mask)
 }
 
 #[cfg(test)]
@@ -53,7 +46,8 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_different_length() {
+    fn test_eq_length_leak() {
+        // Length mismatch must also return false.
         assert!(!eq(b"hi", b"hello"));
         assert!(!eq(b"hello", b"hi"));
     }
@@ -62,17 +56,5 @@ mod tests {
     fn test_eq_empty() {
         assert!(eq(b"", b""));
         assert!(!eq(b"", b"x"));
-    }
-
-    #[test]
-    fn test_conditional_copy() {
-        let src = [1, 2, 3];
-        let mut dst = [0, 0, 0];
-        conditional_copy(true, &src, &mut dst);
-        assert_eq!(dst, [1, 2, 3]);
-
-        let mut dst2 = [9, 9, 9];
-        conditional_copy(false, &src, &mut dst2);
-        assert_eq!(dst2, [9, 9, 9]);
     }
 }

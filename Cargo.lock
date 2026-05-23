@@ -1907,6 +1907,7 @@ name = "muccheai-vault"
 version = "3.2.0"
 dependencies = [
  "hmac",
+ "muccheai-crypto",
  "muccheai-types",
  "rand 0.8.6",
  "ring",

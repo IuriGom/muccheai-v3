@@ -452,23 +452,25 @@ impl MuccheConfig {
     }
 
     /// Path to the machine-bound encryption key.
-    fn machine_key_path() -> PathBuf {
+    /// Path to the machine-bound encryption key.
+    pub fn machine_key_path() -> PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         home.join(".muccheai").join(".machine_key")
     }
 
     /// Load or create a random 32-byte machine key for encrypting local secrets.
-    fn load_or_create_machine_key() -> [u8; 32] {
+    /// If `MUCCHEAI_KEY_PASSWORD` is set, the returned key is Argon2id-derived
+    /// from the password + the raw material; otherwise the raw material is used.
+    pub fn load_or_create_machine_key() -> [u8; 32] {
         let path = Self::machine_key_path();
+        let mut material = [0u8; 32];
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() == 32 {
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes);
-                return key;
+                material.copy_from_slice(&bytes);
+                return Self::derive_machine_key(&material);
             }
         }
-        let mut key = [0u8; 32];
-        if ring::rand::SystemRandom::new().fill(&mut key).is_err() {
+        if ring::rand::SystemRandom::new().fill(&mut material).is_err() {
             // CSPRNG failure is catastrophic but we must not panic.
             // Fallback: derive entropy from time and process ID.
             let ts = std::time::SystemTime::now()
@@ -479,8 +481,8 @@ impl MuccheConfig {
             let bytes = ts.to_le_bytes();
             let pid_bytes = pid.to_le_bytes();
             for i in 0..16 {
-                key[i] = bytes[i];
-                key[i + 16] = pid_bytes[i];
+                material[i] = bytes[i];
+                material[i + 16] = pid_bytes[i];
             }
         }
         // If another process already created it, we read their key instead.
@@ -500,8 +502,8 @@ impl MuccheConfig {
                         let _ = file.set_permissions(perms);
                     }
                 }
-                let _ = file.write_all(&key);
-                key
+                let _ = file.write_all(&material);
+                Self::derive_machine_key(&material)
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Another process won the race — read their key
@@ -509,12 +511,37 @@ impl MuccheConfig {
                     if bytes.len() == 32 {
                         let mut existing = [0u8; 32];
                         existing.copy_from_slice(&bytes);
-                        return existing;
+                        return Self::derive_machine_key(&existing);
                     }
                 }
+                Self::derive_machine_key(&material)
+            }
+            _ => Self::derive_machine_key(&material),
+        }
+    }
+
+    /// Derive the actual AES-256 key from the 32-byte material.
+    pub fn derive_machine_key(material: &[u8; 32]) -> [u8; 32] {
+        use argon2::{Argon2, Algorithm, Params, Version};
+        const SALT: &[u8] = b"muccheai-machine-key-v1";
+
+        match std::env::var("MUCCHEAI_KEY_PASSWORD") {
+            Ok(password) => {
+                let params = Params::new(65536, 3, 4, Some(32))
+                    .expect("valid argon2 params");
+                let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+                let mut key = [0u8; 32];
+                argon2.hash_password_into(password.as_bytes(), SALT, &mut key)
+                    .expect("argon2 hash failed");
                 key
             }
-            _ => key,
+            Err(_) => {
+                tracing::warn!(
+                    "MUCCHEAI_KEY_PASSWORD is not set. The machine key file contains the raw AES-256 key. \
+                     Set MUCCHEAI_KEY_PASSWORD to enable Argon2id key derivation."
+                );
+                *material
+            }
         }
     }
 
@@ -929,4 +956,55 @@ pub fn decrypt_aes_256_gcm(ciphertext: &[u8], key: &[u8; 32]) -> anyhow::Result<
         .open_in_place(nonce, Aad::from(b"muccheai-config-v1"), &mut buf)
         .map_err(|_| anyhow::anyhow!("decryption failed"))?;
     Ok(plaintext.to_vec())
+}
+
+/// Encrypt plaintext MCP API keys inside a `ToolConfig` before saving.
+/// Values that already start with `enc:` are left untouched.
+pub fn encrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
+    let key = match MuccheConfig::load_or_create_machine_key() {
+        k => k,
+    };
+    if let Some(ref mut mcp) = cfg.mcp {
+        for server in mcp.servers.values_mut() {
+            if let Some(ref api_key) = server.api_key {
+                if api_key.starts_with("enc:") {
+                    continue;
+                }
+                match encrypt_aes_256_gcm(api_key.as_bytes(), &key) {
+                    Ok(ct) => {
+                        server.api_key = Some(format!("enc:{}", hex::encode(ct)));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to encrypt MCP API key: {}", e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Decrypt `enc:`-prefixed MCP API keys inside a `ToolConfig` after loading.
+pub fn decrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
+    let key = MuccheConfig::load_or_create_machine_key();
+    if let Some(ref mut mcp) = cfg.mcp {
+        for server in mcp.servers.values_mut() {
+            if let Some(ref api_key) = server.api_key {
+                if let Some(hex_ct) = api_key.strip_prefix("enc:") {
+                    match hex::decode(hex_ct) {
+                        Ok(ct) => match decrypt_aes_256_gcm(&ct, &key) {
+                            Ok(pt) => {
+                                server.api_key = String::from_utf8(pt).ok();
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to decrypt MCP API key: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!("Failed to decode encrypted MCP API key: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

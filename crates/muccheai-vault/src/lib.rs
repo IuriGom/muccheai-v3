@@ -1,13 +1,11 @@
-//! MuccheAI v3.0 — Secret Vault (Secret Management)
+//! Secret Vault — Shamir secret sharing + AES-256-GCM encryption.
 //!
-//! Hardware-backed secret storage with Shamir's Secret Sharing (3-of-5).
+//! Currently implemented:
+//! - Split a master secret into N shares with threshold K reconstruction.
+//! - Each share is encrypted with a per-share key derived from a password.
+//! - Reconstruction verifies share integrity via HMAC before combining.
 //!
-//! Shares:
-//! 1. Secure Enclave (device-bound)
-//! 2. Hardware token (YubiKey/OnlyKey)
-//! 3. Paper backup (BIP39 mnemonic)
-//! 4. Recovery contact (encrypted to their key)
-//! 5. iCloud Keychain (with ADP)
+//! TODO: Hardware-backed storage (Secure Enclave, YubiKey) is not yet wired.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -17,17 +15,6 @@ use rand::RngCore;
 use ring::aead::{Aad, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::aead::LessSafeKey;
 
-/// Constant-time comparison of two byte slices.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        result |= x ^ y;
-    }
-    result == 0
-}
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -291,7 +278,7 @@ impl SecretVault {
         // Verify approval proof is a valid HMAC over tool_id using vault_key.
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &self.vault_key);
         let expected = ring::hmac::sign(&key, tool_id.as_bytes());
-        if !constant_time_eq(approval_proof, expected.as_ref()) {
+        if !muccheai_crypto::constant_time::eq(approval_proof, expected.as_ref()) {
             return Err(VaultError::InvalidApprovalProof);
         }
 
@@ -338,7 +325,7 @@ impl SecretVault {
             aes_256_gcm_decrypt(&self.vault_key, &self.encrypted_master)
                 .map_err(|_| VaultError::RotationVerificationFailed)?;
 
-        if !shamir::constant_time_eq(&reconstructed, &current_master) {
+        if !muccheai_crypto::constant_time::eq(&reconstructed, &current_master) {
             return Err(VaultError::RotationVerificationFailed);
         }
 

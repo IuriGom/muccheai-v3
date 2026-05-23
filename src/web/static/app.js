@@ -1,5 +1,5 @@
 // ============================================
-// MuccheAI v3.0 — Frontend Application
+// MuccheAI — Frontend Application
 // ============================================
 
 const API_BASE = '';
@@ -192,7 +192,12 @@ function applyTranslations() {
 // ============================================
 // Dark Mode
 // ============================================
-function logout() {
+async function logout() {
+    try {
+        await fetch('/api/logout', { method: 'POST', headers: authHeaders() });
+    } catch (e) {
+        console.warn('Logout request failed:', e);
+    }
     localStorage.removeItem('muccheai_api_key');
     localStorage.removeItem('muccheai_api_key_time');
     localStorage.removeItem('muccheai_csrf_token');
@@ -1940,8 +1945,27 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================
+// Version display
+// ============================================
+async function fetchVersion() {
+    try {
+        const res = await fetch('/api/version');
+        if (res.ok) {
+            const data = await res.json();
+            const badge = document.getElementById('versionBadge');
+            const display = document.getElementById('versionDisplay');
+            if (badge) badge.textContent = 'MuccheAI v' + data.version;
+            if (display) display.textContent = 'v' + data.version + ' — Secure AI Agent';
+        }
+    } catch (e) {
+        console.warn('Failed to fetch version:', e);
+    }
+}
+
+// ============================================
 // Init
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
     loadPersonas();
+    fetchVersion();
 });

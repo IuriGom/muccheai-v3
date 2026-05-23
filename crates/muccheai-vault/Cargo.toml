@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 muccheai-types = { workspace = true }
+muccheai-crypto = { workspace = true }
 
 ring = { workspace = true }
 sha3 = { workspace = true }

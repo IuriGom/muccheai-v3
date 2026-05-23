@@ -158,7 +158,7 @@ pub fn reconstruct_secret(
     // Verify MACs.
     for share in shares {
         let expected_mac = compute_share_mac(share.index, &share.value);
-        if !constant_time_eq(&share.mac, &expected_mac) {
+        if !muccheai_crypto::constant_time::eq(&share.mac, &expected_mac) {
             return Err(ShamirError::MacVerificationFailed {
                 index: share.index,
             });
@@ -189,21 +189,6 @@ pub fn reconstruct_secret(
     }
 
     Ok(secret)
-}
-
-/// Constant-time equality comparison for MAC verification.
-/// Does not early-return on length mismatch to avoid leaking length via timing.
-pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let max_len = a.len().max(b.len());
-    let min_len = a.len().min(b.len());
-    let mut result = 0u8;
-    for i in 0..max_len {
-        let x = a.get(i).copied().unwrap_or(0);
-        let y = b.get(i).copied().unwrap_or(0);
-        result |= x ^ y;
-    }
-    result |= (max_len != min_len) as u8;
-    result == 0
 }
 
 /// Galois field multiplication (GF(2^8)) — constant-time.
@@ -384,27 +369,6 @@ mod tests {
     }
 
     #[test]
-    fn test_constant_time_eq_same() {
-        let a = [0x42u8; 32];
-        let b = [0x42u8; 32];
-        assert!(constant_time_eq(&a, &b));
-    }
-
-    #[test]
-    fn test_constant_time_eq_different() {
-        let a = [0x42u8; 32];
-        let mut b = [0x42u8; 32];
-        b[15] = 0x43;
-        assert!(!constant_time_eq(&a, &b));
-    }
-
-    #[test]
-    fn test_constant_time_eq_length_mismatch() {
-        let a = [0x42u8; 32];
-        let b = [0x42u8; 16];
-        assert!(!constant_time_eq(&a, &b));
-    }
-
     #[test]
     fn test_shamir_threshold_3_of_5() {
         let secret = [0x42u8; 32];

@@ -9,17 +9,45 @@ use muccheai_types::memory::MemoryEntry;
 
 use crate::config::MuccheConfig;
 
-/// Load the machine-bound encryption key from disk.
+/// Load the machine-bound encryption key material from disk and derive
+/// the actual AES-256 key via Argon2id when `MUCCHEAI_KEY_PASSWORD` is set.
 fn load_machine_key() -> Option<[u8; 32]> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let path = home.join(".muccheai").join(".machine_key");
     let bytes = std::fs::read(&path).ok()?;
     if bytes.len() == 32 {
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&bytes);
-        Some(key)
+        let mut material = [0u8; 32];
+        material.copy_from_slice(&bytes);
+        Some(derive_machine_key(&material))
     } else {
         None
+    }
+}
+
+/// Derive the actual AES-256 key from the 32-byte material.
+/// If `MUCCHEAI_KEY_PASSWORD` is set, Argon2id is used with a fixed salt.
+/// Otherwise the raw material is returned (with a warning).
+fn derive_machine_key(material: &[u8; 32]) -> [u8; 32] {
+    use argon2::{Argon2, Algorithm, Params, Version};
+    const SALT: &[u8] = b"muccheai-machine-key-v1";
+
+    match std::env::var("MUCCHEAI_KEY_PASSWORD") {
+        Ok(password) => {
+            let params = Params::new(65536, 3, 4, Some(32))
+                .expect("valid argon2 params");
+            let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+            let mut key = [0u8; 32];
+            argon2.hash_password_into(password.as_bytes(), SALT, &mut key)
+                .expect("argon2 hash failed");
+            key
+        }
+        Err(_) => {
+            tracing::warn!(
+                "MUCCHEAI_KEY_PASSWORD is not set. The machine key file contains the raw AES-256 key. \
+                 Set MUCCHEAI_KEY_PASSWORD to enable Argon2id key derivation."
+            );
+            *material
+        }
     }
 }
 
@@ -44,6 +72,17 @@ fn decrypt_line(line: &str) -> Option<String> {
     } else {
         Some(line.to_string())
     }
+}
+
+/// Compute a file-level HMAC over all entry content hashes.
+/// This detects truncation and reordering attacks on the JSONL file.
+fn compute_file_hmac(entries: &[MemoryEntry]) -> String {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    for e in entries {
+        hasher.update(&e.content_hash);
+    }
+    hex::encode(hasher.finalize())
 }
 
 /// Simple cross-process advisory file lock (Unix only).
@@ -171,9 +210,15 @@ impl MemoryStore {
             std::fs::set_permissions(&tmp_path, perms)?;
         }
         for e in &entries {
-            let line = serde_json::to_string(e)?;
+            let mut e = e.clone();
+            if e.content_hash.is_empty() {
+                e.content_hash = e.compute_hash();
+            }
+            let line = serde_json::to_string(&e)?;
             writeln!(file, "{}", encrypt_line(&line))?;
         }
+        let hmac = compute_file_hmac(&entries);
+        writeln!(file, "{}", encrypt_line(&format!("__hmac__:{}", hmac)))?;
         drop(file);
         std::fs::rename(&tmp_path, &self.path)?;
         Ok(())
@@ -220,10 +265,15 @@ impl MemoryStore {
 
         let tmp_path = self.path.with_extension("tmp");
         let mut file = File::create(&tmp_path)?;
-        for entry in entries {
+        let hmac = compute_file_hmac(&entries);
+        for mut entry in entries {
+            if entry.content_hash.is_empty() {
+                entry.content_hash = entry.compute_hash();
+            }
             let line = serde_json::to_string(&entry)?;
             writeln!(file, "{}", encrypt_line(&line))?;
         }
+        writeln!(file, "{}", encrypt_line(&format!("__hmac__:{}", hmac)))?;
         drop(file);
         #[cfg(unix)]
         {
@@ -248,6 +298,7 @@ impl MemoryStore {
         let file = File::open(&self.path)?;
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
+        let mut stored_hmac: Option<String> = None;
 
         for line in reader.lines() {
             if entries.len() >= MAX_JSONL_LINES {
@@ -258,8 +309,36 @@ impl MemoryStore {
                 continue;
             }
             let plaintext = decrypt_line(&line).unwrap_or(line);
-            if let Ok(entry) = serde_json::from_str::<MemoryEntry>(&plaintext) {
-                entries.push(entry);
+            if plaintext.starts_with("__hmac__:") {
+                stored_hmac = plaintext.strip_prefix("__hmac__:").map(|s| s.to_string());
+                continue;
+            }
+            match serde_json::from_str::<MemoryEntry>(&plaintext) {
+                Ok(entry) => {
+                    if !entry.verify_integrity() {
+                        return Err(anyhow::anyhow!(
+                            "Memory entry integrity check failed for key '{}'",
+                            entry.key
+                        ));
+                    }
+                    entries.push(entry);
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Corrupted memory entry ({}). The memory file may have been tampered with.",
+                        e
+                    ));
+                }
+            }
+        }
+
+        // Verify file-level HMAC if present.
+        if let Some(expected) = stored_hmac {
+            let actual = compute_file_hmac(&entries);
+            if !muccheai_crypto::constant_time::eq(actual.as_bytes(), expected.as_bytes()) {
+                return Err(anyhow::anyhow!(
+                    "Memory file HMAC verification failed. The file may have been truncated or reordered."
+                ));
             }
         }
 

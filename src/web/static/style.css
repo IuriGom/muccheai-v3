@@ -1,5 +1,5 @@
 /* ============================================
-   MuccheAI v3.0 — Simple Dark Theme
+   MuccheAI — Simple Dark Theme
    ============================================ */
 
 :root {
@@ -1774,11 +1774,11 @@ body.dark .switch input:checked + .slider {
     .nav-icon { font-size: 1.25rem; }
     .status-sidebar { display: none; }
     .chat-history-sidebar { display: none; }
-    .mobile-menu-btn { display: inline-flex !important; }
+    .topbar .mobile-menu-btn { display: inline-flex; }
 }
 
 @media (min-width: 901px) {
-    .mobile-menu-btn { display: none !important; }
+    .topbar .mobile-menu-btn { display: none; }
 }
 
 @media (max-width: 600px) {
@@ -2088,7 +2088,7 @@ body.dark .approval-toast {
 }
 
 @media (max-width: 600px) {
-    #sidebarToggleBtn { display: none !important; }
+    .topbar #sidebarToggleBtn { display: none; }
 }
 
 /* Chat history search */
@@ -2201,3 +2201,31 @@ body.dark .approval-toast {
     white-space: pre-wrap;
     font-family: var(--font-mono);
 }
+
+/* CSP-compliant utility classes (replaces inline styles) */
+body .hidden { display: none; }
+.research-desc { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.75rem; }
+.privacy-warning {
+    background: rgba(255,200,0,0.1);
+    border: 1px solid rgba(255,200,0,0.3);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.5rem 1rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+.nav-label-flex { display: flex; justify-content: space-between; align-items: center; }
+.version-badge {
+    position: fixed;
+    bottom: 8px;
+    right: 12px;
+    font-size: 11px;
+    color: var(--text-tertiary, #888);
+    opacity: 0.7;
+    pointer-events: none;
+    z-index: 9999;
+}
+.status-success { color: var(--accent-green); border-color: var(--accent-green); }
+.status-error { color: var(--accent-red); border-color: var(--accent-red); }
+.card-full-width { grid-column: 1 / -1; }
+.empty-history { padding: 1rem 0; font-size: 0.8rem; }

@@ -361,15 +361,20 @@ impl MultiCiVerification {
         self
     }
 
-    /// Verify build across multiple CI systems
+    /// Verify build across multiple CI systems.
+    ///
+    /// This is a **best-effort** check against public CI APIs.  It does NOT
+    /// perform cryptographic attestation — `signed_hash` and `signature` are
+    /// not verified.  Do not rely on this for high-assurance supply-chain
+    /// security without adding maintainer key verification.
     pub fn verify_build(&self) -> std::result::Result<BuildAttestation, BuildIntegrityError> {
         let mut ci_statuses = Vec::new();
 
-        // Try to fetch real CI status from GitHub
         if let Some((owner, repo)) = &self.github_repo {
             let sha = self.expected_commit.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
             match check_github_status(owner, repo, &sha) {
-                Ok(status) => {
+                Ok(status @ (CiStatus::Passing | CiStatus::Failing)) => {
                     ci_statuses.push(CiAttestation {
                         name: "GitHub".to_string(),
                         git_commit: self.expected_commit,
@@ -379,22 +384,19 @@ impl MultiCiVerification {
                         status,
                     });
                 }
+                Ok(CiStatus::Pending) => {
+                    tracing::info!("GitHub CI status is pending for {}", sha);
+                }
+                Ok(CiStatus::Unknown) => {
+                    tracing::warn!("GitHub CI check returned unknown status");
+                }
                 Err(e) => {
                     tracing::warn!("GitHub CI check failed: {}", e);
-                    ci_statuses.push(CiAttestation {
-                        name: "GitHub".to_string(),
-                        git_commit: self.expected_commit,
-                        signed_hash: [0u8; 64],
-                        timestamp: Timestamp::now(),
-                        signature: [0u8; 64],
-                        status: CiStatus::Unknown,
-                    });
                 }
             }
 
-            // Also query GitLab status (placeholder)
             match check_gitlab_status(&format!("{}/{}", owner, repo), &sha) {
-                Ok(status) => {
+                Ok(status @ (CiStatus::Passing | CiStatus::Failing)) => {
                     ci_statuses.push(CiAttestation {
                         name: "GitLab".to_string(),
                         git_commit: self.expected_commit,
@@ -404,25 +406,24 @@ impl MultiCiVerification {
                         status,
                     });
                 }
+                Ok(_) => {
+                    tracing::warn!("GitLab CI check returned unknown or pending status");
+                }
                 Err(e) => {
                     tracing::warn!("GitLab CI check failed: {}", e);
                 }
             }
         }
 
-        // Require at least one verified CI system — do not accept placeholder data.
         if ci_statuses.is_empty() {
             return Err(BuildIntegrityError::InvalidResponse(
                 "No CI systems could be verified".to_string()
             ));
         }
 
-        // NOTE: Warrant canary signatures are placeholder zeros.
-        // Real deployments MUST configure actual maintainer keys before
-        // relying on build verification for security decisions.
         let canary = WarrantCanary {
             date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
-            statement: "No gag orders received as of today (PLACEHOLDER — NOT VERIFIED)".to_string(),
+            statement: "Warrant canary not verified — no maintainer signatures configured".to_string(),
             signatures: vec![],
         };
 
@@ -459,51 +460,18 @@ mod tests {
     use super::*;
 
     #[test]
-    // NOTE: Placeholder test data. Real deployments require actual maintainer signatures.
-    fn test_build_attestation_verify() {
+    fn test_build_attestation_empty_ci_fails() {
         let attestation = BuildAttestation {
             git_commit: [0u8; 20],
-            ci_systems: vec![
-                CiAttestation {
-                    name: "GitHub".to_string(),
-                    git_commit: [0u8; 20],
-                    signed_hash: [0xAA; 64],
-                    timestamp: Timestamp::now(),
-                    signature: [0u8; 64],
-                    status: CiStatus::Passing,
-                },
-                CiAttestation {
-                    name: "GitLab".to_string(),
-                    git_commit: [0u8; 20],
-                    signed_hash: [0xAA; 64],
-                    timestamp: Timestamp::now(),
-                    signature: [0u8; 64],
-                    status: CiStatus::Passing,
-                },
-                CiAttestation {
-                    name: "Self-hosted".to_string(),
-                    git_commit: [0u8; 20],
-                    signed_hash: [0xAA; 64],
-                    timestamp: Timestamp::now(),
-                    signature: [0u8; 64],
-                    status: CiStatus::Passing,
-                },
-            ],
+            ci_systems: vec![],
             reproducible_hash: [0u8; 32],
             canary: WarrantCanary {
-                date: "2026-04-23".to_string(),
-                statement: "No gag orders".to_string(),
-                signatures: vec![
-                    MaintainerSignature { name: "A".to_string(), jurisdiction: "CH".to_string(), pubkey: [0u8; 32], signature: [0u8; 64] },
-                    MaintainerSignature { name: "B".to_string(), jurisdiction: "IS".to_string(), pubkey: [0u8; 32], signature: [0u8; 64] },
-                    MaintainerSignature { name: "C".to_string(), jurisdiction: "DE".to_string(), pubkey: [0u8; 32], signature: [0u8; 64] },
-                    MaintainerSignature { name: "D".to_string(), jurisdiction: "NL".to_string(), pubkey: [0u8; 32], signature: [0u8; 64] },
-                    MaintainerSignature { name: "E".to_string(), jurisdiction: "CA".to_string(), pubkey: [0u8; 32], signature: [0u8; 64] },
-                ],
+                date: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                statement: "Unverified".to_string(),
+                signatures: vec![],
             },
         };
-
-        assert!(attestation.verify().is_ok());
+        assert!(attestation.verify().is_err());
     }
 
     #[test]

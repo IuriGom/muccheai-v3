@@ -17,29 +17,26 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
-use subtle::ConstantTimeEq;
 
-/// Constant-time comparison of two byte slices.
-/// Uses the `subtle` crate to prevent compiler optimizations from
-/// introducing timing side-channels.
-/// Constant-time equality comparison that does NOT leak length information.
-/// Hashes both inputs with SHA3-256 so that the comparison is always over
-/// fixed-length 32-byte digests, regardless of input size.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    use sha3::Digest;
-    let a_hash = sha3::Sha3_256::digest(a);
-    let b_hash = sha3::Sha3_256::digest(b);
-    a_hash.ct_eq(&b_hash).into()
+/// Derive a per-user CSRF token from the server secret and the user's
+/// authentication token hash.  This ensures every user gets a unique
+/// unpredictable CSRF token; compromising one user's token does not help
+/// forge requests for another user.
+fn derive_csrf_token(secret: &[u8; 32], auth_hash: &str) -> String {
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(secret);
+    hasher.update(auth_hash.as_bytes());
+    hex::encode(hasher.finalize())
 }
+
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use muccheai_build_verify::{MultiCiVerification, BuildIntegrityError};
-use muccheai_federation::DID;
 use muccheai_policy_engine::PolicyEngine;
 use muccheai_policy_engine::rules::RuleAction;
-use muccheai_recovery::{AnomalyDetector, BaselineStats, Incident};
-use muccheai_sandbox::LlmSandbox;
+use muccheai_recovery::Incident;use muccheai_sandbox::LlmSandbox;
 use muccheai_tool_gateway::{ToolGateway, config::{ToolConfig, McpServerConfig}};
 use muccheai_mcp::{McpClient, McpTransport};
 use muccheai_mcp::types::McpTool;
@@ -90,11 +87,15 @@ pub struct AppState {
     /// Bearer token for API authentication. Wrapped in Zeroizing so the
     /// plaintext is cleared from RAM when the AppState is dropped.
     pub auth_token: zeroize::Zeroizing<String>,
-    /// CSRF token for web form protection. Wrapped in Zeroizing so the
-    /// plaintext is cleared from RAM when the AppState is dropped.
-    pub csrf_token: Mutex<zeroize::Zeroizing<String>>,
+    /// Secret used to derive per-user CSRF tokens.  The token for a given
+    /// authenticated user is HMAC-SHA3-256(csrf_secret, auth_token_hash).
+    /// This prevents one user's CSRF token from working for another user.
+    pub csrf_secret: [u8; 32],
     /// Per-IP rate limiter: (last_request, count_in_window)
     pub rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
+    /// Revoked authentication token hashes.  Tokens added here on logout
+    /// are rejected by auth_middleware even if the bearer header is otherwise valid.
+    pub revoked_tokens: Mutex<std::collections::HashSet<String>>,
     /// Runtime configuration
     pub config: Mutex<MuccheConfig>,
     /// In-memory chat sessions
@@ -391,6 +392,13 @@ pub struct SaveSettingsRequest {
     pub show_reasoning: bool,
 }
 
+/// Version response.
+#[derive(Debug, Serialize)]
+pub struct VersionResponse {
+    /// Current application version.
+    pub version: String,
+}
+
 /// Model response.
 #[derive(Debug, Serialize)]
 pub struct ModelResponse {
@@ -422,17 +430,26 @@ fn hash_auth_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
     let bytes = auth.as_bytes();
     let prefix = b"Bearer ";
-    if bytes.len() < prefix.len() {
-        return None;
+    // Always perform work up to the same maximum length regardless of
+    // whether the prefix is present or the token is valid.
+    let has_prefix = if bytes.len() >= prefix.len() {
+        muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
+    } else {
+        let mut padded = [0u8; 7];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        muccheai_crypto::constant_time::eq(&padded, prefix)
+    };
+    let token = if bytes.len() > prefix.len() {
+        &auth[prefix.len()..]
+    } else {
+        ""
+    };
+    let hash = hex::encode(muccheai_crypto::sha3_512(token.as_bytes()));
+    if has_prefix {
+        Some(hash)
+    } else {
+        None
     }
-    // Constant-time prefix check: always hash the same amount of work
-    // regardless of whether the prefix matches.
-    let has_prefix = constant_time_eq(&bytes[..prefix.len()], prefix);
-    if !has_prefix {
-        return None;
-    }
-    let token = &auth[prefix.len()..];
-    Some(hex::encode(muccheai_crypto::sha3_512(token.as_bytes())))
 }
 
 /// Bearer token authentication middleware + CSRF protection for mutating requests
@@ -453,14 +470,26 @@ async fn auth_middleware(
     let token_valid = auth_header.map_or(false, |header| {
         let bytes = header.as_bytes();
         let prefix = b"Bearer ";
-        if bytes.len() < prefix.len() {
-            // Perform dummy work to keep timing uniform with the success path.
-            let _ = constant_time_eq(&bytes, &[]);
-            return false;
-        }
-        let has_prefix = constant_time_eq(&bytes[..prefix.len()], prefix);
-        let token = std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("");
-        has_prefix && !token.is_empty() && constant_time_eq(token.as_bytes(), state.auth_token.as_bytes())
+        // Uniform work: always compute prefix match, token emptiness, and
+        // token correctness, without short-circuiting, so the timing profile
+        // is identical for missing prefix, wrong prefix, empty token, and
+        // wrong token paths.
+        let has_prefix = if bytes.len() >= prefix.len() {
+            muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
+        } else {
+            let mut padded = [0u8; 7];
+            padded[..bytes.len()].copy_from_slice(bytes);
+            muccheai_crypto::constant_time::eq(&padded, prefix)
+        };
+        let token = if bytes.len() > prefix.len() {
+            std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("")
+        } else {
+            ""
+        };
+        let token_nonempty = !token.is_empty();
+        let token_correct = muccheai_crypto::constant_time::eq(token.as_bytes(), state.auth_token.as_bytes());
+        // Use bitwise AND to avoid short-circuit evaluation.
+        has_prefix & token_nonempty & token_correct
     });
 
     if !token_valid {
@@ -482,6 +511,19 @@ async fn auth_middleware(
             .into_response();
     }
 
+    // Check revocation list.
+    let owner_hash = hash_auth_token(&headers).unwrap_or_default();
+    if !owner_hash.is_empty() {
+        let revoked = state.revoked_tokens.lock().await;
+        if revoked.contains(&owner_hash) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Token has been revoked"})),
+            )
+                .into_response();
+        }
+    }
+
     let csrf_required = method != axum::http::Method::GET
         && method != axum::http::Method::HEAD
         && method != axum::http::Method::OPTIONS;
@@ -490,9 +532,10 @@ async fn auth_middleware(
         let csrf_header = headers
             .get("x-csrf-token")
             .and_then(|v| v.to_str().ok());
-        let expected = state.csrf_token.lock().await;
+        let owner = hash_auth_token(&headers).unwrap_or_default();
+        let expected = derive_csrf_token(&state.csrf_secret, &owner);
         let csrf_valid = csrf_header.map_or(false, |h| {
-            constant_time_eq(h.as_bytes(), expected.as_bytes())
+            muccheai_crypto::constant_time::eq(h.as_bytes(), expected.as_bytes())
         });
         if !csrf_valid {
             return (
@@ -734,6 +777,20 @@ async fn rate_limit_middleware(
     // Prune stale entries to prevent unbounded memory growth.
     limiter.retain(|_, (last, _)| now.saturating_duration_since(*last) <= window);
 
+    // Hard cap: if the map still exceeds 10,000 entries, evict the oldest 10%.
+    const MAX_RATE_LIMIT_ENTRIES: usize = 10_000;
+    if limiter.len() >= MAX_RATE_LIMIT_ENTRIES {
+        let mut entries: Vec<(String, Instant)> = limiter
+            .iter()
+            .map(|(ip, (t, _))| (ip.clone(), *t))
+            .collect();
+        entries.sort_by_key(|(_, t)| *t);
+        let to_remove = entries.len() / 10;
+        for (ip, _) in entries.into_iter().take(to_remove) {
+            limiter.remove(&ip);
+        }
+    }
+
     let entry = limiter.entry(ip.clone()).or_insert((now, 0));
 
     if now.saturating_duration_since(entry.0) > window {
@@ -851,7 +908,7 @@ async fn chat(
         let owner = hash_auth_token(&headers).unwrap_or_default();
         if let Some(sid) = &req.session_id {
             sessions.iter()
-                .find(|s| s.id == *sid && constant_time_eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+                .find(|s| s.id == *sid && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
                 .map(|s| s.messages.clone())
                 .unwrap_or_default()
         } else {
@@ -919,7 +976,7 @@ async fn chat(
 
     let owner = hash_auth_token(&headers).unwrap_or_default();
     if let Some(idx) = existing {
-        if !constant_time_eq(sessions[idx].owner_hash.as_bytes(), owner.as_bytes()) {
+        if !muccheai_crypto::constant_time::eq(sessions[idx].owner_hash.as_bytes(), owner.as_bytes()) {
             return Json(ChatResponse {
                 response: "Session access denied".to_string(),
                 session_id,
@@ -1380,7 +1437,8 @@ fn extract_memory_proposals(text: &str) -> (String, Vec<(MemoryType, String, Str
 /// Initialize MCP connections and discover tools from all configured servers.
 /// This runs at startup (and can be re-triggered after config changes).
 pub async fn init_mcp_tools() -> Vec<CachedMcpTool> {
-    let tool_config = ToolConfig::load();
+    let mut tool_config = ToolConfig::load();
+    crate::config::decrypt_mcp_keys(&mut tool_config);
 
     let mcp_config = match tool_config.mcp {
         Some(m) => m,
@@ -1822,26 +1880,10 @@ async fn revoke(
     })
 }
 
-/// List incidents
+/// List incidents.
+/// TODO: Implement real anomaly detection based on actual audit logs.
 async fn incidents() -> Json<IncidentsResponse> {
-    let detector = AnomalyDetector {
-        baseline: BaselineStats {
-            rate_mean: 10.0,
-            rate_stddev: 2.0,
-            normal_actions: vec!["email.send".to_string(), "calendar.read".to_string()],
-        },
-        sigma_threshold: 5.0,
-    };
-
-    let mut incidents = Vec::new();
-    if let Some(incident) = detector.detect(100.0, &[]) {
-        incidents.push(incident);
-    }
-    if let Some(incident) = detector.detect(10.0, &["unknown.action".to_string()]) {
-        incidents.push(incident);
-    }
-
-    Json(IncidentsResponse { incidents })
+    Json(IncidentsResponse { incidents: vec![] })
 }
 
 /// Build verification status
@@ -1880,39 +1922,13 @@ async fn build_verify() -> Json<BuildVerifyResponse> {
     }
 }
 
-/// Create cross-agent delegation
-async fn delegations(Json(req): Json<DelegationRequest>) -> Json<DelegationResponse> {
-    let issuer = DID {
-        method: req.issuer_method.clone(),
-        identifier: req.issuer_identifier.clone(),
-    };
-    let subject = DID {
-        method: req.subject_method.clone(),
-        identifier: req.subject_identifier.clone(),
-    };
-
-    let delegation_id = format!(
-        "delegation-{}-{}-{}",
-        issuer,
-        subject,
-        Timestamp::now().0
-    );
-
-    // Log the requested resource scope and TTL for auditing
-    tracing::info!(
-        "Delegation request: {} -> {} | resources: {:?} | ttl: {}s",
-        issuer,
-        subject,
-        req.resource_ids,
-        req.ttl_seconds
-    );
-
-    Json(DelegationResponse {
-        delegation_id,
-        issuer: issuer.to_string(),
-        subject: subject.to_string(),
-        verified: false,
-    })
+/// Create cross-agent delegation.
+/// TODO: Implement real cryptographic delegation (DID-based signatures).
+async fn delegations() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({"error": "Delegation is not yet implemented"})),
+    )
 }
 
 /// Return current configuration with secrets redacted
@@ -2000,34 +2016,32 @@ async fn list_memories(
 
 /// Store a new structured memory directly (bypasses approval queue).
 ///
-/// Use this for user-initiated saves. LLM-suggested memories should go
-/// through the approval queue endpoint instead.
+/// Store a new structured memory through the approval queue.
+/// All writes (user-initiated or LLM-suggested) must be approved before
+/// they become active memories.  This prevents a compromised session from
+/// directly poisoning the memory store.
 async fn store_memory(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StoreMemoryRequest>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<Json<ProposeMemoryResponse>, StatusCode> {
+    if req.memory_type == MemoryType::TaskHistory {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let sm = state.structured_memory.lock().await;
     let value = json_value_to_memory_value(req.value);
+    let entry = MemoryEntry {
+        memory_type: req.memory_type,
+        key: req.key,
+        value,
+        created_at: Timestamp::now(),
+        user_signature: vec![],
+        content_hash: vec![],
+    };
 
-    match req.memory_type {
-        MemoryType::Fact => {
-            sm.store_fact(&req.key, &value)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        MemoryType::Preference => {
-            sm.store_preference(&req.key, &value)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        MemoryType::TaskHistory => {
-            return Err(StatusCode::FORBIDDEN);
-        }
-        MemoryType::Context | MemoryType::Draft => {
-            // Context is RAM-only, Draft not yet implemented
-            return Ok(StatusCode::NOT_IMPLEMENTED);
-        }
+    match sm.propose(entry, "User-initiated memory save") {
+        Ok(id) => Ok(Json(ProposeMemoryResponse { id, status: "pending".to_string() })),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
-
-    Ok(StatusCode::CREATED)
 }
 
 /// Delete a structured memory by key.
@@ -2272,9 +2286,16 @@ async fn test_connection(
 }
 
 /// Get CSRF token for web form protection.
-async fn get_csrf(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let token = state.csrf_token.lock().await;
-    Json(serde_json::json!({ "csrf_token": token.clone().to_string() }))
+async fn get_csrf(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    let owner = hash_auth_token(&headers).unwrap_or_default();
+    if owner.is_empty() {
+        return Json(serde_json::json!({ "error": "Not authenticated" }));
+    }
+    let token = derive_csrf_token(&state.csrf_secret, &owner);
+    Json(serde_json::json!({ "csrf_token": token }))
 }
 
 /// Get settings.
@@ -2317,15 +2338,25 @@ async fn save_settings(
     }))
 }
 
-/// Logout — invalidate server-side session state for the current user.
+/// Logout — invalidate server-side session state and revoke the token.
 async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> StatusCode {
     let owner = hash_auth_token(&headers).unwrap_or_default();
     let mut sessions = state.chat_sessions.lock().await;
-    sessions.retain(|s| !constant_time_eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+    sessions.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+    drop(sessions);
+    let mut revoked = state.revoked_tokens.lock().await;
+    revoked.insert(owner);
     StatusCode::NO_CONTENT
+}
+
+/// Get current application version.
+async fn get_version() -> Json<VersionResponse> {
+    Json(VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
 }
 
 /// Get current model.
@@ -2359,7 +2390,7 @@ async fn list_chat_sessions(
     let sessions = state.chat_sessions.lock().await;
     let filtered: Vec<ChatSession> = sessions
         .iter()
-        .filter(|s| constant_time_eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+        .filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
         .cloned()
         .collect();
     Json(ChatSessionsResponse { sessions: filtered })
@@ -2375,7 +2406,7 @@ async fn get_chat_session(
     let sessions = state.chat_sessions.lock().await;
     sessions
         .iter()
-        .find(|s| s.id == id && constant_time_eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+        .find(|s| s.id == id && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
         .cloned()
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
@@ -2390,7 +2421,7 @@ async fn delete_chat_session(
     let owner = hash_auth_token(&headers).unwrap_or_default();
     let mut sessions = state.chat_sessions.lock().await;
     let before = sessions.len();
-    sessions.retain(|s| s.id != id || !constant_time_eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+    sessions.retain(|s| s.id != id || !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
     if sessions.len() < before {
         StatusCode::NO_CONTENT
     } else {
@@ -2523,7 +2554,9 @@ async fn add_mcp_server(
             api_key: req.api_key,
         },
     );
-    cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut cfg_save = cfg.clone();
+    crate::config::encrypt_mcp_keys(&mut cfg_save);
+    cfg_save.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     drop(cfg);
 
     // Refresh MCP tools cache in the background
@@ -2558,7 +2591,9 @@ async fn delete_mcp_server(
         .map(|m| m.servers.remove(&name).is_some())
         .unwrap_or(false);
     if removed {
-        cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut cfg_save = cfg.clone();
+        crate::config::encrypt_mcp_keys(&mut cfg_save);
+        cfg_save.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         drop(cfg);
 
         // Refresh MCP tools cache in the background
@@ -2586,7 +2621,8 @@ async fn delete_mcp_server(
 }
 
 async fn test_mcp_server(Path(name): Path<String>) -> Json<McpTestResponse> {
-    let cfg = ToolConfig::load();
+    let mut cfg = ToolConfig::load();
+    crate::config::decrypt_mcp_keys(&mut cfg);
     let server = match cfg
         .mcp
         .and_then(|m| m.servers.get(&name).cloned())
@@ -2817,6 +2853,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/csrf", get(get_csrf))
         .route("/settings", get(get_settings))
         .route("/settings", post(save_settings))
+        .route("/version", get(get_version))
         .route("/model", get(get_model))
         .route("/model", post(set_model))
         .route("/sessions", get(list_chat_sessions))

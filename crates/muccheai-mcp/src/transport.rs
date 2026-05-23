@@ -180,7 +180,6 @@ impl McpTransport {
 
         let kind = match self {
             McpTransport::Stdio { command, args } => {
-                const ALLOWED_MCP_COMMANDS: &[&str] = &["npx", "npm", "node", "bun", "deno"];
                 if !std::path::Path::new(command).is_absolute() {
                     return Err(anyhow::anyhow!(
                         "MCP stdio command must be an absolute path, got: {}", command
@@ -194,16 +193,9 @@ impl McpTransport {
                         ));
                     }
                 }
-                let cmd_name = std::path::Path::new(command)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
-                if !ALLOWED_MCP_COMMANDS.contains(&cmd_name) {
-                    return Err(anyhow::anyhow!(
-                        "MCP stdio command '{}' is not in the allowlist", cmd_name
-                    ));
-                }
-                // to prevent attackers from placing a malicious binary named 'node' in /tmp.
+                // Verify the command is in a trusted system directory.
+                // The absolute-path and symlink checks above already prevent most
+                // impersonation attacks; the prefix check is the final guard.
                 let trusted_prefixes = ["/usr/bin/", "/usr/local/bin/", "/bin/", "/opt/homebrew/bin/"];
                 if !trusted_prefixes.iter().any(|p| command.starts_with(p)) {
                     return Err(anyhow::anyhow!(

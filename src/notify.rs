@@ -29,6 +29,12 @@ fn escape_applescript(s: &str, max_len: usize) -> Option<String> {
     }) {
         return None;
     }
+    // AppleScript uses `"` for escaping quotes; backslash itself is not a
+    // special character, but we reject it anyway to prevent any future
+    // misuse if the script pattern changes.
+    if s.contains('\\') {
+        return None;
+    }
     Some(s.replace('"', "\"\""))
 }
 

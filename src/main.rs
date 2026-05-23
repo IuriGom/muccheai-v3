@@ -826,21 +826,21 @@ async fn run_web_server(bind: &str) {
         println!("🔌 Discovered {} MCP tools from configured servers", mcp_tools_cache.len());
     }
 
-    // Generate a random CSRF token for web form protection
-    let mut csrf_buf = [0u8; 32];
-    if ring::rand::SystemRandom::new().fill(&mut csrf_buf).is_err() {
-        eprintln!("CSPRNG failure: unable to generate CSRF token");
+    // Generate a random CSRF secret for per-user token derivation.
+    let mut csrf_secret = [0u8; 32];
+    if ring::rand::SystemRandom::new().fill(&mut csrf_secret).is_err() {
+        eprintln!("CSPRNG failure: unable to generate CSRF secret");
         std::process::exit(1);
     }
-    let csrf_token = zeroize::Zeroizing::new(hex::encode(csrf_buf));
 
     let state = Arc::new(web::AppState {
         sandbox: Mutex::new(sandbox),
         policy: Mutex::new(policy),
         gateway: Mutex::new(gateway),
         auth_token: zeroize::Zeroizing::new(config.api_key.clone()),
-        csrf_token: Mutex::new(csrf_token),
+        csrf_secret,
         rate_limiter: Mutex::new(std::collections::HashMap::new()),
+        revoked_tokens: Mutex::new(std::collections::HashSet::new()),
         config: Mutex::new(config.clone()),
         chat_sessions: Mutex::new(Vec::new()),
         memory: Mutex::new(memory),
