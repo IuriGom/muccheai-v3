@@ -327,7 +327,7 @@ pub fn run() -> anyhow::Result<bool> {
 
     // Generate keys with animated progress
     println!();
-    let pb = crate::style::progress_bar(100);
+    let pb = crate::style::milk_progress_bar(100);
     pb.set_message("Generating post-quantum keypair...");
     for i in 0..=10 {
         pb.set_position(i * 10);
@@ -496,7 +496,7 @@ pub fn run() -> anyhow::Result<bool> {
         theme.style_info().apply_to("    muccheai chat")
     );
 
-
+    crate::style::easter_eggs::setup_complete();
 
     Ok(true)
 }

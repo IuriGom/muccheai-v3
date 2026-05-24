@@ -14,6 +14,6 @@ pub fn print_status(_format: crate::cli::OutputFormat) {
     println!("Vault:       3-of-5 Shamir");
     println!("Audit Log:   forward-secure");
     
-    let risk = RiskLevel::Low;
+    let risk = RiskLevel::Sereno;
     println!("Risk Level:  {}", risk.badge());
 }

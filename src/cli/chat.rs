@@ -239,8 +239,8 @@ fn ask_and_execute(
     let style_risk = map_risk_to_style(risk);
     print!(
         "🔒 Risk: {} ({}). Approve? (y/n) ",
-        style_risk.badge(),
-        style_risk.description()
+        style_risk.italian_name(),
+        style_risk.english_name()
     );
     std::io::stdout().flush()?;
 

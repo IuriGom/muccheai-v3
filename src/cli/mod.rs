@@ -320,9 +320,9 @@ pub fn process_prompt(
     let style_risk = map_risk_to_style(risk);
     println!("🥛 Proposal: {}.{}", proposal.tool_id, proposal.method);
     println!(
-        "Risk: {} — {}",
-        style_risk.badge(),
-        style_risk.description()
+        "🔒 Risk: {} ({})",
+        style_risk.italian_name(),
+        style_risk.english_name()
     );
 
     print!("⏳ Applying friction...");
@@ -412,10 +412,10 @@ fn estimate_risk(proposal: &muccheai_types::ActionProposal) -> muccheai_types::R
 
 fn map_risk_to_style(risk: muccheai_types::RiskLevel) -> crate::style::RiskLevel {
     match risk {
-        muccheai_types::RiskLevel::Low => crate::style::RiskLevel::Low,
-        muccheai_types::RiskLevel::Medium => crate::style::RiskLevel::Medium,
-        muccheai_types::RiskLevel::High => crate::style::RiskLevel::High,
-        muccheai_types::RiskLevel::Critical => crate::style::RiskLevel::Critical,
+        muccheai_types::RiskLevel::Low => crate::style::RiskLevel::Sereno,
+        muccheai_types::RiskLevel::Medium => crate::style::RiskLevel::Tramontana,
+        muccheai_types::RiskLevel::High => crate::style::RiskLevel::Scirocco,
+        muccheai_types::RiskLevel::Critical => crate::style::RiskLevel::Vesuvio,
     }
 }
 
