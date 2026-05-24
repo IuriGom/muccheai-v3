@@ -299,12 +299,6 @@ pub fn run() -> anyhow::Result<bool> {
     }
     .to_string();
 
-    println!();
-    let duress_pin = Password::with_theme(&ColorfulTheme::default())
-        .with_prompt("Set a duress PIN (enter if compromised)")
-        .with_confirmation("Confirm duress PIN", "PINs don't match")
-        .interact()?;
-
     theme.print_success("Security preferences configured");
 
     // ── Step 4: Vault ─────────────────────────────────────────────────────
@@ -430,7 +424,7 @@ pub fn run() -> anyhow::Result<bool> {
         default_action,
         business_hours_restriction: false,
         approval_tier,
-        duress_pin: crate::config::hash_duress_pin(&duress_pin),
+
         shamir_threshold: threshold,
         keypair: keypair.into(),
         personas,

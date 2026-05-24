@@ -137,34 +137,6 @@ fn generate_api_key() -> String {
     buf.iter().map(|&b| b as char).collect()
 }
 
-/// Hash a duress PIN using Argon2id.
-/// Returns a PHC-formatted hash string.
-pub fn hash_duress_pin(pin: &str) -> String {
-    use argon2::{Argon2, PasswordHasher, Algorithm, Version, Params};
-    use argon2::password_hash::SaltString;
-    use rand::rngs::OsRng;
-    let params = Params::new(32768, 3, 4, Some(32))
-        .expect("valid argon2 params");
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let salt = SaltString::generate(&mut OsRng);
-    argon2
-        .hash_password(pin.as_bytes(), &salt)
-        .expect("argon2 hash must succeed")
-        .to_string()
-}
-
-/// Verify a duress PIN against a stored Argon2id hash.
-pub fn verify_duress_pin(pin: &str, hash: &str) -> bool {
-    use argon2::{Argon2, PasswordVerifier};
-    use argon2::password_hash::PasswordHash;
-    let argon2 = Argon2::default();
-    let parsed_hash = match PasswordHash::new(hash) {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
-    argon2.verify_password(pin.as_bytes(), &parsed_hash).is_ok()
-}
-
 /// An AI agent / provider configuration.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -272,8 +244,6 @@ pub struct MuccheConfig {
     pub business_hours_restriction: bool,
     /// Default approval tier.
     pub approval_tier: String,
-    /// Duress PIN (Argon2id hash).
-    pub duress_pin: String,
     /// Shamir threshold.
     pub shamir_threshold: u8,
     /// Issuer keypair for capability minting.
@@ -331,7 +301,6 @@ impl std::fmt::Debug for MuccheConfig {
             .field("default_action", &self.default_action)
             .field("business_hours_restriction", &self.business_hours_restriction)
             .field("approval_tier", &self.approval_tier)
-            .field("duress_pin", &"<redacted>")
             .field("shamir_threshold", &self.shamir_threshold)
             .field("keypair", &"<redacted>")
             .field("policy_rules", &self.policy_rules)
@@ -383,15 +352,6 @@ impl Default for MuccheConfig {
             default_action: RuleAction::Deny,
             business_hours_restriction: false,
             approval_tier: "standard".to_string(),
-            duress_pin: {
-                use rand::Rng;
-                const CHARSET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-                let mut rng = rand::rngs::OsRng;
-                let pin: String = (0..8)
-                    .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
-                    .collect();
-                hash_duress_pin(&pin)
-            },
             shamir_threshold: 3,
             keypair: kp.into(),
             policy_rules: default_policy_rules(),

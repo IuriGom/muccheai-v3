@@ -58,6 +58,15 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     #[serde(skip)]
     pub owner_hash: String,
+    #[serde(skip)]
+    pub session_secret: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatSessionSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at: u64,
 }
 
 pub fn load_revoked_tokens() -> std::collections::HashSet<String> {
@@ -101,6 +110,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub mcp_tools_cache: Mutex<Vec<CachedMcpTool>>,
     pub tool_config: Mutex<ToolConfig>,
+    pub csrf_tokens: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Clone)]
@@ -132,6 +142,7 @@ pub struct ChatRequest {
 pub struct ChatResponse {
     pub response: String,
     pub session_id: String,
+    pub session_secret: String,
 }
 
 /// System status
@@ -375,7 +386,7 @@ pub struct SetModelRequest {
 /// Chat sessions response.
 #[derive(Debug, Serialize)]
 pub struct ChatSessionsResponse {
-    pub sessions: Vec<ChatSession>,
+    pub sessions: Vec<ChatSessionSummary>,
 }
 
 /// Serve the main HTML page
@@ -489,10 +500,12 @@ async fn auth_middleware(
             .get("x-csrf-token")
             .and_then(|v| v.to_str().ok());
         let owner = hash_auth_token(&headers).unwrap_or_default();
-        let expected = derive_csrf_token(&state.csrf_secret, &owner);
-        let csrf_valid = csrf_header.map_or(false, |h| {
-            muccheai_crypto::constant_time::eq(h.as_bytes(), expected.as_bytes())
-        });
+        let store = state.csrf_tokens.lock().await;
+        let expected = store.get(&owner);
+        let csrf_valid = match (csrf_header, expected) {
+            (Some(h), Some(exp)) => muccheai_crypto::constant_time::eq(h.as_bytes(), exp.as_bytes()),
+            _ => false,
+        };
         if !csrf_valid {
             return (
                 StatusCode::FORBIDDEN,
@@ -927,11 +940,12 @@ async fn chat(
     let timestamp = Timestamp::now().0;
 
     let owner = hash_auth_token(&headers).unwrap_or_default();
-    if let Some(idx) = existing {
+    let session_secret = if let Some(idx) = existing {
         if !muccheai_crypto::constant_time::eq(sessions[idx].owner_hash.as_bytes(), owner.as_bytes()) {
             return Json(ChatResponse {
                 response: "Session access denied".to_string(),
                 session_id,
+                session_secret: String::new(),
             });
         }
         sessions[idx].messages.push(ChatMessage {
@@ -944,12 +958,11 @@ async fn chat(
             content: text.trim().to_string(),
             timestamp: timestamp + 1,
         });
-        // Prune oldest messages if session exceeds limit.
         while sessions[idx].messages.len() > MAX_MESSAGES_PER_SESSION {
             sessions[idx].messages.remove(0);
         }
+        sessions[idx].session_secret.clone()
     } else {
-        // Evict oldest session if we exceed the maximum.
         while sessions.len() >= MAX_SESSIONS {
             sessions.remove(0);
         }
@@ -958,11 +971,15 @@ async fn chat(
         } else {
             req.message.clone()
         };
+        let mut sec = [0u8; 16];
+        ring::rand::SystemRandom::new().fill(&mut sec).expect("CSPRNG failure");
+        let secret = hex::encode(sec);
         sessions.push(ChatSession {
             id: session_id.clone(),
             title,
             created_at: timestamp,
             owner_hash: hash_auth_token(&headers).unwrap_or_default(),
+            session_secret: secret.clone(),
             messages: vec![
                 ChatMessage {
                     role: "user".to_string(),
@@ -976,17 +993,14 @@ async fn chat(
                 },
             ],
         });
-    }
+        secret
+    };
     drop(sessions);
-
-    // NOTE: Chat context is RAM-only (stored in chat_sessions above).
-    // We do NOT persist raw conversation transcripts to the memory engine.
-    // Only structured memories (Facts, Preferences, TaskHistory) go to disk.
-    // Memory suggestions go through the approval queue.
 
     Json(ChatResponse {
         response: text.trim().to_string(),
         session_id,
+        session_secret: session_secret,
     })
 }
 
@@ -1855,8 +1869,8 @@ async fn build_verify() -> Json<BuildVerifyResponse> {
             status: format!("error: {}", e),
             ci_systems: vec![],
         }),
-        Err(e) => Json(BuildVerifyResponse {
-            status: format!("error: {}", e),
+        Err(_) => Json(BuildVerifyResponse {
+            status: "error".to_string(),
             ci_systems: vec![],
         }),
     }
@@ -2194,10 +2208,27 @@ async fn test_connection(
     }
     if req.provider == "ollama" {
         let url = format!("{}/api/tags", base);
-        match state.http_client.get(&url).timeout(Duration::from_secs(5)).send().await {
+        let no_redirect = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                return Json(TestConnectionResponse {
+                    success: false,
+                    message: "Failed to build HTTP client".to_string(),
+                });
+            }
+        };
+        match no_redirect.get(&url).send().await {
             Ok(r) if r.status().is_success() => Json(TestConnectionResponse {
                 success: true,
                 message: "Connected to Ollama successfully".to_string(),
+            }),
+            Ok(r) if r.status().is_redirection() => Json(TestConnectionResponse {
+                success: false,
+                message: "Redirect blocked".to_string(),
             }),
             Ok(r) => Json(TestConnectionResponse {
                 success: false,
@@ -2225,7 +2256,11 @@ async fn get_csrf(
     if owner.is_empty() {
         return Json(serde_json::json!({ "error": "Not authenticated" }));
     }
-    let token = derive_csrf_token(&state.csrf_secret, &owner);
+    let mut buf = [0u8; 32];
+    ring::rand::SystemRandom::new().fill(&mut buf).expect("CSPRNG failure");
+    let token = hex::encode(buf);
+    let mut store = state.csrf_tokens.lock().await;
+    store.insert(owner, token.clone());
     Json(serde_json::json!({ "csrf_token": token }))
 }
 
@@ -2318,42 +2353,54 @@ async fn list_chat_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ChatSessionsResponse> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sessions = state.chat_sessions.lock().await;
-    let filtered: Vec<ChatSession> = sessions
+    let filtered: Vec<ChatSessionSummary> = sessions
         .iter()
-        .filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
-        .cloned()
+        .map(|s| ChatSessionSummary {
+            id: s.id.clone(),
+            title: s.title.clone(),
+            created_at: s.created_at,
+        })
         .collect();
     Json(ChatSessionsResponse { sessions: filtered })
 }
 
-/// Get a specific chat session (owner-verified).
 async fn get_chat_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ChatSession>, StatusCode> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     sessions
         .iter()
-        .find(|s| s.id == id && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+        .find(|s| {
+            s.id == id
+                && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        })
         .cloned()
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-/// Delete a chat session (owner-verified).
 async fn delete_chat_session(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> StatusCode {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     let mut sessions = state.chat_sessions.lock().await;
     let before = sessions.len();
-    sessions.retain(|s| s.id != id || !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+    sessions.retain(|s| {
+        s.id != id
+            || !muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
     if sessions.len() < before {
         StatusCode::NO_CONTENT
     } else {
@@ -2449,9 +2496,20 @@ async fn add_mcp_server(
             if !ALLOWED_MCP_COMMANDS.contains(&cmd_name) {
                 return Err(StatusCode::BAD_REQUEST);
             }
-            // Block path traversal (..) but allow absolute paths
             if cmd_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
                 return Err(StatusCode::BAD_REQUEST);
+            }
+            let invalid_chars = [';', '|', '&', '$', '`', '<', '>', '(', ')', '{', '}', '*', '?', '[', ']', '\\', '\'', '"'];
+            for arg in &req.args {
+                if invalid_chars.iter().any(|c| arg.contains(*c)) {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                if arg.starts_with("-e") || arg.starts_with("--eval") || arg.starts_with("-p") || arg.starts_with("--print") {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                if arg.contains("child_process") || arg.contains("exec(") || arg.contains("spawn(") || arg.contains("eval(") {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
             }
         } else {
             return Err(StatusCode::BAD_REQUEST);
@@ -2704,17 +2762,13 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
 pub fn router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
-            // Restrict CORS to exact localhost origins to prevent prefix bypasses
-            // like http://localhost.evil.com.
             let origin_str = origin.to_str().unwrap_or("");
-            if let Ok(url) = url::Url::parse(origin_str) {
-                if let Some(host) = url.host_str() {
-                    return host == "localhost"
-                        || host == "127.0.0.1"
-                        || host == "[::1]";
-                }
-            }
-            false
+            matches!(origin_str,
+                "http://localhost:3000"
+                | "http://127.0.0.1:3000"
+                | "https://localhost:3000"
+                | "https://127.0.0.1:3000"
+            )
         }))
         .allow_methods([
             axum::http::Method::GET,
@@ -2753,10 +2807,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
     );
-    let hsts = tower_http::set_header::SetResponseHeaderLayer::overriding(
-        axum::http::header::STRICT_TRANSPORT_SECURITY,
-        axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-    );
+    let tls_enabled = std::env::var("MUCCHEAI_TLS_CERT").is_ok();
+    let hsts = if tls_enabled {
+        Some(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::STRICT_TRANSPORT_SECURITY,
+            axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        ))
+    } else {
+        None
+    };
 
     let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/web/static");
 
@@ -2809,7 +2868,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         })
         .with_state(state.clone());
 
-    Router::new()
+    let mut router = Router::new()
         .route("/", get(index))
         .route("/personas", get(index))
         .route("/settings", get(index))
@@ -2826,6 +2885,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(xcto)
         .layer(xfo)
         .layer(rp)
-        .layer(cc)
-        .layer(hsts)
+        .layer(cc);
+    if let Some(hsts_layer) = hsts {
+        router = router.layer(hsts_layer);
+    }
+    router
 }

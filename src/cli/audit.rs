@@ -46,11 +46,22 @@ fn load_audit_log() -> anyhow::Result<ForwardSecureLog> {
 
     let entries = if log_path.exists() {
         let content = std::fs::read_to_string(&log_path)?;
-        content
-            .lines()
-            .filter(|l| !l.is_empty())
-            .filter_map(|line| serde_json::from_str::<LogEntry>(line).ok())
-            .collect()
+        let mut parsed = Vec::new();
+        for line in content.lines().filter(|l| !l.is_empty()) {
+            let entry: LogEntry = serde_json::from_str(line)
+                .map_err(|e| anyhow::anyhow!("corrupt audit log line: {}", e))?;
+            // Verify previous_hash chain
+            if let Some(prev) = parsed.last() {
+                let expected = muccheai_crypto::sha3_512(
+                    &serde_json::to_vec(prev).unwrap_or_default()
+                ).to_vec();
+                if entry.previous_hash.as_ref() != Some(&expected) {
+                    return Err(anyhow::anyhow!("audit log chain broken at sequence {}", entry.sequence));
+                }
+            }
+            parsed.push(entry);
+        }
+        parsed
     } else {
         Vec::new()
     };

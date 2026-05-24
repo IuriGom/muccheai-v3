@@ -853,6 +853,7 @@ async fn run_web_server(bind: &str) {
         http_client,
         mcp_tools_cache: Mutex::new(mcp_tools_cache),
         tool_config: Mutex::new(ToolConfig::load()),
+        csrf_tokens: Mutex::new(std::collections::HashMap::new()),
     });
 
     println!("🔑 API Key: **** (masked for security)");

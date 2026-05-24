@@ -159,7 +159,7 @@ impl LlmSandbox {
     }
 
     /// Start the sandbox with basic resource limits and isolation.
-    pub fn start(&mut self) -> std::result::Result<(), MuccheError> {
+    pub fn start(&mut self) -> Result<()> {
         let temp_dir = tempfile::tempdir()
             .map_err(|e| MuccheError::SandboxError(format!("Failed to create temp dir: {}", e)))?;
 
@@ -176,17 +176,9 @@ impl LlmSandbox {
         {
             use std::os::unix::process::CommandExt;
             let memory_limit_mb = self.config.memory_limit_mb;
-            // SAFETY: `pre_exec` runs in the child process between `fork()` and `exec()`.
-            // This closure only invokes syscalls (`setrlimit`, `prctl`) that do not allocate
-            // memory, use locks, or touch non-async-signal-safe state. It is safe because:
-            // 1. The child process has only one thread (the forking thread).
-            // 2. No Rust heap allocations or panics occur in this closure.
-            // 3. All called functions are safe in practice on Linux between fork and exec.
-            // NOTE: macOS does not allow setting RLIMIT_AS/RLIMIT_DATA to finite values
-            // from user space, so memory limits are best-effort and may be skipped.
+            // SAFETY: post-fork pre-exec, no alloc, no locks.
             let _ = unsafe {
                 cmd.pre_exec(move || {
-                    // Memory limit (Linux only — macOS rejects finite RLIMIT_AS values)
                     #[cfg(target_os = "linux")]
                     {
                         let mem_bytes = memory_limit_mb
@@ -244,7 +236,7 @@ impl LlmSandbox {
     }
 
     /// Stop the sandbox (destroy VM, no snapshot)
-    pub fn stop(&mut self) -> std::result::Result<(), MuccheError> {
+    pub fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.sandbox_process.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -579,7 +571,7 @@ impl LlmSandbox {
 
     /// Verify model weights integrity by reading file and computing SHA3-512.
     /// Uses constant-time comparison to prevent timing side-channels.
-    pub fn verify_weights(&self, expected_hash: &[u8; 64]) -> std::result::Result<bool, MuccheError> {
+    pub fn verify_weights(&self, expected_hash: &[u8; 64]) -> Result<bool> {
         let path = self.weights_path.as_ref()
             .ok_or_else(|| MuccheError::SandboxError("Weights path not set".to_string()))?;
         let data = std::fs::read(path)
@@ -589,7 +581,7 @@ impl LlmSandbox {
     }
 
     /// Load model weights, storing path and expected hash
-    pub fn load_weights(&mut self, path: &str, expected_hash: [u8; 64]) -> std::result::Result<(), MuccheError> {
+    pub fn load_weights(&mut self, path: &str, expected_hash: [u8; 64]) -> Result<()> {
         self.weights_path = Some(path.to_string());
         self.model_hash = expected_hash;
         Ok(())
