@@ -28,6 +28,7 @@ mod memory_store;
 mod notify;
 mod structured_memory;
 mod style;
+mod users;
 mod web;
 
 use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCommands, PolicyCommands, VaultCommands};
@@ -832,11 +833,17 @@ async fn run_web_server(bind: &str) {
         std::process::exit(1);
     }
 
+    let mut user_db = crate::users::UserDb::load_or_create()
+        .expect("failed to load user database");
+    user_db.migrate_api_key(&config.api_key)
+        .expect("failed to migrate api key to admin user");
+
     let state = Arc::new(web::AppState {
         sandbox: Mutex::new(sandbox),
         policy: Mutex::new(policy),
         gateway: Mutex::new(gateway),
-        auth_token: zeroize::Zeroizing::new(config.api_key.clone()),
+        users: Mutex::new(user_db),
+        sessions: Mutex::new(std::collections::HashMap::new()),
         csrf_secret,
         rate_limiter: Mutex::new(std::collections::HashMap::new()),
         revoked_tokens: Mutex::new(crate::web::load_revoked_tokens()),
@@ -851,8 +858,7 @@ async fn run_web_server(bind: &str) {
         csrf_tokens: Mutex::new(std::collections::HashMap::new()),
     });
 
-    println!("🔑 API Key: **** (masked for security)");
-    println!("   Paste your API key into the web UI when prompted.");
+    println!("🔐 Login with username 'admin' and your existing API key.");
 
     // Open browser automatically after server binds
     let url = if bind.starts_with("http://") || bind.starts_with("https://") {

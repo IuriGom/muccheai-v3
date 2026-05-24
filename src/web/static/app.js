@@ -16,9 +16,9 @@ const TRANSLATIONS = {
         navChat: 'Chat', navMemory: 'Memory', navPersonas: 'Personas', navMcp: 'MCP', navStatus: 'Status', navSettings: 'Settings',
         welcomeTitle: 'Your local, secure AI agent',
         welcomeSubtitle: 'Select a persona and start chatting.',
-        apiKeyTitle: '🔐 Enter API Key',
-        apiKeyDesc: 'The API key was printed in your terminal when you ran `muccheai web`.',
-        apiKeyPlaceholder: 'Paste your API key here',
+        apiKeyTitle: '🔐 Login',
+        apiKeyDesc: 'Enter your username and password.',
+        apiKeyPlaceholder: 'Password',
         connect: 'Connect',
         nameAiTitle: '👋 Welcome',
         nameAiDesc: "I'm your AI assistant. What would you like to call me?",
@@ -46,9 +46,9 @@ const TRANSLATIONS = {
         navChat: 'Chat', navMemory: 'Memória', navPersonas: 'Personas', navMcp: 'MCP', navStatus: 'Status', navSettings: 'Configurações',
         welcomeTitle: 'Seu agente de IA local e seguro',
         welcomeSubtitle: 'Selecione uma persona e comece a conversar.',
-        apiKeyTitle: '🔐 Digite a Chave API',
-        apiKeyDesc: 'A chave API foi impressa no seu terminal quando você executou `muccheai web`.',
-        apiKeyPlaceholder: 'Cole sua chave API aqui',
+        apiKeyTitle: '🔐 Login',
+        apiKeyDesc: 'Digite seu nome de usuário e senha.',
+        apiKeyPlaceholder: 'Senha',
         connect: 'Conectar',
         nameAiTitle: '👋 Bem-vindo',
         nameAiDesc: 'Sou seu assistente de IA. Como você gostaria de me chamar?',
@@ -76,9 +76,9 @@ const TRANSLATIONS = {
         navChat: '聊天', navMemory: '记忆', navPersonas: '角色', navMcp: 'MCP', navStatus: '状态', navSettings: '设置',
         welcomeTitle: '您的本地安全AI助手',
         welcomeSubtitle: '选择一个角色并开始聊天。',
-        apiKeyTitle: '🔐 输入API密钥',
-        apiKeyDesc: '运行 `muccheai web` 时，API密钥已打印在您的终端中。',
-        apiKeyPlaceholder: '在此粘贴您的API密钥',
+        apiKeyTitle: '🔐 登录',
+        apiKeyDesc: '输入您的用户名和密码。',
+        apiKeyPlaceholder: '密码',
         connect: '连接',
         nameAiTitle: '👋 欢迎',
         nameAiDesc: '我是您的AI助手。您想怎么称呼我？',
@@ -149,14 +149,14 @@ function applyTranslations() {
     const input = document.getElementById('input');
     if (input) input.placeholder = t('typingPlaceholder');
     // Update API key modal
-    const apiKeyTitle = document.querySelector('#apiKeyModal h3');
-    if (apiKeyTitle) apiKeyTitle.textContent = t('apiKeyTitle');
-    const apiKeyDesc = document.querySelector('#apiKeyModal p');
-    if (apiKeyDesc) apiKeyDesc.innerHTML = t('apiKeyDesc');
-    const apiKeyInput = document.getElementById('apiKeyInput');
-    if (apiKeyInput) apiKeyInput.placeholder = t('apiKeyPlaceholder');
-    const apiKeyBtn = document.querySelector('#apiKeyModal .btn-primary');
-    if (apiKeyBtn) apiKeyBtn.textContent = t('connect');
+    const loginTitle = document.querySelector('#apiKeyModal h3');
+    if (loginTitle) loginTitle.textContent = t('apiKeyTitle');
+    const loginDesc = document.querySelector('#apiKeyModal p');
+    if (loginDesc) loginDesc.innerHTML = t('apiKeyDesc');
+    const passInput = document.getElementById('loginPass');
+    if (passInput) passInput.placeholder = t('apiKeyPlaceholder');
+    const loginBtn = document.querySelector('#apiKeyModal .btn-primary');
+    if (loginBtn) loginBtn.textContent = t('connect');
     // Update name AI modal
     const nameAiTitle = document.querySelector('#nameAiModal h3');
     if (nameAiTitle) nameAiTitle.textContent = t('nameAiTitle');
@@ -198,8 +198,8 @@ async function logout() {
     } catch (e) {
         console.warn('Logout request failed:', e);
     }
-    localStorage.removeItem('muccheai_api_key');
-    localStorage.removeItem('muccheai_api_key_time');
+    localStorage.removeItem('muccheai_session_token');
+    localStorage.removeItem('muccheai_session_time');
     localStorage.removeItem('muccheai_csrf_token');
     localStorage.removeItem('muccheai_name');
     localStorage.removeItem('muccheai_sessions');
@@ -223,15 +223,15 @@ function toggleDarkMode() {
 const API_KEY_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function getAuthHeaders() {
-    const key = (localStorage.getItem('muccheai_api_key') || '').trim();
-    const storedTime = parseInt(localStorage.getItem('muccheai_api_key_time') || '0', 10);
-    if (key && storedTime && Date.now() - storedTime > API_KEY_MAX_AGE_MS) {
-        localStorage.removeItem('muccheai_api_key');
-        localStorage.removeItem('muccheai_api_key_time');
+    const token = (localStorage.getItem('muccheai_session_token') || '').trim();
+    const storedTime = parseInt(localStorage.getItem('muccheai_session_time') || '0', 10);
+    if (token && storedTime && Date.now() - storedTime > API_KEY_MAX_AGE_MS) {
+        localStorage.removeItem('muccheai_session_token');
+        localStorage.removeItem('muccheai_session_time');
         localStorage.removeItem('muccheai_csrf_token');
         return {};
     }
-    return key ? { 'Authorization': 'Bearer ' + key } : {};
+    return token ? { 'Authorization': 'Bearer ' + token } : {};
 }
 
 let apiKeyModalSubmitting = false;
@@ -285,57 +285,54 @@ function showRenameAiModal() {
 }
 
 async function submitApiKey() {
-    const keyInput = document.getElementById('apiKeyInput');
+    const userInput = document.getElementById('loginUser');
+    const passInput = document.getElementById('loginPass');
     const btn = document.querySelector('#apiKeyModal button');
-    const key = keyInput.value.trim();
-    if (!key || apiKeyModalSubmitting) return;
+    const username = (userInput?.value || '').trim();
+    const password = (passInput?.value || '').trim();
+    if (!username || !password || apiKeyModalSubmitting) return;
 
     apiKeyModalSubmitting = true;
     lastApiKeySubmitTime = Date.now();
     if (btn) { btn.textContent = t('connecting'); btn.disabled = true; }
 
-    localStorage.setItem('muccheai_api_key', key);
-    localStorage.setItem('muccheai_api_key_time', Date.now().toString());
-
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch('/api/status', {
-            headers: { 'Authorization': 'Bearer ' + key },
-            signal: controller.signal
+        const loginRes = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
         });
-        clearTimeout(timeoutId);
+        if (!loginRes.ok) {
+            alert('Invalid username or password.');
+            if (passInput) passInput.value = '';
+            apiKeyModalSubmitting = false;
+            if (btn) { btn.textContent = 'Connect'; btn.disabled = false; }
+            return;
+        }
+        const loginData = await loginRes.json();
+        localStorage.setItem('muccheai_session_token', loginData.token);
+        localStorage.setItem('muccheai_session_time', Date.now().toString());
 
-        if (res.ok) {
-            // Fetch and store CSRF token for mutating requests
-            try {
-                const csrfRes = await fetch('/api/csrf', {
-                    headers: { 'Authorization': 'Bearer ' + key }
-                });
-                if (csrfRes.ok) {
-                    const csrfData = await csrfRes.json();
-                    if (csrfData.csrf_token) {
-                        localStorage.setItem('muccheai_csrf_token', csrfData.csrf_token);
-                    }
+        // Fetch and store CSRF token for mutating requests
+        try {
+            const csrfRes = await fetch('/api/csrf', {
+                headers: { 'Authorization': 'Bearer ' + loginData.token }
+            });
+            if (csrfRes.ok) {
+                const csrfData = await csrfRes.json();
+                if (csrfData.csrf_token) {
+                    localStorage.setItem('muccheai_csrf_token', csrfData.csrf_token);
                 }
-            } catch (e) { /* ignore csrf fetch errors */ }
-            hideApiKeyModal();
-            pollStatus();
-            if (!localStorage.getItem('muccheai_name')) {
-                setTimeout(() => showNameAiModal(), 300);
             }
-        } else {
-            const body = await res.text().catch(() => '');
-            console.error('Auth failed:', res.status, body);
-            alert('Invalid key. Check the terminal where you ran `muccheai web`.');
-            localStorage.removeItem('muccheai_api_key');
-            localStorage.removeItem('muccheai_api_key_time');
+        } catch (e) { /* ignore csrf fetch errors */ }
+        hideApiKeyModal();
+        pollStatus();
+        if (!localStorage.getItem('muccheai_name')) {
+            setTimeout(() => showNameAiModal(), 300);
         }
     } catch (e) {
         console.error('Connection error:', e);
         alert('Could not connect. Is the server running?');
-        localStorage.removeItem('muccheai_api_key');
-        localStorage.removeItem('muccheai_api_key_time');
     } finally {
         apiKeyModalSubmitting = false;
         if (btn) { btn.textContent = 'Connect'; btn.disabled = false; }
@@ -394,7 +391,7 @@ function handleRoute() {
 window.addEventListener('popstate', handleRoute);
 document.addEventListener('DOMContentLoaded', handleRoute);
 document.addEventListener('DOMContentLoaded', () => {
-    const hasKey = !!(localStorage.getItem('muccheai_api_key') || '').trim();
+    const hasKey = !!(localStorage.getItem('muccheai_session_token') || '').trim();
     const hasName = !!localStorage.getItem('muccheai_name');
     if (!hasKey) {
         showApiKeyModal();
@@ -763,7 +760,7 @@ async function sendMessage() {
     const text = input.value.trim();
     if (!text) return;
 
-    const token = (localStorage.getItem('muccheai_api_key') || '').trim();
+    const token = (localStorage.getItem('muccheai_session_token') || '').trim();
     if (!token) {
         showAuthError();
         return;

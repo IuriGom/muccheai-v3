@@ -86,11 +86,18 @@ pub fn save_revoked_tokens(tokens: &std::collections::HashSet<String>) {
     }
 }
 
+pub struct Session {
+    pub owner_hash: String,
+    pub username: String,
+    pub created_at: Instant,
+}
+
 pub struct AppState {
     pub sandbox: Mutex<LlmSandbox>,
     pub policy: Mutex<PolicyEngine>,
     pub gateway: Mutex<ToolGateway>,
-    pub auth_token: zeroize::Zeroizing<String>,
+    pub users: Mutex<crate::users::UserDb>,
+    pub sessions: Mutex<HashMap<String, Session>>,
     pub csrf_secret: [u8; 32],
     pub rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
     pub revoked_tokens: Mutex<std::collections::HashSet<String>>,
@@ -386,32 +393,15 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("web/static/index.html"))
 }
 
-/// Extract the Bearer token from headers and return a SHA3-512 hash of it.
-/// Used for session ownership verification without storing the raw token.
-fn hash_auth_token(headers: &HeaderMap) -> Option<String> {
-    let auth = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
-    let bytes = auth.as_bytes();
-    let prefix = b"Bearer ";
-    // Always perform work up to the same maximum length regardless of
-    // whether the prefix is present or the token is valid.
-    let has_prefix = if bytes.len() >= prefix.len() {
-        muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
-    } else {
-        let mut padded = [0u8; 7];
-        padded[..bytes.len()].copy_from_slice(bytes);
-        muccheai_crypto::constant_time::eq(&padded, prefix)
-    };
-    let token = if bytes.len() > prefix.len() {
-        &auth[prefix.len()..]
-    } else {
-        ""
-    };
-    let hash = hex::encode(muccheai_crypto::sha3_512(token.as_bytes()));
-    if has_prefix {
-        Some(hash)
-    } else {
-        None
-    }
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let auth = headers.get("authorization")?.to_str().ok()?;
+    auth.strip_prefix("Bearer ").map(|s| s.to_string())
+}
+
+async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    let token = extract_bearer_token(headers)?;
+    let sessions = state.sessions.lock().await;
+    sessions.get(&token).map(|s| s.owner_hash.clone())
 }
 
 /// Bearer token authentication middleware + CSRF protection for mutating requests
@@ -425,33 +415,15 @@ async fn auth_middleware(
     let uri = request.uri().clone();
     tracing::trace!("auth_middleware: {} {}", method, uri);
 
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok());
-
-    // Always execute the full token validation path, even when the header is
-    // missing, so the timing profile is identical for "no header", "wrong
-    // prefix", "empty token", and "wrong token".
-    let bytes = auth_header.map(|h| h.as_bytes()).unwrap_or(b"");
-    let prefix = b"Bearer ";
-    let has_prefix = if bytes.len() >= prefix.len() {
-        muccheai_crypto::constant_time::eq(&bytes[..prefix.len()], prefix)
+    let token = extract_bearer_token(&headers);
+    let session_valid = if let Some(ref t) = token {
+        let sessions = state.sessions.lock().await;
+        sessions.get(t).is_some()
     } else {
-        let mut padded = [0u8; 7];
-        let len = bytes.len().min(7);
-        padded[..len].copy_from_slice(&bytes[..len]);
-        muccheai_crypto::constant_time::eq(&padded, prefix)
+        false
     };
-    let token = if bytes.len() > prefix.len() {
-        std::str::from_utf8(&bytes[prefix.len()..]).unwrap_or("")
-    } else {
-        ""
-    };
-    let token_nonempty = !token.is_empty();
-    let token_correct = muccheai_crypto::constant_time::eq(token.as_bytes(), state.auth_token.as_bytes());
-    let token_valid = has_prefix & token_nonempty & token_correct;
 
-    if !token_valid {
+    if !session_valid {
         let client_ip = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
@@ -470,8 +442,7 @@ async fn auth_middleware(
             .into_response();
     }
 
-    // Check revocation list.
-    let owner_hash = hash_auth_token(&headers).unwrap_or_default();
+    let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
     if !owner_hash.is_empty() {
         let revoked = state.revoked_tokens.lock().await;
         if revoked.contains(&owner_hash) {
@@ -491,9 +462,8 @@ async fn auth_middleware(
         let csrf_header = headers
             .get("x-csrf-token")
             .and_then(|v| v.to_str().ok());
-        let owner = hash_auth_token(&headers).unwrap_or_default();
         let store = state.csrf_tokens.lock().await;
-        let expected = store.get(&owner);
+        let expected = store.get(&owner_hash);
         let csrf_valid = match (csrf_header, expected) {
             (Some(h), Some(exp)) => muccheai_crypto::constant_time::eq(h.as_bytes(), exp.as_bytes()),
             _ => false,
@@ -838,7 +808,7 @@ async fn chat(
     // Inject approved structured memories into the system prompt.
     // Values are sanitized to prevent prompt injection via crafted memory content.
     {
-        let owner = hash_auth_token(&headers).unwrap_or_default();
+        let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all_by_owner(&owner);
         if !memories.is_empty() {
@@ -923,7 +893,7 @@ async fn chat(
     if !proposals.is_empty() {
         let sm = state.structured_memory.lock().await;
         for (mem_type, key, value) in proposals {
-            let owner = hash_auth_token(&headers).unwrap_or_default();
+            let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
             let entry = MemoryEntry {
                 memory_type: mem_type,
                 key: key.clone(),
@@ -1007,7 +977,7 @@ async fn chat(
             id: session_id.clone(),
             title,
             created_at: timestamp,
-            owner_hash: hash_auth_token(&headers).unwrap_or_default(),
+            owner_hash: get_session_owner(&state, &headers).await.unwrap_or_default(),
             session_secret: secret.clone(),
             messages: vec![
                 ChatMessage {
@@ -1951,7 +1921,7 @@ async fn list_memories(
     headers: HeaderMap,
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<MemoryListResponse>, StatusCode> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let all = {
         let sm = state.structured_memory.lock().await;
         sm.list_all_by_owner(&owner)
@@ -1994,7 +1964,7 @@ async fn store_memory(
     }
     let sm = state.structured_memory.lock().await;
     let value = json_value_to_memory_value(req.value);
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let entry = MemoryEntry {
         memory_type: req.memory_type,
         key: req.key,
@@ -2017,7 +1987,7 @@ async fn delete_memory(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     match sm.delete_by_owner(&key, &owner) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
@@ -2035,7 +2005,7 @@ async fn list_memory_queue(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<MemoryQueueResponse>, StatusCode> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     let pending = sm.list_pending_by_owner(&owner);
     Ok(Json(MemoryQueueResponse {
@@ -2064,7 +2034,7 @@ async fn propose_memory(
     }
     let sm = state.structured_memory.lock().await;
     let value = json_value_to_memory_value(req.value);
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let entry = MemoryEntry {
         memory_type: req.memory_type,
         key: req.key,
@@ -2088,7 +2058,7 @@ async fn approve_memory_proposal(
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::trace!("approve_memory_proposal: id={}", id);
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     match sm.approve_by_owner(&id, &owner) {
         Ok(true) => Ok(StatusCode::OK),
@@ -2104,7 +2074,7 @@ async fn reject_memory_proposal(
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::trace!("reject_memory_proposal: id={}", id);
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     match sm.reject_by_owner(&id, &owner) {
         Ok(true) => Ok(StatusCode::OK),
@@ -2283,12 +2253,58 @@ async fn test_connection(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LoginResponse {
+    token: String,
+    username: String,
+}
+
+/// Authenticate and receive a session token.
+async fn login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, StatusCode> {
+    let user = {
+        let users = state.users.lock().await;
+        users.verify(&req.username, &req.password).cloned()
+    };
+    match user {
+        Some(u) => {
+            let mut buf = [0u8; 32];
+            ring::rand::SystemRandom::new()
+                .fill(&mut buf)
+                .expect("CSPRNG failure");
+            let token = hex::encode(buf);
+            let mut sessions = state.sessions.lock().await;
+            sessions.insert(
+                token.clone(),
+                Session {
+                    owner_hash: u.owner_hash.clone(),
+                    username: u.username.clone(),
+                    created_at: Instant::now(),
+                },
+            );
+            Ok(Json(LoginResponse {
+                token,
+                username: u.username.clone(),
+            }))
+        }
+        None => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
 /// Get CSRF token for web form protection.
 async fn get_csrf(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<serde_json::Value> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return Json(serde_json::json!({ "error": "Not authenticated" }));
     }
@@ -2345,7 +2361,7 @@ async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> StatusCode {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let mut sessions = state.chat_sessions.lock().await;
     sessions.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
     drop(sessions);
@@ -2399,7 +2415,7 @@ async fn list_chat_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ChatSessionsResponse> {
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sessions = state.chat_sessions.lock().await;
     let filtered: Vec<ChatSessionSummary> = sessions
         .iter()
@@ -2871,6 +2887,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/web/static");
 
+    // Public API routes (no auth required)
+    let public_api = Router::new()
+        .route("/login", post(login))
+        .with_state(state.clone());
+
     // API routes — auth + rate limit required
     let api = Router::new()
         .route("/status", get(status))
@@ -2919,6 +2940,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "Not Found"}))) 
         })
         .with_state(state.clone());
+
+    let api = public_api.merge(api);
 
     let mut router = Router::new()
         .route("/", get(index))

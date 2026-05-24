@@ -11,13 +11,14 @@
     <link rel="stylesheet" href="/style.css?v=9">
 </head>
 <body>
-    <!-- API Key Entry Modal -->
+    <!-- Login Modal -->
     <div id="apiKeyModal" class="api-key-modal" style="display:none;">
         <div class="api-key-modal-content">
-            <h3>🔐 Enter API Key</h3>
-            <p>The API key was printed in your terminal when you ran <code>muccheai web</code>.</p>
-            <form>
-                <input type="password" id="apiKeyInput" placeholder="Paste your API key here" autocomplete="off">
+            <h3 id="loginTitle">🔐 Login</h3>
+            <p id="loginDesc">Use your username and password.</p>
+            <form id="loginForm">
+                <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
+                <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
                 <button type="submit" class="btn btn-primary">Connect</button>
             </form>
         </div>
