@@ -1,13 +1,4 @@
 //! Cryptography module.
-//!
-//! Provides:
-//! - Ed25519 signatures (production-ready, actively used)
-//! - X25519 key agreement (for ephemeral key exchange)
-//! - SHA-3-512 hashing
-//! - Constant-time comparison utilities
-//!
-//! TODO: ML-KEM-768 and ML-DSA-44 are included as dependencies but not yet
-//! wired into the active signing / KEM paths.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

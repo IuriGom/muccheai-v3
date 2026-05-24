@@ -6,21 +6,21 @@ A security-focused local AI agent written in Rust. Designed with defense-in-dept
 
 MuccheAI is a personal AI assistant that runs locally on your machine. It chats with you, remembers facts and preferences across conversations, executes tools on your behalf, and enforces strict security policies so the AI cannot do anything you did not explicitly approve.
 
-## Key Features
+## Features
 
-- **Local-first** — Runs entirely on your machine. No data leaves unless you configure it to.
-- **Multiple LLM providers** — Supports Ollama (local), OpenAI, and Anthropic.
-- **Capability-based security** — Tool calls require cryptographically signed capability tokens (default-deny policy).
-- **User approval tiers** — Configurable friction from simple dialog to hardware-token approval.
-- **Forward-secure audit logging** — Security events are signed with an evolving key chain.
-- **Hybrid cryptography** — Ed25519 + X25519 keypairs; ML-KEM/ML-DSA structures staged for future integration.
-- **Shamir's Secret Sharing vault** — 3-of-5 threshold for local secret storage.
-- **MCP server integration** — Connect to external Model Context Protocol servers with JSON Schema validation and policy enforcement.
-- **Multi-layer memory** — Session transcripts, episodic daily notes, semantic long-term memory, and hybrid SQLite/FTS5 search.
+- Local-first — runs entirely on your machine.
+- Multiple LLM providers — Ollama (local), OpenAI, Anthropic.
+- Capability-based security — tool calls require cryptographically signed capability tokens (default-deny policy).
+- User approval tiers — configurable friction from simple dialog to hardware-token approval.
+- Forward-secure audit logging — security events are signed with an evolving key chain.
+- Hybrid cryptography — Ed25519 + X25519 keypairs; ML-KEM/ML-DSA structures staged for future integration.
+- Shamir's Secret Sharing vault — 3-of-5 threshold for local secret storage.
+- MCP server integration — connect to external Model Context Protocol servers.
+- Multi-layer memory — session transcripts, episodic daily notes, semantic long-term memory, and hybrid SQLite/FTS5 search.
 
 ## Installation
 
-Requires Rust 1.80+. Tested on macOS — Linux and Windows support is planned (focus on Linux because I don't have a microslop machine).
+Requires Rust 1.80+. Tested on macOS.
 
 ```bash
 git clone https://github.com/IuriGom/muccheai-v3
@@ -42,8 +42,6 @@ Run the setup wizard on first launch:
 ```bash
 muccheai setup
 ```
-
-This configures your LLM provider, model, and security preferences.
 
 ### Chat from the terminal
 
@@ -67,24 +65,22 @@ Then open http://127.0.0.1:3000 in your browser.
 
 ## CLI Commands
 
-| Command | Description |
-|---------|-------------|
-| `muccheai setup` | First-run interactive setup wizard |
-| `muccheai chat` | Interactive chat REPL |
-| `muccheai run <prompt>` | Execute a single prompt |
-| `muccheai web` | Launch web control panel |
-| `muccheai status` | System status and health |
-| `muccheai doctor` | Run system health check |
-| `muccheai demo` | Run end-to-end security demonstration |
-| `muccheai audit` | Query the forward-secure audit log |
-| `muccheai policy list` | List active policy rules |
-| `muccheai policy add ...` | Add a new policy rule |
-| `muccheai vault create` | Create a Shamir vault |
-| `muccheai vault unlock` | Unlock the vault |
-| `muccheai persona list` | List AI personas |
-| `muccheai daemon start` | Start background daemon |
-| `muccheai daemon stop` | Stop background daemon |
-| `muccheai complete <shell>` | Generate shell completions |
+- `muccheai setup` — first-run interactive setup wizard
+- `muccheai chat` — interactive chat REPL
+- `muccheai run <prompt>` — execute a single prompt
+- `muccheai web` — launch web control panel
+- `muccheai status` — system status and health
+- `muccheai doctor` — run system health check
+- `muccheai demo` — run end-to-end security demonstration
+- `muccheai audit` — query the forward-secure audit log
+- `muccheai policy list` — list active policy rules
+- `muccheai policy add ...` — add a new policy rule
+- `muccheai vault create` — create a Shamir vault
+- `muccheai vault unlock` — unlock the vault
+- `muccheai persona list` — list AI personas
+- `muccheai daemon start` — start background daemon
+- `muccheai daemon stop` — stop background daemon
+- `muccheai complete <shell>` — generate shell completions
 
 ## Security Architecture
 
@@ -97,7 +93,7 @@ MuccheAI is designed around the principle that the LLM itself is untrusted. Ever
 5. Tool executes with schema-validated arguments
 6. Event is appended to the forward-secure audit log
 
-The security architecture aims to ensure that a compromised LLM cannot execute tools without passing policy checks and user approval. This is a continuous work in progress — see [Security Considerations](#security-considerations).
+The security architecture aims to ensure that a compromised LLM cannot execute tools without passing policy checks and user approval. This is a continuous work in progress.
 
 ### Policy Rules
 
@@ -110,12 +106,10 @@ You can add custom rules with `muccheai policy add`.
 
 ### Approval Tiers
 
-| Tier | Status | Friction |
-|------|--------|----------|
-| Standard | ✅ Implemented | Dialog with 3-second delay |
-| Secure | ✅ Implemented | Re-type summary, 5-second delay |
-| Hardware | 🚧 Planned | YubiKey or hardware token required |
-| Multi-Device | 🚧 Planned | M-of-N devices must approve |
+- **Standard** — dialog with 3-second delay
+- **Secure** — re-type summary, 5-second delay
+- **Hardware** — YubiKey or hardware token required (planned)
+- **Multi-Device** — M-of-N devices must approve (planned)
 
 ## Configuration
 
@@ -136,11 +130,9 @@ description = "A friendly, helpful general-purpose AI assistant"
 
 ### LLM Providers
 
-| Provider | Setup |
-|----------|-------|
-| Ollama | Install from [ollama.com](https://ollama.com), run `ollama serve` |
-| OpenAI | Set API key in `muccheai setup` |
-| Anthropic | Set API key in `muccheai setup` |
+- **Ollama** — install from [ollama.com](https://ollama.com), run `ollama serve`
+- **OpenAI** — set API key in `muccheai setup`
+- **Anthropic** — set API key in `muccheai setup`
 
 ## MCP Servers
 
@@ -159,17 +151,15 @@ MCP tool calls are validated against JSON Schema and evaluated by the policy eng
 
 The web control panel exposes a REST API at `http://127.0.0.1:3000`:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/chat` | POST | Send a message |
-| `/status` | GET | System status |
-| `/config` | GET | Current configuration |
-| `/memory` | GET/POST | List/store memories |
-| `/memory/queue` | GET | List approval queue |
-| `/personas` | GET | List personas |
-| `/agents` | GET/POST | List/save agents |
-| `/audit` | POST | Query audit log |
-| `/csrf` | GET | Get CSRF token |
+- `POST /chat` — send a message
+- `GET /status` — system status
+- `GET /config` — current configuration
+- `GET/POST /memory` — list/store memories
+- `GET /memory/queue` — list approval queue
+- `GET /personas` — list personas
+- `GET/POST /agents` — list/save agents
+- `POST /audit` — query audit log
+- `GET /csrf` — get CSRF token
 
 All API endpoints require Bearer token authentication. Mutating endpoints also require a CSRF token.
 
@@ -190,20 +180,18 @@ muccheai demo
 
 Contributions are welcome. Please open an issue or pull request.
 
-If you build something cool and want to be credited as a proper part of this project, open a pull request or issue.
-
-Security issues, bugs, and mistakes are welcome — this is a learning project. Please open an issue or submit a fix.
+Security issues, bugs, and mistakes are welcome — this is a learning project.
 
 ## Security Considerations
 
-This project implements defense-in-depth mechanisms but is **not formally verified** and does **not** provide "maximum assurance" or hardware isolation. Known limitations include:
+This project implements defense-in-depth mechanisms but is not formally verified and does not provide hardware isolation. Known limitations:
 
-- The LLM sandbox uses **process-level isolation** (rlimits), not VMs or containers.
+- The LLM sandbox uses process-level isolation (rlimits), not VMs or containers.
 - The machine encryption key is stored in `~/.muccheai/.machine_key` with filesystem permissions — not a hardware security module.
 - Build verification and warrant canary signatures use placeholder data until real maintainer keys are configured.
 - Some components use `unsafe` blocks for `pre_exec` resource limits (documented with safety comments).
 
-**Do not use this to protect high-value targets without additional hardening.**
+Do not use this to protect high-value targets without additional hardening.
 
 ## License
 

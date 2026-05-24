@@ -89,16 +89,6 @@ repository = "https://github.com/IuriGom/muccheai-v3"
 rust-version = "1.80"
 
 [workspace.dependencies]
-clap = { version = "4.5", features = ["derive", "cargo", "env"] }
-clap_complete = "4.5"
-tabled = "0.15"
-csv = "1.3"
-dirs = "5.0"
-libc = "0.2"
-dialoguer = "0.11"
-rustyline = "14"
-
-# Core
 muccheai-types = { path = "crates/muccheai-types" }
 muccheai-policy-engine = { path = "crates/muccheai-policy-engine" }
 muccheai-sandbox = { path = "crates/muccheai-sandbox" }
@@ -112,72 +102,46 @@ muccheai-vault = { path = "crates/muccheai-vault" }
 muccheai-memory = { path = "crates/muccheai-memory" }
 muccheai-mcp = { path = "crates/muccheai-mcp" }
 
-# Cryptography
-ring = { version = "0.17", default-features = false }
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-x25519-dalek = { version = "2.0", features = ["static_secrets", "getrandom"] }
-sha3 = "0.10"
-hmac = "0.12"
-rand = { version = "0.8", features = ["std_rng"] }
-zeroize = { version = "1.8", features = ["derive"] }
-subtle = "2.6"
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-toml = "0.8"
-
-# Async
-tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "io-util"] }
-
-# Error handling
-thiserror = "1.0"
 anyhow = "1.0"
-
-# Logging / Audit
-tracing = "0.1"
-
-# Time
+argon2 = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
-
-# Database
-rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
-
-# Testing
-proptest = "1.5"
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
+clap_complete = "4.5"
+console = "0.15"
 criterion = { version = "0.5", features = ["html_reports"] }
-
-# PQC
+csv = "1.3"
+dialoguer = "0.11"
+dirs = "5.0"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+flate2 = "1.0"
+hex = "0.4"
+hmac = "0.12"
+indicatif = "0.17"
+jsonschema = "0.18"
+libc = "0.2"
+proptest = "1.5"
 pqcrypto-dilithium = "0.5"
 pqcrypto-kyber = "0.8"
 pqcrypto-traits = "0.3"
-
-# HTTP Client
+rand = { version = "0.8", features = ["std_rng"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
-
-# URL parsing (workspace shared)
-url = "2.5"
-
-# Memory
-uuid = { version = "1.0", features = ["v4"] }
-flate2 = "1.0"
-
-# JSON Schema
-jsonschema = "0.18"
-
-# URL encoding
-urlencoding = "2.1"
-
-# Password hashing / KDF
-argon2 = "0.5"
-
-# Terminal / UX
-console = "0.15"
-indicatif = "0.17"
-tempfile = "3.0"
-
-hex = "0.4"
-
-# System info
+ring = { version = "0.17", default-features = false }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+rustyline = "14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha3 = "0.10"
+subtle = "2.6"
 sysinfo = "0.30"
+tabled = "0.15"
+tempfile = "3.0"
+thiserror = "1.0"
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "io-util"] }
+toml = "0.8"
+tracing = "0.1"
+url = "2.5"
+urlencoding = "2.1"
+uuid = { version = "1.0", features = ["v4"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets", "getrandom"] }
+zeroize = { version = "1.8", features = ["derive"] }
 rustc_version = "0.4"

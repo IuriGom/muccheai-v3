@@ -19,4 +19,3 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Security.framework bindings for Keychain/Secure Enclave

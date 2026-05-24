@@ -1,9 +1,4 @@
-//! MuccheAI MCP (Model Context Protocol) integration
-//!
-//! Provides:
-//! - `McpClient`: Connect to external MCP servers via stdio, SSE, or HTTP
-//! - `McpServer`: Expose MuccheAI tools as an MCP server
-//! - JSON-RPC 2.0 transport and types
+//! MCP (Model Context Protocol) integration.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

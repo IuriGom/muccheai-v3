@@ -1,6 +1,4 @@
-//! MuccheAI Web Control Panel
-//!
-//! Chat interface + system dashboard served via Axum.
+//! MuccheAI web control panel.
 
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
@@ -18,10 +16,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
 
-/// Derive a per-user CSRF token from the server secret and the user's
-/// authentication token hash.  This ensures every user gets a unique
-/// unpredictable CSRF token; compromising one user's token does not help
-/// forge requests for another user.
 fn derive_csrf_token(secret: &[u8; 32], auth_hash: &str) -> String {
     use sha3::{Digest, Sha3_256};
     let mut hasher = Sha3_256::new();
@@ -36,7 +30,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use muccheai_build_verify::{MultiCiVerification, BuildIntegrityError};
 use muccheai_policy_engine::PolicyEngine;
 use muccheai_policy_engine::rules::RuleAction;
-use muccheai_recovery::Incident;use muccheai_sandbox::LlmSandbox;
+use muccheai_sandbox::LlmSandbox;
 use muccheai_tool_gateway::{ToolGateway, config::{ToolConfig, McpServerConfig}};
 use muccheai_mcp::{McpClient, McpTransport};
 use muccheai_mcp::types::McpTool;
@@ -49,79 +43,45 @@ use crate::structured_memory::StructuredMemoryManager;
 
 use crate::config::{AgentConfig, MuccheConfig, Persona};
 
-/// A chat message within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    /// Role: "user" or "ai"
     pub role: String,
-    /// Message content
     pub content: String,
-    /// Unix timestamp in milliseconds
     pub timestamp: u64,
 }
 
-/// A chat session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSession {
-    /// Unique session ID
     pub id: String,
-    /// Display title (first user message or generated)
     pub title: String,
-    /// Creation timestamp
     pub created_at: u64,
-    /// Messages in this session
     pub messages: Vec<ChatMessage>,
-    /// Hash of the auth token that created this session (ownership verification)
     #[serde(skip)]
     pub owner_hash: String,
 }
 
-/// Shared application state
 pub struct AppState {
-    /// LLM sandbox
     pub sandbox: Mutex<LlmSandbox>,
-    /// Policy engine
     pub policy: Mutex<PolicyEngine>,
-    /// Tool gateway
     pub gateway: Mutex<ToolGateway>,
-    /// Bearer token for API authentication. Wrapped in Zeroizing so the
-    /// plaintext is cleared from RAM when the AppState is dropped.
     pub auth_token: zeroize::Zeroizing<String>,
-    /// Secret used to derive per-user CSRF tokens.  The token for a given
-    /// authenticated user is HMAC-SHA3-256(csrf_secret, auth_token_hash).
-    /// This prevents one user's CSRF token from working for another user.
     pub csrf_secret: [u8; 32],
-    /// Per-IP rate limiter: (last_request, count_in_window)
     pub rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
-    /// Revoked authentication token hashes.  Tokens added here on logout
-    /// are rejected by auth_middleware even if the bearer header is otherwise valid.
     pub revoked_tokens: Mutex<std::collections::HashSet<String>>,
-    /// Runtime configuration
     pub config: Mutex<MuccheConfig>,
-    /// In-memory chat sessions
     pub chat_sessions: Mutex<Vec<ChatSession>>,
-    /// Persistent memory engine (session transcripts + episodic + semantic)
     pub memory: Mutex<muccheai_memory::MemoryEngine>,
-    /// Structured memory with approval queue (facts, preferences, task history)
     pub structured_memory: Mutex<StructuredMemoryManager>,
-    /// Cached bootstrap context (SOUL.md only, loaded once at startup)
     pub bootstrap_context: String,
-    /// Shared HTTP client for connection pooling
     pub http_client: reqwest::Client,
-    /// Cached MCP tool descriptions from configured servers
     pub mcp_tools_cache: Mutex<Vec<CachedMcpTool>>,
-    /// Tool configuration (MCP servers, tool settings) — synchronized to prevent lost updates
     pub tool_config: Mutex<ToolConfig>,
 }
 
-/// A cached MCP tool with its originating server info
 #[derive(Clone)]
 pub struct CachedMcpTool {
-    /// Server name (from tools.toml)
     pub server_name: String,
-    /// Transport config for reconnection
     pub transport: McpTransport,
-    /// The tool definition
     pub tool: McpTool,
 }
 
@@ -184,37 +144,11 @@ pub struct RevokeResponse {
     pub revoked_count: u32,
 }
 
-/// Incident list response
-#[derive(Debug, Serialize)]
-pub struct IncidentsResponse {
-    pub incidents: Vec<Incident>,
-}
-
 /// Build verification response
 #[derive(Debug, Serialize)]
 pub struct BuildVerifyResponse {
     pub status: String,
     pub ci_systems: Vec<String>,
-}
-
-/// Delegation request
-#[derive(Debug, Deserialize)]
-pub struct DelegationRequest {
-    pub issuer_method: String,
-    pub issuer_identifier: String,
-    pub subject_method: String,
-    pub subject_identifier: String,
-    pub resource_ids: Vec<String>,
-    pub ttl_seconds: u64,
-}
-
-/// Delegation response
-#[derive(Debug, Serialize)]
-pub struct DelegationResponse {
-    pub delegation_id: String,
-    pub issuer: String,
-    pub subject: String,
-    pub verified: bool,
 }
 
 /// Configuration response (secrets redacted)
@@ -846,7 +780,7 @@ async fn chat(
     system_prompt.push_str("\n\n--- Diary Instruction ---\n");
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
-    // Inject approved structured memories into the system prompt so the LLM can reference them.
+    // Inject approved structured memories into the system prompt.
     // Values are sanitized to prevent prompt injection via crafted memory content.
     {
         let sm = state.structured_memory.lock().await;
@@ -876,7 +810,7 @@ async fn chat(
         }
     }
 
-    // Inject available MCP tools into the system prompt so the LLM knows it can use them
+    // Inject available MCP tools into the system prompt.
     let mcp_tools = {
         let cache = state.mcp_tools_cache.lock().await;
         cache.clone()
@@ -885,7 +819,7 @@ async fn chat(
         system_prompt.push_str(&format_mcp_tools_for_prompt(&mcp_tools));
     }
 
-    system_prompt.push_str("\n\n--- CRITICAL: Memory Saving Protocol ---\n");
+    system_prompt.push_str("\n\n--- Memory Saving Protocol ---\n");
     system_prompt.push_str("Whenever you learn ANY personal information about the user (name, preferences, facts, important details), you MUST save it to memory. Do NOT just say you will remember it — you MUST output a memory tag.\n\n");
     system_prompt.push_str("Format: <memory type=\"TYPE\" key=\"KEY\">VALUE</memory>\n\n");
     system_prompt.push_str("RULES:\n");
@@ -935,13 +869,13 @@ async fn chat(
                 user_signature: vec![],
                 content_hash: vec![],
             };
-            if let Err(e) = sm.propose(entry, &format!("LLM suggested memory: {}", key)) {
+            if let Err(e) = sm.propose(entry, &format!("Suggested memory: {}", key)) {
                 tracing::warn!("Failed to propose memory: {}", e);
             }
         }
     }
 
-    // Process any MCP tool calls in the LLM response
+    // Process any MCP tool calls in the response
     if !mcp_tools.is_empty() && text.contains("<mcp_tool") {
         let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &mcp_tools, &state).await;
         if !tool_results.is_empty() {
@@ -1027,7 +961,7 @@ async fn chat(
     // NOTE: Chat context is RAM-only (stored in chat_sessions above).
     // We do NOT persist raw conversation transcripts to the memory engine.
     // Only structured memories (Facts, Preferences, TaskHistory) go to disk.
-    // If the LLM suggests a memory addition, it goes through the approval queue.
+    // Memory suggestions go through the approval queue.
 
     Json(ChatResponse {
         response: text.trim().to_string(),
@@ -1298,11 +1232,7 @@ async fn call_provider(
     }
 }
 
-/// Extract memory proposals from LLM text and return cleaned text + proposals.
-/// Format: <memory type="Fact" key="KEY">VALUE</memory>
-/// Sanitize a memory value before injecting it into the LLM system prompt.
-/// Prevents prompt injection by stripping angle brackets (tags), newlines,
-/// and backticks that could be used to inject instructions or break formatting.
+/// Sanitize a memory value before injecting it into the system prompt.
 fn sanitize_memory_for_prompt(value: &MemoryValue) -> String {
     let raw = match value {
         MemoryValue::ShortString(s) => s.clone(),
@@ -1577,8 +1507,7 @@ fn validate_mcp_schema(schema: &serde_json::Value, args: &serde_json::Value) -> 
         })
 }
 
-/// Parse and execute MCP tool calls embedded in LLM response text.
-/// Returns the cleaned text (with tags removed) and a list of tool results.
+/// Parse and execute MCP tool calls embedded in response text.
 ///
 async fn process_mcp_tool_calls(
     text: &str,
@@ -1877,12 +1806,6 @@ async fn revoke(
     })
 }
 
-/// List incidents.
-/// TODO: Implement real anomaly detection based on actual audit logs.
-async fn incidents() -> Json<IncidentsResponse> {
-    Json(IncidentsResponse { incidents: vec![] })
-}
-
 /// Build verification status
 async fn build_verify() -> Json<BuildVerifyResponse> {
     // Use the actual git commit hash from build.rs, or a placeholder if
@@ -1921,15 +1844,6 @@ async fn build_verify() -> Json<BuildVerifyResponse> {
             ci_systems: vec![],
         }),
     }
-}
-
-/// Create cross-agent delegation.
-/// TODO: Implement real cryptographic delegation (DID-based signatures).
-async fn delegations() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"error": "Delegation is not yet implemented"})),
-    )
 }
 
 /// Return current configuration with secrets redacted
@@ -2727,8 +2641,6 @@ async fn test_mcp_server(
 }
 
 /// Start the web server.
-/// If MUCCHEAI_TLS_CERT and MUCCHEAI_TLS_KEY environment variables are set,
-/// serves over HTTPS; otherwise serves over HTTP with a security warning.
 pub async fn serve(addr: &str, state: Arc<AppState>) {
     let addr = match addr.parse::<SocketAddr>() {
         Ok(a) => a,
@@ -2837,7 +2749,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/config", get(get_config))
         .route("/audit", post(audit_log))
         .route("/revoke", post(revoke))
-        .route("/incidents", get(incidents))
         .route("/build-verify", get(build_verify))
         .route("/memory", get(list_memories))
         .route("/memory", post(store_memory))

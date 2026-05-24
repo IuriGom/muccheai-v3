@@ -1,10 +1,4 @@
-//! MuccheAI v3.0 — Shared Core Types
-//!
-//! This crate contains ALL shared data structures across the MuccheAI system.
-//! It is the contract between Policy Engine, Sandbox, Crypto, UI, and Tools.
-//!
-//! Security invariant: All types are immutable after construction.
-//! No type contains raw pointers. All byte arrays are fixed-size where possible.
+//! Shared core types.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

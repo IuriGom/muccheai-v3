@@ -1,6 +1,4 @@
-//! MuccheAI v3.0 — Intrusion Recovery + Self-Healing
-//!
-//! Automated detection, containment, and recovery from compromise.
+//! Intrusion recovery.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

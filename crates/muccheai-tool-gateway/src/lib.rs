@@ -1,7 +1,4 @@
-//! MuccheAI v3.0 — Tool Gateway (Tool Execution)
-//!
-//! Expanded tool adapters with capability validation, JSON Schema validation,
-//! dynamic tool registration, and MCP client integration.
+//! Tool gateway.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

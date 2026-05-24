@@ -1,6 +1,4 @@
-//! MuccheAI v3.0 — Supply Chain + Build Verification
-//!
-//! Cryptographically verifiable build pipeline with real CI integration.
+//! Build verification.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -115,13 +113,13 @@ impl BuildAttestation {
     /// arbitrary requirement for 3 systems is removed — self-builds without
     /// full CI infrastructure should not fail verification.
     pub fn verify(&self) -> std::result::Result<(), BuildIntegrityError> {
-        // If CI systems are configured, verify hash consistency across them.
-        if !self.ci_systems.is_empty() {
-            let first_hash = &self.ci_systems[0].signed_hash;
-            for ci in &self.ci_systems[1..] {
-                if &ci.signed_hash != first_hash {
-                    return Err(BuildIntegrityError::Mismatch);
-                }
+        if self.ci_systems.is_empty() {
+            return Err(BuildIntegrityError::Mismatch);
+        }
+        let first_hash = &self.ci_systems[0].signed_hash;
+        for ci in &self.ci_systems[1..] {
+            if &ci.signed_hash != first_hash {
+                return Err(BuildIntegrityError::Mismatch);
             }
         }
 

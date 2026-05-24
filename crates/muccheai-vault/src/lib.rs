@@ -1,11 +1,4 @@
-//! Secret Vault — Shamir secret sharing + AES-256-GCM encryption.
-//!
-//! Currently implemented:
-//! - Split a master secret into N shares with threshold K reconstruction.
-//! - Each share is encrypted with a per-share key derived from a password.
-//! - Reconstruction verifies share integrity via HMAC before combining.
-//!
-//! TODO: Hardware-backed storage (Secure Enclave, YubiKey) is not yet wired.
+//! Secret vault.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

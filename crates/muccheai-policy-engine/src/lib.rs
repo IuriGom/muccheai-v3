@@ -1,14 +1,4 @@
-//! MuccheAI v3.0 — Policy Engine Kernel
-//!
-//! The root of trust. Formally verified capability validation and policy enforcement.
-//!
-//! Design principles:
-//! - Zero dynamic allocation in hot path
-//! - Constant-time signature verification
-//! - Deterministic rule evaluation
-//! - Immutable audit log append
-//!
-//! THIS LAYER CANNOT BE BYPASSED BY THE LLM. EVER.
+//! Policy engine.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

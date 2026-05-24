@@ -1,6 +1,4 @@
-//! MuccheAI v3.0 — Trusted UI + Human Factors
-//!
-//! 4-tier approval system with duress detection and multi-device support.
+//! Trusted UI.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -1,10 +1,4 @@
-//! MuccheAI v3.0 — Memory System
-//!
-//! Implements the OpenClaw filesystem architecture:
-//! - Session transcripts (JSONL)
-//! - Daily episodic memory (Markdown)
-//! - Semantic long-term memory (MEMORY.md)
-//! - Hybrid search index (SQLite + FTS5 + vector)
+//! Memory system.
 
 #![warn(unsafe_code)]
 #![warn(missing_docs)]

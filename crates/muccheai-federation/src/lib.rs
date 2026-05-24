@@ -1,6 +1,4 @@
-//! MuccheAI v3.0 — Inter-Agent Federation + MPC
-//!
-//! Secure communication between MuccheAI instances with capability attenuation.
+//! Inter-agent federation.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

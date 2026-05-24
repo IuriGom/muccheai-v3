@@ -1,10 +1,4 @@
-//! MuccheAI v3.0 — LLM Sandbox
-//!
-//! Process-level sandbox with resource limits.
-//! This is NOT hardware-isolated (no VM/container). It uses process isolation,
-//! rlimits, and stdio redirection. For true isolation, run inside a VM or container.
-//! - Ollama integration for real LLM inference
-//! - Dual verification with semantic similarity
+//! LLM sandbox.
 
 #![warn(unsafe_code)]
 #![warn(missing_docs)]
