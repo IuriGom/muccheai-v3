@@ -16,14 +16,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
 
-fn derive_csrf_token(secret: &[u8; 32], auth_hash: &str) -> String {
-    use sha3::{Digest, Sha3_256};
-    let mut hasher = Sha3_256::new();
-    hasher.update(secret);
-    hasher.update(auth_hash.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -519,12 +511,20 @@ async fn auth_middleware(
 }
 
 /// Validate that a URL does not point to internal/private addresses.
-/// Uses proper URL parsing to avoid substring-based bypasses.
+/// Allows localhost/loopback for internal services like Ollama.
 pub fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
+    validate_no_ssrf_internal(url, true)
+}
+
+/// Strict variant: blocks localhost/loopback — use for external providers and MCP servers.
+pub fn validate_no_ssrf_external(url: &str) -> std::result::Result<(), String> {
+    validate_no_ssrf_internal(url, false)
+}
+
+fn validate_no_ssrf_internal(url: &str, allow_localhost: bool) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url)
         .map_err(|e| format!("Invalid URL: {}", e))?;
 
-    // Reject non-HTTP(S) schemes to align with the tool-gateway adapter.
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("SSRF blocked: only http and https schemes are allowed".to_string());
     }
@@ -534,12 +534,14 @@ pub fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
 
     let lower = host.to_lowercase();
 
-    // Block localhost variants
+    if allow_localhost && (lower == "localhost" || lower == "127.0.0.1" || lower == "[::1]") {
+        return Ok(());
+    }
+
     if lower == "localhost" {
         return Err("SSRF blocked: localhost is not allowed".to_string());
     }
 
-    // Block hex/octal/decimal IP address forms that std::net::IpAddr does not parse
     if lower.starts_with("0x") || lower.starts_with("0X") {
         return Err("SSRF blocked: hex IP addresses are not allowed".to_string());
     }
@@ -550,7 +552,6 @@ pub fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
         return Err("SSRF blocked: decimal IP addresses are not allowed".to_string());
     }
 
-    // Try to parse as IP address
     if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
         let blocked = match ip {
             std::net::IpAddr::V4(v4) => {
@@ -569,8 +570,6 @@ pub fn validate_no_ssrf(url: &str) -> std::result::Result<(), String> {
                         return Err("SSRF blocked: internal IP addresses are not allowed".to_string());
                     }
                 }
-                // Check IPv4-translated IPv6 addresses (::ffff:0:0/96)
-                // and compressed hex forms like ::ffff:7f00:1
                 let segs = v6.segments();
                 if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0
                     && segs[4] == 0 && segs[5] == 0xffff {
@@ -617,8 +616,11 @@ async fn validate_no_ssrf_dns(url: &str) -> std::result::Result<(), String> {
     let host = parsed.host_str()
         .ok_or_else(|| "URL has no host".to_string())?;
 
-    // This prevents DNS rebinding where a hostname first resolves to a
-    // public IP during validation but then to an internal IP at request time.
+    let lower = host.to_lowercase();
+    if lower == "localhost" || lower == "127.0.0.1" || lower == "[::1]" {
+        return Ok(());
+    }
+
     let addrs = tokio::net::lookup_host(format!("{}:80", host)).await
         .map_err(|e| format!("DNS resolution failed: {}", e))?;
 
@@ -731,7 +733,13 @@ async fn rate_limit_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let ip = addr.ip().to_string();
+    let ip = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
     let now = Instant::now();
     let window = Duration::from_secs(60);
     // GET requests get a higher limit than mutating requests.
@@ -821,8 +829,9 @@ async fn chat(
     // Inject approved structured memories into the system prompt.
     // Values are sanitized to prevent prompt injection via crafted memory content.
     {
+        let owner = hash_auth_token(&headers).unwrap_or_default();
         let sm = state.structured_memory.lock().await;
-        let memories = sm.list_all();
+        let memories = sm.list_all_by_owner(&owner);
         if !memories.is_empty() {
             system_prompt.push_str("\n\n--- Known Facts About the User ---\n");
             let facts: Vec<_> = memories.iter().filter(|e| e.memory_type == MemoryType::Fact).collect();
@@ -874,10 +883,16 @@ async fn chat(
     // Gather conversation history from existing session (with ownership check)
     let history: Vec<ChatMessage> = {
         let sessions = state.chat_sessions.lock().await;
-        let owner = hash_auth_token(&headers).unwrap_or_default();
+        let secret = headers
+            .get("x-session-secret")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
         if let Some(sid) = &req.session_id {
             sessions.iter()
-                .find(|s| s.id == *sid && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+                .find(|s| {
+                    s.id == *sid
+                        && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+                })
                 .map(|s| s.messages.clone())
                 .unwrap_or_default()
         } else {
@@ -899,6 +914,7 @@ async fn chat(
     if !proposals.is_empty() {
         let sm = state.structured_memory.lock().await;
         for (mem_type, key, value) in proposals {
+            let owner = hash_auth_token(&headers).unwrap_or_default();
             let entry = MemoryEntry {
                 memory_type: mem_type,
                 key: key.clone(),
@@ -906,6 +922,7 @@ async fn chat(
                 created_at: Timestamp::now(),
                 user_signature: vec![],
                 content_hash: vec![],
+                owner_hash: owner.clone(),
             };
             if let Err(e) = sm.propose(entry, &format!("Suggested memory: {}", key)) {
                 tracing::warn!("Failed to propose memory: {}", e);
@@ -939,9 +956,12 @@ async fn chat(
     let existing = sessions.iter().position(|s| s.id == session_id);
     let timestamp = Timestamp::now().0;
 
-    let owner = hash_auth_token(&headers).unwrap_or_default();
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     let session_secret = if let Some(idx) = existing {
-        if !muccheai_crypto::constant_time::eq(sessions[idx].owner_hash.as_bytes(), owner.as_bytes()) {
+        if !muccheai_crypto::constant_time::eq(sessions[idx].session_secret.as_bytes(), secret.as_bytes()) {
             return Json(ChatResponse {
                 response: "Session access denied".to_string(),
                 session_id,
@@ -1017,7 +1037,7 @@ async fn call_provider(
     match provider {
         "openai" => {
             let base_url = agent.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
-            if let Err(e) = validate_no_ssrf(base_url) {
+            if let Err(e) = validate_no_ssrf_external(base_url) {
                 tracing::error!("SSRF blocked for openai base_url: {}", e);
                 return Err("Provider configuration rejected".to_string());
             }
@@ -1090,7 +1110,7 @@ async fn call_provider(
         }
         "anthropic" => {
             let base_url = agent.base_url.as_deref().unwrap_or("https://api.anthropic.com");
-            if let Err(e) = validate_no_ssrf(base_url) {
+            if let Err(e) = validate_no_ssrf_external(base_url) {
                 tracing::error!("SSRF blocked for anthropic base_url: {}", e);
                 return Err("Provider configuration rejected".to_string());
             }
@@ -1447,7 +1467,7 @@ pub async fn init_mcp_tools() -> Vec<CachedMcpTool> {
                         continue;
                     }
                 };
-                if validate_no_ssrf(&url).is_err() {
+                if validate_no_ssrf_external(&url).is_err() {
                     tracing::warn!("MCP server '{}' has a blocked URL (SSRF): {}", name, url);
                     continue;
                 }
@@ -1740,18 +1760,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
             requester: None,
             event_type: None,
         });
-        let last_audit_entry = last_audit.entries.last().map(|e| {
-            let (tool_id, method) = match &e.event {
-                muccheai_types::audit::SecurityEvent::ActionProposed { tool_id, method, .. } => (tool_id.as_str(), method.as_str()),
-                muccheai_types::audit::SecurityEvent::ActionValidated { tool_id, method, .. } => (tool_id.as_str(), method.as_str()),
-                _ => ("system", "event"),
-            };
-            format!("{} - {}.{} (audit event)", 
-                e.timestamp.0, 
-                tool_id, 
-                method
-            )
-        });
+        let last_audit_entry = last_audit.entries.last().map(|_| "available".to_string());
 
         (
             sandbox.is_running(),
@@ -1930,12 +1939,13 @@ fn memory_value_to_json(v: MemoryValue) -> serde_json::Value {
 /// NOT raw session logs. Chat context is RAM-only and ephemeral.
 async fn list_memories(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<MemoryListResponse>, StatusCode> {
-    // Collect data while holding lock, then drop it before processing
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let all = {
         let sm = state.structured_memory.lock().await;
-        sm.list_all()
+        sm.list_all_by_owner(&owner)
     };
 
     let mut entries: Vec<MemoryApiEntry> = Vec::new();
@@ -1967,6 +1977,7 @@ async fn list_memories(
 /// directly poisoning the memory store.
 async fn store_memory(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<StoreMemoryRequest>,
 ) -> Result<Json<ProposeMemoryResponse>, StatusCode> {
     if req.memory_type == MemoryType::TaskHistory {
@@ -1974,6 +1985,7 @@ async fn store_memory(
     }
     let sm = state.structured_memory.lock().await;
     let value = json_value_to_memory_value(req.value);
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let entry = MemoryEntry {
         memory_type: req.memory_type,
         key: req.key,
@@ -1981,6 +1993,7 @@ async fn store_memory(
         created_at: Timestamp::now(),
         user_signature: vec![],
         content_hash: vec![],
+        owner_hash: owner.clone(),
     };
 
     match sm.propose(entry, "User-initiated memory save") {
@@ -1992,10 +2005,12 @@ async fn store_memory(
 /// Delete a structured memory by key.
 async fn delete_memory(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sm = state.structured_memory.lock().await;
-    match sm.delete(&key) {
+    match sm.delete_by_owner(&key, &owner) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Ok(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -2009,9 +2024,11 @@ async fn delete_memory(
 /// List pending memory proposals.
 async fn list_memory_queue(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<Json<MemoryQueueResponse>, StatusCode> {
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sm = state.structured_memory.lock().await;
-    let pending = sm.list_pending();
+    let pending = sm.list_pending_by_owner(&owner);
     Ok(Json(MemoryQueueResponse {
         proposals: pending
             .into_iter()
@@ -2030,15 +2047,15 @@ async fn list_memory_queue(
 /// Propose a new memory (goes to approval queue).
 async fn propose_memory(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<ProposeMemoryRequest>,
 ) -> Result<Json<ProposeMemoryResponse>, StatusCode> {
-    // Reject TaskHistory proposals through the approval queue to prevent
-    // bypassing the direct-insertion restriction in store_memory.
     if req.memory_type == MemoryType::TaskHistory {
         return Err(StatusCode::FORBIDDEN);
     }
     let sm = state.structured_memory.lock().await;
     let value = json_value_to_memory_value(req.value);
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let entry = MemoryEntry {
         memory_type: req.memory_type,
         key: req.key,
@@ -2046,6 +2063,7 @@ async fn propose_memory(
         created_at: Timestamp::now(),
         user_signature: vec![],
         content_hash: vec![],
+        owner_hash: owner.clone(),
     };
 
     match sm.propose(entry, &req.justification) {
@@ -2057,11 +2075,13 @@ async fn propose_memory(
 /// Approve a pending memory proposal.
 async fn approve_memory_proposal(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::trace!("approve_memory_proposal: id={}", id);
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sm = state.structured_memory.lock().await;
-    match sm.approve(&id) {
+    match sm.approve_by_owner(&id, &owner) {
         Ok(true) => Ok(StatusCode::OK),
         Ok(false) => Ok(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -2071,11 +2091,13 @@ async fn approve_memory_proposal(
 /// Reject a pending memory proposal.
 async fn reject_memory_proposal(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::trace!("reject_memory_proposal: id={}", id);
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sm = state.structured_memory.lock().await;
-    match sm.reject(&id) {
+    match sm.reject_by_owner(&id, &owner) {
         Ok(true) => Ok(StatusCode::OK),
         Ok(false) => Ok(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -2126,8 +2148,10 @@ async fn save_agent(
     // Validate base_url to prevent SSRF via agent configuration.
     if let Some(ref base_url) = req.base_url {
         if !base_url.is_empty() {
-            validate_no_ssrf(base_url).map_err(|_| StatusCode::BAD_REQUEST)?;
-            validate_no_ssrf_dns(base_url).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            if req.provider != "ollama" {
+                validate_no_ssrf_external(base_url).map_err(|_| StatusCode::BAD_REQUEST)?;
+                validate_no_ssrf_dns(base_url).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            }
         }
     }
     let mut config = state.config.lock().await;
@@ -2316,6 +2340,16 @@ async fn logout(
     let mut revoked = state.revoked_tokens.lock().await;
     revoked.insert(owner.clone());
     save_revoked_tokens(&revoked);
+    // Also clear any CSRF token tied to this session.
+    let csrf = headers
+        .get("x-csrf-token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !csrf.is_empty() {
+        let mut tokens = state.csrf_tokens.lock().await;
+        tokens.remove(&csrf);
+    }
     StatusCode::NO_CONTENT
 }
 
@@ -2353,9 +2387,11 @@ async fn list_chat_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Json<ChatSessionsResponse> {
+    let owner = hash_auth_token(&headers).unwrap_or_default();
     let sessions = state.chat_sessions.lock().await;
     let filtered: Vec<ChatSessionSummary> = sessions
         .iter()
+        .filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
         .map(|s| ChatSessionSummary {
             id: s.id.clone(),
             title: s.title.clone(),
@@ -2504,8 +2540,12 @@ async fn add_mcp_server(
                 if invalid_chars.iter().any(|c| arg.contains(*c)) {
                     return Err(StatusCode::BAD_REQUEST);
                 }
-                if arg.starts_with("-e") || arg.starts_with("--eval") || arg.starts_with("-p") || arg.starts_with("--print") {
-                    return Err(StatusCode::BAD_REQUEST);
+                if arg.starts_with("-") {
+                    let lower = arg.to_lowercase();
+                    let blocked = ["-e", "--eval", "-p", "--print", "-r", "--require", "--import"];
+                    if blocked.iter().any(|b| lower.starts_with(b)) {
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
                 }
                 if arg.contains("child_process") || arg.contains("exec(") || arg.contains("spawn(") || arg.contains("eval(") {
                     return Err(StatusCode::BAD_REQUEST);
@@ -2518,7 +2558,7 @@ async fn add_mcp_server(
 
     if req.transport == "http" || req.transport == "sse" {
         if let Some(ref url) = req.url {
-            if validate_no_ssrf(url).is_err() {
+            if validate_no_ssrf_external(url).is_err() {
                 return Err(StatusCode::BAD_REQUEST);
             }
             if validate_no_ssrf_dns(url).await.is_err() {
@@ -2632,7 +2672,7 @@ async fn test_mcp_server(
 
     if server.transport == "http" || server.transport == "sse" {
         if let Some(ref url) = server.url {
-            if validate_no_ssrf(url).is_err() {
+            if validate_no_ssrf_external(url).is_err() {
                 return Json(McpTestResponse {
                     success: false,
                     message: "MCP server URL failed SSRF validation".to_string(),

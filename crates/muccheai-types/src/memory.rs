@@ -37,6 +37,9 @@ pub struct MemoryEntry {
     pub user_signature: Vec<u8>,
     /// SHA-3-512 hash of entry content
     pub content_hash: Vec<u8>,
+    /// Owner hash for multi-user isolation
+    #[serde(default)]
+    pub owner_hash: String,
 }
 
 impl MemoryEntry {

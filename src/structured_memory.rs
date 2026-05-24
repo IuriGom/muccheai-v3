@@ -156,17 +156,24 @@ impl StructuredMemoryManager {
 
     /// Approve a pending proposal and persist the memory with computed hash.
     pub fn approve(&self, id: &str) -> Result<bool> {
+        self.approve_by_owner(id, "")
+    }
+
+    /// Approve only if the proposal belongs to the given owner (or is legacy).
+    pub fn approve_by_owner(&self, id: &str, owner: &str) -> Result<bool> {
         let lock_path = self.queue_path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path)?;
         let mut proposals = self.read_queue()?;
         let mut found = false;
         for p in &mut proposals {
             if p.id == id && p.status == ProposalStatus::Pending {
+                if !p.entry.owner_hash.is_empty() && p.entry.owner_hash != owner {
+                    return Ok(false);
+                }
                 p.status = ProposalStatus::Approved;
                 p.resolved_at = Some(Timestamp::now());
                 found = true;
 
-                // Persist with computed content hash
                 let mut entry = p.entry.clone();
                 entry.content_hash = entry.compute_hash();
                 self.store.store(&entry)?;
@@ -181,12 +188,20 @@ impl StructuredMemoryManager {
 
     /// Reject a pending proposal.
     pub fn reject(&self, id: &str) -> Result<bool> {
+        self.reject_by_owner(id, "")
+    }
+
+    /// Reject only if the proposal belongs to the given owner (or is legacy).
+    pub fn reject_by_owner(&self, id: &str, owner: &str) -> Result<bool> {
         let lock_path = self.queue_path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path)?;
         let mut proposals = self.read_queue()?;
         let mut found = false;
         for p in &mut proposals {
             if p.id == id && p.status == ProposalStatus::Pending {
+                if !p.entry.owner_hash.is_empty() && p.entry.owner_hash != owner {
+                    return Ok(false);
+                }
                 p.status = ProposalStatus::Rejected;
                 p.resolved_at = Some(Timestamp::now());
                 found = true;
@@ -205,6 +220,18 @@ impl StructuredMemoryManager {
             .unwrap_or_default()
             .into_iter()
             .filter(|p| p.status == ProposalStatus::Pending)
+            .collect()
+    }
+
+    /// List pending proposals for the given owner.
+    pub fn list_pending_by_owner(&self, owner: &str) -> Vec<QueuedProposal> {
+        self.read_queue()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| {
+                p.status == ProposalStatus::Pending
+                    && (p.entry.owner_hash.is_empty() || p.entry.owner_hash == owner)
+            })
             .collect()
     }
 
@@ -231,6 +258,16 @@ impl StructuredMemoryManager {
         self.store.list()
     }
 
+    /// List memories visible to the given owner.
+    /// Legacy entries (empty owner_hash) are visible to all.
+    pub fn list_all_by_owner(&self, owner: &str) -> Vec<MemoryEntry> {
+        self.store
+            .list()
+            .into_iter()
+            .filter(|e| e.owner_hash.is_empty() || e.owner_hash == owner)
+            .collect()
+    }
+
     /// Get a memory by key.
     pub fn get(&self, key: &str) -> Option<MemoryEntry> {
         self.store.get(key)
@@ -239,6 +276,11 @@ impl StructuredMemoryManager {
     /// Delete a memory by key.
     pub fn delete(&self, key: &str) -> Result<bool> {
         self.store.delete(key)
+    }
+
+    /// Delete a memory by key only if it belongs to the given owner.
+    pub fn delete_by_owner(&self, key: &str, owner: &str) -> Result<bool> {
+        self.store.delete_by_owner(key, owner)
     }
 
     // ------------------------------------------------------------------
@@ -261,8 +303,9 @@ impl StructuredMemoryManager {
             key: format!("task-{}", Timestamp::now().0),
             value: MemoryValue::JsonObject(metadata),
             created_at: Timestamp::now(),
-            user_signature: vec![], // Auto-logged, no per-entry signature
-            content_hash: vec![],   // Computed below
+            user_signature: vec![],
+            content_hash: vec![],
+            owner_hash: String::new(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)?;
@@ -282,6 +325,7 @@ impl StructuredMemoryManager {
             created_at: Timestamp::now(),
             user_signature: vec![],
             content_hash: vec![],
+            owner_hash: String::new(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -299,6 +343,7 @@ impl StructuredMemoryManager {
             created_at: Timestamp::now(),
             user_signature: vec![],
             content_hash: vec![],
+            owner_hash: String::new(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -793,6 +838,7 @@ mod tests {
             created_at: Timestamp::now(),
             user_signature: vec![],
             content_hash: vec![],
+            owner_hash: String::new(),
         };
 
         let id = mgr.propose(entry, "User mentioned their birthday").unwrap();

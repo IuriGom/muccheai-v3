@@ -675,6 +675,7 @@ fn run_demo() {
         created_at: Timestamp::now(),
         user_signature: vec![0u8; 64],
         content_hash: vec![0u8; 64],
+        owner_hash: String::new(),
     };
     println!("  ✓ Fact stored: {} = {:?}", fact.key, fact.value);
     println!("  ✓ Merkle tree: integrity verifiable");

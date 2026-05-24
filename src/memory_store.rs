@@ -228,11 +228,20 @@ impl MemoryStore {
 
     /// Remove all entries with the given key and rewrite the file atomically.
     pub fn delete(&self, key: &str) -> Result<bool> {
+        self.delete_by_owner(key, "")
+    }
+
+    /// Remove entries matching key and owner. Empty owner matches all (legacy compat).
+    pub fn delete_by_owner(&self, key: &str, owner: &str) -> Result<bool> {
         let lock_path = self.path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path)?;
         let mut entries = self.read_entries()?;
         let original_len = entries.len();
-        entries.retain(|e| e.key != key);
+        if owner.is_empty() {
+            entries.retain(|e| e.key != key);
+        } else {
+            entries.retain(|e| e.key != key || e.owner_hash != owner);
+        }
 
         if entries.len() == original_len {
             return Ok(false);
