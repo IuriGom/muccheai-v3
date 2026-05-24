@@ -297,8 +297,7 @@ pub mod file_lock {
         }
     }
 
-    /// SAFETY: `flock` is a valid POSIX syscall. The fd is guaranteed to be
-    /// valid because it comes from an owned `File` that outlives this call.
+    // SAFETY: valid fd from owned File; flock is a POSIX syscall.
     #[inline]
     fn flock_raw(fd: std::os::unix::io::RawFd, op: i32) -> i32 {
         unsafe { libc::flock(fd, op) }

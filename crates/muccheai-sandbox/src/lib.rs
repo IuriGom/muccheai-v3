@@ -113,6 +113,9 @@ pub enum InferenceError {
     InvalidModelOutput(String),
 }
 
+/// Shorthand for inference operations.
+pub type InferenceResult<T> = std::result::Result<T, InferenceError>;
+
 /// Ollama generate request payload
 #[derive(Debug, serde::Serialize)]
 struct OllamaRequest {
@@ -278,7 +281,7 @@ impl LlmSandbox {
     pub fn inference(
         &self,
         prompt: &ValidatedPrompt,
-    ) -> std::result::Result<StructuredSuggestion, InferenceError> {
+    ) -> InferenceResult<StructuredSuggestion> {
         if !self.is_running() {
             return Err(InferenceError::ModelNotLoaded);
         }
@@ -301,8 +304,7 @@ impl LlmSandbox {
             version: "1.0".to_string(),
             payload,
         };
-        enforced.validate()
-            .map_err(InferenceError::SchemaViolation)?;
+        enforced.validate()?;
 
         Ok(output_a)
     }
@@ -312,7 +314,7 @@ impl LlmSandbox {
         &self,
         prompt: &ValidatedPrompt,
         seed: u64,
-    ) -> std::result::Result<StructuredSuggestion, InferenceError> {
+    ) -> InferenceResult<StructuredSuggestion> {
         let start = std::time::Instant::now();
 
         // Try Ollama first, fail if unavailable
@@ -354,7 +356,7 @@ impl LlmSandbox {
     fn build_safe_prompt(
         &self,
         prompt: &ValidatedPrompt,
-    ) -> std::result::Result<String, InferenceError> {
+    ) -> InferenceResult<String> {
         let user_text = &prompt.text;
 
         // Reject known prompt-injection patterns.
@@ -413,7 +415,7 @@ impl LlmSandbox {
         &self,
         prompt: &ValidatedPrompt,
         seed: u64,
-    ) -> std::result::Result<String, InferenceError> {
+    ) -> InferenceResult<String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(5))
@@ -471,7 +473,7 @@ impl LlmSandbox {
         &self,
         prompt: &ValidatedPrompt,
         seed: u64,
-    ) -> std::result::Result<String, InferenceError> {
+    ) -> InferenceResult<String> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(5))

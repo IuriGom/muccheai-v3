@@ -30,14 +30,15 @@ pub struct SchemaEnforcedOutput {
 
 impl SchemaEnforcedOutput {
     /// Validate that payload conforms to schema
-    pub fn validate(&self) -> std::result::Result<(), String> {
+    pub fn validate(&self) -> crate::InferenceResult<()> {
         match self.schema {
             OutputSchema::ActionProposal => {
-                // Must have tool_id, method, params
                 let required = ["tool_id", "method", "params"];
                 for key in &required {
                     if !self.payload.get(key).is_some() {
-                        return Err(format!("Missing required field: {}", key));
+                        return Err(crate::InferenceError::SchemaViolation(
+                            format!("Missing required field: {}", key)
+                        ));
                     }
                 }
                 Ok(())
@@ -46,20 +47,26 @@ impl SchemaEnforcedOutput {
                 let required = ["memory_type", "key", "value"];
                 for key in &required {
                     if !self.payload.get(key).is_some() {
-                        return Err(format!("Missing required field: {}", key));
+                        return Err(crate::InferenceError::SchemaViolation(
+                            format!("Missing required field: {}", key)
+                        ));
                     }
                 }
                 Ok(())
             }
             OutputSchema::Clarification => {
                 if !self.payload.get("question").is_some() {
-                    return Err("Missing question field".to_string());
+                    return Err(crate::InferenceError::SchemaViolation(
+                        "Missing question field".to_string()
+                    ));
                 }
                 Ok(())
             }
             OutputSchema::FinalAnswer => {
                 if !self.payload.get("answer").is_some() {
-                    return Err("Missing answer field".to_string());
+                    return Err(crate::InferenceError::SchemaViolation(
+                        "Missing answer field".to_string()
+                    ));
                 }
                 Ok(())
             }

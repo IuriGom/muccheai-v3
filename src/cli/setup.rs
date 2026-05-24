@@ -1,7 +1,6 @@
 //! Interactive setup wizard for first-run configuration.
 //!
-//! A beautiful, user-friendly onboarding flow inspired by modern CLI tools.
-//! Auto-launches on first run if no configuration is detected.
+//! Auto-launches when no config is detected.
 
 use crate::config::MuccheConfig;
 use crate::style::Theme;

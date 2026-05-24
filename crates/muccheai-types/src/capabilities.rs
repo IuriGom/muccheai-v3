@@ -1,9 +1,4 @@
-//! Capability-based security types for MuccheAI
-//!
-//! Implements the object-capability (OCap) model:
-//! - Unforgeable tokens (Ed25519/ML-DSA signed)
-//! - Least privilege (maximal specificity)
-//! - No ambient authority
+//! Capability-based security types.
 
 use serde::{Deserialize, Serialize};
 

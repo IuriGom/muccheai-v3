@@ -1,13 +1,7 @@
 //! Structured memory manager with approval queue.
 //!
-//! Implements the spec §7 memory architecture:
-//! - Facts: immutable, user-approved, cryptographically signed
-//! - Preferences: key-value, typed, max 1KB, user-approved
-//! - TaskHistory: structured action logs, append-only, auto-logged
-//! - Context: RAM-only, never persisted here
-//!
-//! All writes to Facts/Preferences go through an approval queue.
-//! TaskHistory is auto-logged for approved tool executions.
+//! Facts and Preferences require user approval before persistence.
+//! TaskHistory is append-only and auto-logged.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -70,8 +64,7 @@ mod file_lock {
         }
     }
 
-    /// SAFETY: `flock` is a valid POSIX syscall. The fd is guaranteed to be
-    /// valid because it comes from an owned `File` that outlives this call.
+    // fd is owned and valid for the lifetime of this call.
     #[inline]
     fn flock_raw(fd: std::os::unix::io::RawFd, op: i32) -> i32 {
         unsafe { libc::flock(fd, op) }

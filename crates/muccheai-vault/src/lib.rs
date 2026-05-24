@@ -33,6 +33,9 @@ pub enum VaultError {
     InvalidParameters(String),
 }
 
+/// Shorthand for fallible vault operations.
+pub type Result<T> = std::result::Result<T, VaultError>;
+
 impl From<VaultError> for MuccheError {
     fn from(err: VaultError) -> Self {
         MuccheError::VaultError(err.to_string())
@@ -119,7 +122,7 @@ impl EphemeralToken {
 
 /// AES-256-GCM encrypt plaintext with the given key.
 /// Returns nonce || ciphertext || tag.
-fn aes_256_gcm_encrypt(key: &[u8; 32], plaintext: &[u8]) -> std::result::Result<Vec<u8>, VaultError> {
+fn aes_256_gcm_encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
 
@@ -140,7 +143,7 @@ fn aes_256_gcm_encrypt(key: &[u8; 32], plaintext: &[u8]) -> std::result::Result<
 }
 
 /// AES-256-GCM decrypt ciphertext (nonce || ciphertext || tag) with the given key.
-fn aes_256_gcm_decrypt(key: &[u8; 32], ciphertext: &[u8]) -> std::result::Result<Vec<u8>, VaultError> {
+fn aes_256_gcm_decrypt(key: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.len() < NONCE_LEN + 16 {
         return Err(VaultError::Crypto("Ciphertext too short".to_string()));
     }
@@ -199,7 +202,7 @@ impl Drop for SecretVault {
 /// Secret vault operations.
 impl SecretVault {
     /// Create a new vault with a master secret.
-    pub fn new(master_secret: &[u8; 32], threshold: u8) -> std::result::Result<Self, VaultError> {
+    pub fn new(master_secret: &[u8; 32], threshold: u8) -> Result<Self> {
         if threshold == 0 {
             return Err(VaultError::InvalidParameters(
                 "threshold must be > 0".to_string(),
@@ -252,7 +255,7 @@ impl SecretVault {
     pub fn reconstruct(
         &self,
         shares: &[shamir::Share],
-    ) -> std::result::Result<Vec<u8>, VaultError> {
+    ) -> Result<Vec<u8>> {
         shamir::reconstruct_secret(shares, self.threshold as usize).map_err(VaultError::from)
     }
 
@@ -267,7 +270,7 @@ impl SecretVault {
         &mut self,
         tool_id: &str,
         approval_proof: &[u8],
-    ) -> std::result::Result<EphemeralToken, VaultError> {
+    ) -> Result<EphemeralToken> {
         // Verify approval proof is a valid HMAC over tool_id using vault_key.
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &self.vault_key);
         let expected = ring::hmac::sign(&key, tool_id.as_bytes());
@@ -310,7 +313,7 @@ impl SecretVault {
     pub fn rotate_secret(
         &mut self,
         shares: &[shamir::Share],
-    ) -> std::result::Result<(), VaultError> {
+    ) -> Result<()> {
         let reconstructed = self.reconstruct(shares)?;
 
         // Verify reconstructed master matches current encrypted master.

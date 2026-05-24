@@ -92,7 +92,7 @@ impl CrossAgentDelegation {
         parent: &CapabilityToken,
         restrictions: &RestrictionSet,
         issuer_keypair: &HybridKeypair,
-    ) -> std::result::Result<Self, MuccheError> {
+    ) -> Result<Self> {
         // Verify child resources are a subset of parent resources
         for child_res in &restrictions.resource_ids {
             if !parent.covers_resource(child_res) {
@@ -156,7 +156,7 @@ impl CrossAgentDelegation {
     }
 
     /// Verify delegation proof using hybrid signature verification
-    pub fn verify(&self) -> std::result::Result<(), MuccheError> {
+    pub fn verify(&self) -> Result<()> {
         // Check temporal validity
         let now = Timestamp::now();
         if now < self.not_before || now >= self.not_after {

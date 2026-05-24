@@ -106,13 +106,16 @@ pub enum BuildIntegrityError {
     SbomError(String),
 }
 
+/// Shorthand for fallible build-verify operations.
+pub type Result<T> = std::result::Result<T, BuildIntegrityError>;
+
 impl BuildAttestation {
     /// Verify build attestation.
     ///
     /// CI hash consistency is checked when CI systems are present, but the
     /// arbitrary requirement for 3 systems is removed — self-builds without
     /// full CI infrastructure should not fail verification.
-    pub fn verify(&self) -> std::result::Result<(), BuildIntegrityError> {
+    pub fn verify(&self) -> Result<()> {
         if self.ci_systems.is_empty() {
             return Err(BuildIntegrityError::Mismatch);
         }
@@ -130,7 +133,7 @@ impl BuildAttestation {
     /// Verify warrant canary signatures.
     /// Placeholder canaries (0 signatures) are accepted with a warning —
     /// real deployments must configure actual maintainer keys.
-    fn verify_canary(&self) -> std::result::Result<(), BuildIntegrityError> {
+    fn verify_canary(&self) -> Result<()> {
         if self.canary.signatures.is_empty() {
             tracing::warn!("Warrant canary has no signatures — placeholder data accepted");
             return Ok(());
@@ -153,7 +156,7 @@ impl BuildAttestation {
     }
 
     /// Generate SBOM (Software Bill of Materials) from Cargo.lock
-    pub fn generate_sbom(&self) -> std::result::Result<Vec<u8>, BuildIntegrityError> {
+    pub fn generate_sbom(&self) -> Result<Vec<u8>> {
         let cargo_lock = std::fs::read_to_string("Cargo.lock")
             .map_err(|e| BuildIntegrityError::SbomError(format!("Cannot read Cargo.lock: {}", e)))?;
 
@@ -194,7 +197,7 @@ pub fn check_github_status(
     owner: &str,
     repo: &str,
     sha: &str,
-) -> std::result::Result<CiStatus, BuildIntegrityError> {
+) -> Result<CiStatus> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/commits/{}/status",
         owner, repo, sha
@@ -241,7 +244,7 @@ pub fn check_github_check_runs(
     owner: &str,
     repo: &str,
     sha: &str,
-) -> std::result::Result<Vec<(String, CiStatus)>, BuildIntegrityError> {
+) -> Result<Vec<(String, CiStatus)>> {
     let url = format!(
         "https://api.github.com/repos/{}/{}/commits/{}/check-runs",
         owner, repo, sha
@@ -300,7 +303,7 @@ pub fn check_github_check_runs(
 pub fn check_gitlab_status(
     _project: &str,
     _sha: &str,
-) -> std::result::Result<CiStatus, BuildIntegrityError> {
+) -> Result<CiStatus> {
     // Placeholder: GitLab API integration would use personal access token
     // and query /api/v4/projects/:id/pipelines?sha=:sha
     tracing::info!("GitLab CI check not yet implemented — returning Unknown");
@@ -327,7 +330,7 @@ pub fn check_warrant_canary(canary: &WarrantCanary) -> CiStatus {
 }
 
 /// Verify reproducible build by computing SHA3-512 of the binary
-pub fn verify_reproducible_build(binary_path: &str) -> std::result::Result<[u8; 64], BuildIntegrityError> {
+pub fn verify_reproducible_build(binary_path: &str) -> Result<[u8; 64]> {
     let bytes = std::fs::read(binary_path)
         .map_err(|e| BuildIntegrityError::InvalidResponse(e.to_string()))?;
     Ok(sha3_512(&bytes))
@@ -365,7 +368,7 @@ impl MultiCiVerification {
     /// perform cryptographic attestation — `signed_hash` and `signature` are
     /// not verified.  Do not rely on this for high-assurance supply-chain
     /// security without adding maintainer key verification.
-    pub fn verify_build(&self) -> std::result::Result<BuildAttestation, BuildIntegrityError> {
+    pub fn verify_build(&self) -> Result<BuildAttestation> {
         let mut ci_statuses = Vec::new();
 
         if let Some((owner, repo)) = &self.github_repo {
@@ -435,7 +438,7 @@ impl MultiCiVerification {
 }
 
 /// Cargo vet integration
-pub fn cargo_vet_audit() -> std::result::Result<(), BuildIntegrityError> {
+pub fn cargo_vet_audit() -> Result<()> {
     let output = std::process::Command::new("cargo")
         .args(["vet"])
         .output()

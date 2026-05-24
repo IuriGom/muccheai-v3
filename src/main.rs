@@ -1,12 +1,6 @@
-//! MuccheAI v3.0 — Maximum Assurance Secure AI Agent
+//! MuccheAI v3 entry point.
 //!
-//! Main entry point. Demonstrates end-to-end security architecture:
-//! 1. User prompt
-//! 2. LLM suggestion (in isolated sandbox)
-//! 3. Policy validation
-//! 4. User approval (tiered)
-//! 5. Tool execution (capability-based)
-//! 6. Audit logging (forward-secure)
+//! Boots the web server or runs a CLI command.
 
 use clap::Parser;
 use ring::rand::SecureRandom;

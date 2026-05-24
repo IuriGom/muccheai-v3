@@ -203,7 +203,7 @@ impl ToolGateway {
             *counts.entry(token_id.clone()).or_insert(0) += 1;
         }
 
-        let exec_result = (|| -> std::result::Result<ToolResult, MuccheError> {
+        let exec_result = (|| -> Result<ToolResult> {
             if let Some(adapter) = self.static_adapters.get(tool_id) {
                 let method_def = adapter
                     .methods

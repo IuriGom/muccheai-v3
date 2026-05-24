@@ -21,8 +21,11 @@ pub enum ContainmentError {
     SerializationError(String),
 }
 
+/// Shorthand for fallible containment operations.
+pub type Result<T> = std::result::Result<T, ContainmentError>;
+
 /// Network containment using platform firewall.
-pub fn block_all_egress() -> std::result::Result<(), ContainmentError> {
+pub fn block_all_egress() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let anchor_rules = "block drop out all\n";
@@ -71,7 +74,7 @@ pub fn block_all_egress() -> std::result::Result<(), ContainmentError> {
 }
 
 /// Sandbox termination
-pub fn terminate_sandbox(sandbox: &mut LlmSandbox) -> std::result::Result<(), ContainmentError> {
+pub fn terminate_sandbox(sandbox: &mut LlmSandbox) -> Result<()> {
     sandbox
         .stop()
         .map_err(|e| ContainmentError::TerminationError(e.to_string()))
@@ -79,7 +82,7 @@ pub fn terminate_sandbox(sandbox: &mut LlmSandbox) -> std::result::Result<(), Co
 
 /// Seal audit log with final Merkle root and signature.
 /// Destroys the current signing key to prevent further appends.
-pub fn seal_audit_log(logger: &mut crate::ForwardSecureLogger) -> std::result::Result<LogEntry, ContainmentError> {
+pub fn seal_audit_log(logger: &mut crate::ForwardSecureLogger) -> Result<LogEntry> {
     let entries = logger.entries();
     if entries.is_empty() {
         return Err(ContainmentError::SealError("No entries to seal".to_string()));

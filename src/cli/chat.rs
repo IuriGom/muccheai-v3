@@ -1,7 +1,4 @@
-//! Interactive chat REPL for MuccheAI.
-//!
-//! Conversational interface where every message routes through the full
-//! security pipeline: LLM Sandbox → Policy Engine → User Approval → Tool Execution.
+//! Interactive chat REPL.
 
 use crate::cli::{build_policy_engine, create_root_capability, estimate_risk, init_sandbox, json_to_proposal, map_risk_to_style, register_adapters};
 use crate::config::MuccheConfig;
