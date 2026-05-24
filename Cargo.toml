@@ -59,6 +59,7 @@ subtle = { workspace = true }
 jsonschema = { workspace = true }
 zeroize = { workspace = true }
 sha3 = { workspace = true }
+hmac = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

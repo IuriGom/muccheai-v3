@@ -91,17 +91,9 @@ fn save_audit_key(key: &ForwardSecureKey) -> anyhow::Result<()> {
 /// even if an attacker learns one key.
 fn evolve_key(current: &mut ForwardSecureKey) -> ForwardSecureKey {
     let mut nonce = [0u8; 32];
-    if ring::rand::SystemRandom::new().fill(&mut nonce).is_err() {
-        // Fallback: if RNG fails, use the current time as entropy.
-        // This is suboptimal but better than panicking.
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .to_le_bytes();
-        nonce[..16].copy_from_slice(&ts);
-        nonce[16..24].copy_from_slice(&(current.key_id).to_le_bytes());
-    }
+    ring::rand::SystemRandom::new()
+        .fill(&mut nonce)
+        .expect("CSPRNG failure");
     let mut hasher = sha3::Sha3_512::new();
     hasher.update(b"muccheai-audit-key-v1");
     hasher.update(&current.key);

@@ -40,14 +40,8 @@ use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCo
 
 #[tokio::main]
 async fn main() {
-    // Require a password for machine-key derivation.  Without this the
-    // 32-byte key file is the raw AES-256 key — anyone who can read the
-    // file (root, backups, etc.) owns all encrypted data.
     if std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
-        eprintln!("ERROR: MUCCHEAI_KEY_PASSWORD environment variable is not set.");
-        eprintln!("       Set it before starting MuccheAI to enable Argon2id key derivation.");
-        eprintln!("       Example: export MUCCHEAI_KEY_PASSWORD=$(openssl rand -base64 32)");
-        std::process::exit(1);
+        eprintln!("WARNING: MUCCHEAI_KEY_PASSWORD not set. Machine key is raw material — set a password for Argon2id derivation.");
     }
 
     // Hidden internal daemon mode — bypass clap so the child process doesn't
@@ -850,7 +844,7 @@ async fn run_web_server(bind: &str) {
         auth_token: zeroize::Zeroizing::new(config.api_key.clone()),
         csrf_secret,
         rate_limiter: Mutex::new(std::collections::HashMap::new()),
-        revoked_tokens: Mutex::new(std::collections::HashSet::new()),
+        revoked_tokens: Mutex::new(crate::web::load_revoked_tokens()),
         config: Mutex::new(config.clone()),
         chat_sessions: Mutex::new(Vec::new()),
         memory: Mutex::new(memory),

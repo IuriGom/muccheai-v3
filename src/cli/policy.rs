@@ -54,7 +54,8 @@ pub fn policy_add(id: &str, tool: &str, method: &str, action: &str) {
         id: id.to_string(),
         tool_id: tool.to_string(),
         method: method.to_string(),
-        resource_patterns: vec!["*".to_string()],
+        resource_patterns: vec![],
+        // NOTE: resource_patterns is empty by default. Add patterns manually in config.toml.
         action: action_enum,
         conditions: RuleConditions::Always,
     });

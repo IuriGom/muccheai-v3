@@ -9,8 +9,6 @@ use muccheai_types::memory::MemoryEntry;
 
 use crate::config::MuccheConfig;
 
-/// Load the machine-bound encryption key material from disk and derive
-/// the actual AES-256 key via Argon2id when `MUCCHEAI_KEY_PASSWORD` is set.
 fn load_machine_key() -> Option<[u8; 32]> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let path = home.join(".muccheai").join(".machine_key");
@@ -18,36 +16,10 @@ fn load_machine_key() -> Option<[u8; 32]> {
     if bytes.len() == 32 {
         let mut material = [0u8; 32];
         material.copy_from_slice(&bytes);
-        Some(derive_machine_key(&material))
+        let salt = MuccheConfig::load_or_create_salt();
+        Some(MuccheConfig::derive_machine_key(&material, &salt))
     } else {
         None
-    }
-}
-
-/// Derive the actual AES-256 key from the 32-byte material.
-/// If `MUCCHEAI_KEY_PASSWORD` is set, Argon2id is used with a fixed salt.
-/// Otherwise the raw material is returned (with a warning).
-fn derive_machine_key(material: &[u8; 32]) -> [u8; 32] {
-    use argon2::{Argon2, Algorithm, Params, Version};
-    const SALT: &[u8] = b"muccheai-machine-key-v1";
-
-    match std::env::var("MUCCHEAI_KEY_PASSWORD") {
-        Ok(password) => {
-            let params = Params::new(65536, 3, 4, Some(32))
-                .expect("valid argon2 params");
-            let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-            let mut key = [0u8; 32];
-            argon2.hash_password_into(password.as_bytes(), SALT, &mut key)
-                .expect("argon2 hash failed");
-            key
-        }
-        Err(_) => {
-            tracing::warn!(
-                "MUCCHEAI_KEY_PASSWORD is not set. The machine key file contains the raw AES-256 key. \
-                 Set MUCCHEAI_KEY_PASSWORD to enable Argon2id key derivation."
-            );
-            *material
-        }
     }
 }
 
@@ -77,12 +49,16 @@ fn decrypt_line(line: &str) -> Option<String> {
 /// Compute a file-level HMAC over all entry content hashes.
 /// This detects truncation and reordering attacks on the JSONL file.
 fn compute_file_hmac(entries: &[MemoryEntry]) -> String {
-    use sha3::{Digest, Sha3_256};
-    let mut hasher = Sha3_256::new();
+    use hmac::{Hmac, Mac};
+    use sha3::Sha3_256;
+    type HmacSha3 = Hmac<Sha3_256>;
+
+    let key = load_machine_key().unwrap_or_default();
+    let mut mac = HmacSha3::new_from_slice(&key).expect("HMAC key size valid");
     for e in entries {
-        hasher.update(&e.content_hash);
+        mac.update(&e.content_hash);
     }
-    hex::encode(hasher.finalize())
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Simple cross-process advisory file lock (Unix only).

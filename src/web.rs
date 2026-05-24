@@ -60,6 +60,31 @@ pub struct ChatSession {
     pub owner_hash: String,
 }
 
+pub fn load_revoked_tokens() -> std::collections::HashSet<String> {
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".muccheai")
+        .join("revoked_tokens.json");
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        std::collections::HashSet::new()
+    }
+}
+
+pub fn save_revoked_tokens(tokens: &std::collections::HashSet<String>) {
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".muccheai")
+        .join("revoked_tokens.json");
+    if let Ok(data) = serde_json::to_string(tokens) {
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, data).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
 pub struct AppState {
     pub sandbox: Mutex<LlmSandbox>,
     pub policy: Mutex<PolicyEngine>,
@@ -892,13 +917,9 @@ async fn chat(
     let mut sessions = state.chat_sessions.lock().await;
     let session_id = req.session_id.clone().unwrap_or_else(|| {
         let mut buf = [0u8; 16];
-        if ring::rand::SystemRandom::new().fill(&mut buf).is_err() {
-            // Fallback: use timestamp + counter if CSPRNG fails.
-            return format!("session-{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0));
-        }
+        ring::rand::SystemRandom::new()
+            .fill(&mut buf)
+            .expect("CSPRNG failure");
         format!("session-{}", hex::encode(buf))
     });
 
@@ -1585,14 +1606,9 @@ async fn process_mcp_tool_calls(
                             timestamp: Timestamp::now(),
                             nonce: {
                                 let mut n = [0u8; 16];
-                                if ring::rand::SystemRandom::new().fill(&mut n).is_err() {
-                                    // Fallback: use timestamp bytes if CSPRNG fails.
-                                    let ts = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis())
-                                        .unwrap_or(0);
-                                    n.copy_from_slice(&ts.to_be_bytes());
-                                }
+                                ring::rand::SystemRandom::new()
+                                    .fill(&mut n)
+                                    .expect("CSPRNG failure");
                                 n.to_vec()
                             },
                         };
@@ -2263,7 +2279,8 @@ async fn logout(
     sessions.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
     drop(sessions);
     let mut revoked = state.revoked_tokens.lock().await;
-    revoked.insert(owner);
+    revoked.insert(owner.clone());
+    save_revoked_tokens(&revoked);
     StatusCode::NO_CONTENT
 }
 

@@ -1865,6 +1865,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "hex",
+ "hmac",
  "indicatif",
  "jsonschema",
  "libc",

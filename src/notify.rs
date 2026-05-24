@@ -29,12 +29,6 @@ fn escape_applescript(s: &str, max_len: usize) -> Option<String> {
     }) {
         return None;
     }
-    // AppleScript uses `"` for escaping quotes; backslash itself is not a
-    // special character, but we reject it anyway to prevent any future
-    // misuse if the script pattern changes.
-    if s.contains('\\') {
-        return None;
-    }
     Some(s.replace('"', "\"\""))
 }
 
@@ -100,7 +94,18 @@ pub fn notify_error(title: &str, message: &str) {
 /// injection or argument-parsing issues.
 fn run_osascript(script: &str) {
     use std::io::Write;
-    if let Ok(mut child) = std::process::Command::new("osascript")
+    let osascript = match std::fs::canonicalize("/usr/bin/osascript") {
+        Ok(p) => p,
+        Err(_) => {
+            tracing::warn!("osascript not found at /usr/bin/osascript");
+            return;
+        }
+    };
+    if !osascript.to_string_lossy().starts_with("/usr/bin/") {
+        tracing::warn!("osascript path unexpected: {}", osascript.display());
+        return;
+    }
+    if let Ok(mut child) = std::process::Command::new(&osascript)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

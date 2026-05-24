@@ -464,28 +464,16 @@ impl MuccheConfig {
     pub fn load_or_create_machine_key() -> [u8; 32] {
         let path = Self::machine_key_path();
         let mut material = [0u8; 32];
+        let salt = Self::load_or_create_salt();
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() == 32 {
                 material.copy_from_slice(&bytes);
-                return Self::derive_machine_key(&material);
+                return Self::derive_machine_key(&material, &salt);
             }
         }
-        if ring::rand::SystemRandom::new().fill(&mut material).is_err() {
-            // CSPRNG failure is catastrophic but we must not panic.
-            // Fallback: derive entropy from time and process ID.
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let pid = std::process::id() as u128;
-            let bytes = ts.to_le_bytes();
-            let pid_bytes = pid.to_le_bytes();
-            for i in 0..16 {
-                material[i] = bytes[i];
-                material[i + 16] = pid_bytes[i];
-            }
-        }
-        // If another process already created it, we read their key instead.
+        ring::rand::SystemRandom::new()
+            .fill(&mut material)
+            .expect("CSPRNG failure");
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -503,27 +491,60 @@ impl MuccheConfig {
                     }
                 }
                 let _ = file.write_all(&material);
-                Self::derive_machine_key(&material)
+                Self::derive_machine_key(&material, &salt)
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Another process won the race — read their key
                 if let Ok(bytes) = std::fs::read(&path) {
                     if bytes.len() == 32 {
                         let mut existing = [0u8; 32];
                         existing.copy_from_slice(&bytes);
-                        return Self::derive_machine_key(&existing);
+                        return Self::derive_machine_key(&existing, &salt);
                     }
                 }
-                Self::derive_machine_key(&material)
+                Self::derive_machine_key(&material, &salt)
             }
-            _ => Self::derive_machine_key(&material),
+            _ => Self::derive_machine_key(&material, &salt),
         }
     }
 
-    /// Derive the actual AES-256 key from the 32-byte material.
-    pub fn derive_machine_key(material: &[u8; 32]) -> [u8; 32] {
+    fn salt_path() -> PathBuf {
+        Self::machine_key_path().with_extension("salt")
+    }
+
+    pub fn load_or_create_salt() -> [u8; 16] {
+        let path = Self::salt_path();
+        if let Ok(bytes) = std::fs::read(&path) {
+            if bytes.len() == 16 {
+                let mut salt = [0u8; 16];
+                salt.copy_from_slice(&bytes);
+                return salt;
+            }
+        }
+        let mut salt = [0u8; 16];
+        ring::rand::SystemRandom::new()
+            .fill(&mut salt)
+            .expect("CSPRNG failure");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &salt).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&tmp) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o600);
+                    let _ = std::fs::set_permissions(&tmp, perms);
+                }
+            }
+            let _ = std::fs::rename(&tmp, &path);
+        }
+        salt
+    }
+
+    pub fn derive_machine_key(material: &[u8; 32], salt: &[u8; 16]) -> [u8; 32] {
         use argon2::{Argon2, Algorithm, Params, Version};
-        const SALT: &[u8] = b"muccheai-machine-key-v1";
 
         match std::env::var("MUCCHEAI_KEY_PASSWORD") {
             Ok(password) => {
@@ -531,14 +552,13 @@ impl MuccheConfig {
                     .expect("valid argon2 params");
                 let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
                 let mut key = [0u8; 32];
-                argon2.hash_password_into(password.as_bytes(), SALT, &mut key)
+                argon2.hash_password_into(password.as_bytes(), salt, &mut key)
                     .expect("argon2 hash failed");
                 key
             }
             Err(_) => {
                 tracing::warn!(
-                    "MUCCHEAI_KEY_PASSWORD is not set. The machine key file contains the raw AES-256 key. \
-                     Set MUCCHEAI_KEY_PASSWORD to enable Argon2id key derivation."
+                    "MUCCHEAI_KEY_PASSWORD is not set. The machine key file contains the raw AES-256 key."
                 );
                 *material
             }
@@ -993,14 +1013,18 @@ pub fn decrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
                     match hex::decode(hex_ct) {
                         Ok(ct) => match decrypt_aes_256_gcm(&ct, &key) {
                             Ok(pt) => {
-                                server.api_key = String::from_utf8(pt).ok();
+                                if let Ok(s) = String::from_utf8(pt) {
+                                    server.api_key = Some(s);
+                                } else {
+                                    tracing::error!("MCP API key decrypted to invalid UTF-8");
+                                }
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to decrypt MCP API key: {}", e);
+                                tracing::error!("Failed to decrypt MCP API key: {}", e);
                             }
                         },
                         Err(e) => {
-                            tracing::warn!("Failed to decode encrypted MCP API key: {}", e);
+                            tracing::error!("Failed to decode encrypted MCP API key: {}", e);
                         }
                     }
                 }
