@@ -19,7 +19,11 @@
             <form id="loginForm">
                 <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
                 <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
-                <button type="submit" class="btn btn-primary">Connect</button>
+                <div class="btn-row" style="gap:0.5rem;">
+                    <button type="submit" class="btn btn-primary" id="loginBtn">Connect</button>
+                    <button type="button" class="btn btn-secondary" id="registerBtn">Register</button>
+                </div>
+                <p id="loginToggle" style="font-size:0.8rem;color:var(--text-dim);margin-top:0.5rem;text-align:center;cursor:pointer;"></p>
             </form>
         </div>
     </div>

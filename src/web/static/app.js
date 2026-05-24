@@ -287,7 +287,7 @@ function showRenameAiModal() {
 async function submitApiKey() {
     const userInput = document.getElementById('loginUser');
     const passInput = document.getElementById('loginPass');
-    const btn = document.querySelector('#apiKeyModal button');
+    const btn = document.getElementById('loginBtn');
     const username = (userInput?.value || '').trim();
     const password = (passInput?.value || '').trim();
     if (!username || !password || apiKeyModalSubmitting) return;
@@ -336,6 +336,65 @@ async function submitApiKey() {
     } finally {
         apiKeyModalSubmitting = false;
         if (btn) { btn.textContent = 'Connect'; btn.disabled = false; }
+    }
+}
+
+async function submitRegister() {
+    const userInput = document.getElementById('loginUser');
+    const passInput = document.getElementById('loginPass');
+    const btn = document.getElementById('registerBtn');
+    const username = (userInput?.value || '').trim();
+    const password = (passInput?.value || '').trim();
+    if (!username || !password || apiKeyModalSubmitting) return;
+
+    apiKeyModalSubmitting = true;
+    lastApiKeySubmitTime = Date.now();
+    if (btn) { btn.textContent = 'Creating...'; btn.disabled = true; }
+
+    try {
+        const res = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        if (res.status === 409) {
+            alert('Username already taken.');
+            apiKeyModalSubmitting = false;
+            if (btn) { btn.textContent = 'Register'; btn.disabled = false; }
+            return;
+        }
+        if (!res.ok) {
+            alert('Registration failed. Please try again.');
+            apiKeyModalSubmitting = false;
+            if (btn) { btn.textContent = 'Register'; btn.disabled = false; }
+            return;
+        }
+        const data = await res.json();
+        localStorage.setItem('muccheai_session_token', data.token);
+        localStorage.setItem('muccheai_session_time', Date.now().toString());
+
+        try {
+            const csrfRes = await fetch('/api/csrf', {
+                headers: { 'Authorization': 'Bearer ' + data.token }
+            });
+            if (csrfRes.ok) {
+                const csrfData = await csrfRes.json();
+                if (csrfData.csrf_token) {
+                    localStorage.setItem('muccheai_csrf_token', csrfData.csrf_token);
+                }
+            }
+        } catch (e) { /* ignore */ }
+        hideApiKeyModal();
+        pollStatus();
+        if (!localStorage.getItem('muccheai_name')) {
+            setTimeout(() => showNameAiModal(), 300);
+        }
+    } catch (e) {
+        console.error('Registration error:', e);
+        alert('Could not connect. Is the server running?');
+    } finally {
+        apiKeyModalSubmitting = false;
+        if (btn) { btn.textContent = 'Register'; btn.disabled = false; }
     }
 }
 
@@ -920,6 +979,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKeyForm = document.querySelector('#apiKeyModal form');
     if (apiKeyForm) {
         apiKeyForm.addEventListener('submit', (e) => { e.preventDefault(); submitApiKey(); });
+    }
+    const registerBtn = document.getElementById('registerBtn');
+    if (registerBtn) {
+        registerBtn.addEventListener('click', (e) => { e.preventDefault(); submitRegister(); });
     }
 
     // AI Name modal

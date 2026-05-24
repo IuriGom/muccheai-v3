@@ -2269,6 +2269,43 @@ struct LoginResponse {
     username: String,
 }
 
+/// Create a new user account and receive a session token.
+async fn register(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, StatusCode> {
+    if req.username.is_empty() || req.password.len() < 1 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (owner_hash, username) = {
+        let mut users = state.users.lock().await;
+        users.create_user(&req.username, &req.password)
+            .map_err(|_| StatusCode::CONFLICT)?;
+        let user = users.get(&req.username)
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        (user.owner_hash.clone(), user.username.clone())
+    };
+
+    let mut buf = [0u8; 32];
+    ring::rand::SystemRandom::new()
+        .fill(&mut buf)
+        .expect("CSPRNG failure");
+    let token = hex::encode(buf);
+    let mut sessions = state.sessions.lock().await;
+    sessions.insert(
+        token.clone(),
+        Session {
+            owner_hash,
+            username: username.clone(),
+            created_at: Instant::now(),
+        },
+    );
+    Ok(Json(LoginResponse {
+        token,
+        username,
+    }))
+}
+
 /// Authenticate and receive a session token.
 async fn login(
     State(state): State<Arc<AppState>>,
@@ -2893,6 +2930,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     // Public API routes (no auth required, but rate limited)
     let public_api = Router::new()
+        .route("/register", post(register))
         .route("/login", post(login))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
