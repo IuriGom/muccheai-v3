@@ -159,7 +159,6 @@ impl StructuredMemoryManager {
         self.approve_by_owner(id, "")
     }
 
-    /// Approve only if the proposal belongs to the given owner (or is legacy).
     pub fn approve_by_owner(&self, id: &str, owner: &str) -> Result<bool> {
         let lock_path = self.queue_path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path)?;
@@ -191,7 +190,6 @@ impl StructuredMemoryManager {
         self.reject_by_owner(id, "")
     }
 
-    /// Reject only if the proposal belongs to the given owner (or is legacy).
     pub fn reject_by_owner(&self, id: &str, owner: &str) -> Result<bool> {
         let lock_path = self.queue_path.with_extension("lock");
         let _lock = FileLock::acquire(&lock_path)?;
@@ -223,7 +221,6 @@ impl StructuredMemoryManager {
             .collect()
     }
 
-    /// List pending proposals for the given owner.
     pub fn list_pending_by_owner(&self, owner: &str) -> Vec<QueuedProposal> {
         self.read_queue()
             .unwrap_or_default()
@@ -258,8 +255,6 @@ impl StructuredMemoryManager {
         self.store.list()
     }
 
-    /// List memories visible to the given owner.
-    /// Legacy entries (empty owner_hash) are visible to all.
     pub fn list_all_by_owner(&self, owner: &str) -> Vec<MemoryEntry> {
         self.store
             .list()
@@ -278,7 +273,6 @@ impl StructuredMemoryManager {
         self.store.delete(key)
     }
 
-    /// Delete a memory by key only if it belongs to the given owner.
     pub fn delete_by_owner(&self, key: &str, owner: &str) -> Result<bool> {
         self.store.delete_by_owner(key, owner)
     }

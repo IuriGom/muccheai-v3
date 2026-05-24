@@ -733,13 +733,22 @@ async fn rate_limit_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let ip = request
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| addr.ip().to_string());
+    let direct_ip = addr.ip();
+    let is_proxy = match direct_ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    };
+    let ip = if is_proxy {
+        request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| direct_ip.to_string())
+    } else {
+        direct_ip.to_string()
+    };
     let now = Instant::now();
     let window = Duration::from_secs(60);
     // GET requests get a higher limit than mutating requests.
@@ -2148,7 +2157,10 @@ async fn save_agent(
     // Validate base_url to prevent SSRF via agent configuration.
     if let Some(ref base_url) = req.base_url {
         if !base_url.is_empty() {
-            if req.provider != "ollama" {
+            if req.provider == "ollama" {
+                validate_no_ssrf(base_url).map_err(|_| StatusCode::BAD_REQUEST)?;
+                validate_no_ssrf_dns(base_url).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            } else {
                 validate_no_ssrf_external(base_url).map_err(|_| StatusCode::BAD_REQUEST)?;
                 validate_no_ssrf_dns(base_url).await.map_err(|_| StatusCode::BAD_REQUEST)?;
             }
