@@ -400,7 +400,11 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 
 async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
     let token = extract_bearer_token(headers)?;
-    let sessions = state.sessions.lock().await;
+    let mut sessions = state.sessions.lock().await;
+    const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+    let now = Instant::now();
+    // Evict expired sessions while we're here.
+    sessions.retain(|_, s| now.saturating_duration_since(s.created_at) <= SESSION_TTL);
     sessions.get(&token).map(|s| s.owner_hash.clone())
 }
 
@@ -2362,21 +2366,21 @@ async fn logout(
     headers: HeaderMap,
 ) -> StatusCode {
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
-    let mut sessions = state.chat_sessions.lock().await;
-    sessions.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
-    drop(sessions);
+    let mut chat = state.chat_sessions.lock().await;
+    chat.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+    drop(chat);
     let mut revoked = state.revoked_tokens.lock().await;
     revoked.insert(owner.clone());
     save_revoked_tokens(&revoked);
-    // Also clear any CSRF token tied to this session.
-    let csrf = headers
-        .get("x-csrf-token")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    if !csrf.is_empty() {
+    // Remove the session token itself.
+    if let Some(token) = extract_bearer_token(&headers) {
+        let mut sessions = state.sessions.lock().await;
+        sessions.remove(&token);
+    }
+    // Clear CSRF token keyed by owner_hash.
+    if !owner.is_empty() {
         let mut tokens = state.csrf_tokens.lock().await;
-        tokens.remove(&csrf);
+        tokens.remove(&owner);
     }
     StatusCode::NO_CONTENT
 }
@@ -2887,9 +2891,13 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let static_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/web/static");
 
-    // Public API routes (no auth required)
+    // Public API routes (no auth required, but rate limited)
     let public_api = Router::new()
         .route("/login", post(login))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .with_state(state.clone());
 
     // API routes — auth + rate limit required
