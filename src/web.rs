@@ -5,9 +5,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Json, Response},
+    response::sse::{Event, Sse},
     routing::{delete, get, post},
     Router,
 };
+use std::convert::Infallible;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -52,6 +56,10 @@ pub struct ChatSession {
     pub owner_hash: String,
     #[serde(skip)]
     pub session_secret: String,
+    /// If this session is a branch, the parent session ID.
+    pub parent_id: Option<String>,
+    /// If branched, the message index in the parent where branching occurred.
+    pub branch_point: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,6 +122,8 @@ pub struct AppState {
     pub tool_config: Mutex<ToolConfig>,
     pub csrf_tokens: Mutex<HashMap<String, String>>,
     pub rng: ring::rand::SystemRandom,
+    /// Share tokens: token -> (session_id, created_at)
+    pub shared_sessions: Mutex<HashMap<String, (String, Instant)>>,
 }
 
 #[derive(Clone)]
@@ -157,6 +167,9 @@ pub struct ChatResponse {
     /// and re-send the request with `research_confirmed: true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_confirmation: Option<String>,
+    /// Number of structured memories injected into the system prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memories_used: Option<usize>,
 }
 
 /// System status
@@ -211,7 +224,7 @@ pub struct ConfigResponse {
 }
 
 /// Memory entry as exposed by the REST API.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryApiEntry {
     /// Unique key.
     pub key: String,
@@ -408,6 +421,50 @@ pub struct SetModelRequest {
 #[derive(Debug, Serialize)]
 pub struct ChatSessionsResponse {
     pub sessions: Vec<ChatSessionSummary>,
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Session title, branching, sharing, search, backup/restore
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct UpdateTitleRequest {
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BranchRequest {
+    message_index: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BranchResponse {
+    session_id: String,
+    session_secret: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ShareResponse {
+    share_token: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResult {
+    r#type: String,
+    id: String,
+    title: String,
+    content: String,
+    created_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResponse {
+    results: Vec<SearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestoreRequest {
+    entries: Vec<MemoryApiEntry>,
 }
 
 /// Serve the main HTML page
@@ -878,6 +935,7 @@ async fn process_chat(
             session_id: req.session_id.clone().unwrap_or_default(),
             session_secret: String::new(),
             needs_confirmation: None,
+            memories_used: None,
         };
     }
 
@@ -898,6 +956,7 @@ async fn process_chat(
                     "This research query will send your chat history to an external LLM provider (OpenAI / Anthropic). \
                      Your data will leave this machine.".to_string()
                 ),
+                memories_used: None,
             };
         }
     }
@@ -929,10 +988,11 @@ async fn process_chat(
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
     // Inject approved structured memories into the system prompt.
-    {
+    let memories_count: usize = {
         let owner = get_session_owner(state, headers).await.unwrap_or_default();
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all_by_owner(&owner);
+        let count = memories.len();
         if !memories.is_empty() {
             system_prompt.push_str("\n\n--- Known Facts About the User ---\n");
             let facts: Vec<_> = memories.iter().filter(|e| e.memory_type == MemoryType::Fact).collect();
@@ -956,7 +1016,8 @@ async fn process_chat(
                 system_prompt.push_str("(none)\n");
             }
         }
-    }
+        count
+    };
 
     // Inject available MCP tools into the system prompt.
     let mcp_tools = {
@@ -1086,6 +1147,7 @@ async fn process_chat(
                 session_id,
                 session_secret: String::new(),
                 needs_confirmation: None,
+                memories_used: None,
             };
         }
         sessions[idx].messages.push(ChatMessage {
@@ -1120,6 +1182,8 @@ async fn process_chat(
             created_at: timestamp,
             owner_hash: get_session_owner(state, headers).await.unwrap_or_default(),
             session_secret: secret.clone(),
+            parent_id: None,
+            branch_point: None,
             messages: vec![
                 ChatMessage {
                     role: "user".to_string(),
@@ -1142,6 +1206,7 @@ async fn process_chat(
         session_id,
         session_secret: session_secret,
         needs_confirmation: None,
+        memories_used: Some(memories_count),
     }
 }
 
@@ -3002,6 +3067,332 @@ async fn delete_chat_session(
 }
 
 // ---------------------------------------------------------------------------
+// Feature: Auto session title, branching, sharing
+// ---------------------------------------------------------------------------
+
+async fn update_session_title(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateTitleRequest>,
+) -> StatusCode {
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let mut sessions = state.chat_sessions.lock().await;
+    if let Some(s) = sessions.iter_mut().find(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    }) {
+        s.title = req.title.chars().take(100).collect();
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+async fn branch_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<BranchRequest>,
+) -> Result<Json<BranchResponse>, StatusCode> {
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let sessions = state.chat_sessions.lock().await;
+    let parent = sessions.iter().find(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    }).cloned();
+    drop(sessions);
+
+    let parent = parent.ok_or(StatusCode::NOT_FOUND)?;
+    if req.message_index >= parent.messages.len() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut buf = [0u8; 16];
+    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    let new_id = format!("session-{}", hex::encode(buf));
+    let mut sec = [0u8; 16];
+    state.rng.fill(&mut sec).expect("CSPRNG failure");
+    let new_secret = hex::encode(sec);
+
+    let branched_messages: Vec<ChatMessage> = parent.messages[..=req.message_index].to_vec();
+    let timestamp = Timestamp::now().0;
+
+    let mut sessions = state.chat_sessions.lock().await;
+    sessions.push(ChatSession {
+        id: new_id.clone(),
+        title: format!("Branch: {}", parent.title),
+        created_at: timestamp,
+        owner_hash: owner,
+        session_secret: new_secret.clone(),
+        parent_id: Some(parent.id.clone()),
+        branch_point: Some(req.message_index),
+        messages: branched_messages,
+    });
+
+    Ok(Json(BranchResponse {
+        session_id: new_id,
+        session_secret: new_secret,
+    }))
+}
+
+async fn share_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ShareResponse>, StatusCode> {
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter().any(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
+    drop(sessions);
+    if !found {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let mut buf = [0u8; 32];
+    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    let token = hex::encode(buf);
+    let mut shared = state.shared_sessions.lock().await;
+    shared.insert(token.clone(), (id, Instant::now()));
+    Ok(Json(ShareResponse { share_token: token }))
+}
+
+async fn get_shared_session(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Json<ChatSession>, StatusCode> {
+    let mut shared = state.shared_sessions.lock().await;
+    // Prune expired shares (24h TTL)
+    let now = Instant::now();
+    shared.retain(|_, (_, created)| now.saturating_duration_since(*created) < Duration::from_secs(24 * 60 * 60));
+    
+    let session_id = shared.get(&token).map(|(id, _)| id.clone());
+    drop(shared);
+
+    let session_id = session_id.ok_or(StatusCode::NOT_FOUND)?;
+    let sessions = state.chat_sessions.lock().await;
+    sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .cloned()
+        .map(|mut s| {
+            // Sanitize sensitive fields for public sharing
+            s.owner_hash = String::new();
+            s.session_secret = String::new();
+            Json(s)
+        })
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Memory backup / restore
+// ---------------------------------------------------------------------------
+
+async fn backup_memories(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let sm = state.structured_memory.lock().await;
+    let memories = sm.list_all_by_owner(&owner);
+    let entries: Vec<MemoryApiEntry> = memories
+        .into_iter()
+        .map(|e| MemoryApiEntry {
+            key: e.key,
+            value: memory_value_to_json(e.value),
+            memory_type: e.memory_type,
+            created_at: e.created_at.0,
+        })
+        .collect();
+    drop(sm);
+
+    let body = serde_json::to_string_pretty(&entries).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response = axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .header("Content-Disposition", "attachment; filename=\"muccheai-memories.json\"")
+        .body(axum::body::Body::from(body))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+
+async fn restore_memories(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<RestoreRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let sm = state.structured_memory.lock().await;
+    let mut restored = 0u32;
+    for entry in req.entries {
+        let value = json_value_to_memory_value(entry.value);
+        let mem_entry = MemoryEntry {
+            memory_type: entry.memory_type,
+            key: entry.key,
+            value,
+            created_at: Timestamp(entry.created_at),
+            user_signature: vec![],
+            content_hash: vec![],
+            owner_hash: owner.clone(),
+        };
+        if sm.store(&mem_entry).is_ok() {
+            restored += 1;
+        }
+    }
+    Ok(Json(serde_json::json!({ "restored": restored })))
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Global fuzzy search
+// ---------------------------------------------------------------------------
+
+async fn global_search(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MemoryQuery>,
+) -> Result<Json<SearchResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(SearchResponse { results: vec![] }));
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let q = query.q.unwrap_or_default().to_lowercase();
+    if q.len() < 2 {
+        return Ok(Json(SearchResponse { results: vec![] }));
+    }
+
+    let mut results = Vec::new();
+
+    // Search memories
+    {
+        let sm = state.structured_memory.lock().await;
+        for entry in sm.list_all_by_owner(&owner) {
+            let key_match = entry.key.to_lowercase().contains(&q);
+            let val_str = serde_json::to_string(&entry.value).unwrap_or_default();
+            let val_match = val_str.to_lowercase().contains(&q);
+            if key_match || val_match {
+                results.push(SearchResult {
+                    r#type: "memory".to_string(),
+                    id: entry.key.clone(),
+                    title: format!("Memory: {}", entry.key),
+                    content: val_str.chars().take(200).collect(),
+                    created_at: entry.created_at.0,
+                });
+            }
+        }
+    }
+
+    // Search chat sessions
+    {
+        let sessions = state.chat_sessions.lock().await;
+        for session in sessions.iter().filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())) {
+            let title_match = session.title.to_lowercase().contains(&q);
+            let mut content_match = false;
+            let mut matched_content = String::new();
+            for msg in &session.messages {
+                if msg.content.to_lowercase().contains(&q) {
+                    content_match = true;
+                    matched_content = msg.content.chars().take(200).collect();
+                    break;
+                }
+            }
+            if title_match || content_match {
+                results.push(SearchResult {
+                    r#type: "session".to_string(),
+                    id: session.id.clone(),
+                    title: session.title.clone(),
+                    content: matched_content,
+                    created_at: session.created_at,
+                });
+            }
+        }
+    }
+
+    // Sort by relevance: exact title matches first, then by recency
+    results.sort_by(|a, b| {
+        let a_title_exact = a.title.to_lowercase().contains(&q);
+        let b_title_exact = b.title.to_lowercase().contains(&q);
+        if a_title_exact && !b_title_exact {
+            std::cmp::Ordering::Less
+        } else if !a_title_exact && b_title_exact {
+            std::cmp::Ordering::Greater
+        } else {
+            b.created_at.cmp(&a.created_at)
+        }
+    });
+
+    // Limit results
+    results.truncate(50);
+    Ok(Json(SearchResponse { results }))
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Streaming chat (SSE)
+// ---------------------------------------------------------------------------
+
+async fn chat_stream(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<ChatRequest>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(100);
+    let state = state.clone();
+    let headers = headers.clone();
+
+    tokio::spawn(async move {
+        let response = process_chat(&state, &headers, &req).await;
+        
+        // Send session info first
+        let meta = serde_json::json!({
+            "session_id": response.session_id,
+            "session_secret": response.session_secret,
+            "memories_used": response.memories_used,
+        });
+        let _ = tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await;
+
+        if let Some(confirm) = response.needs_confirmation {
+            let _ = tx.send(Ok(Event::default().event("confirm").data(confirm))).await;
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+            return;
+        }
+
+        // Stream the response in chunks (simulating token streaming)
+        let text = response.response;
+        let chunk_size = 4usize;
+        let mut chars = text.chars();
+        let mut buffer = String::new();
+        while let Some(c) = chars.next() {
+            buffer.push(c);
+            if buffer.len() >= chunk_size {
+                let _ = tx.send(Ok(Event::default().data(buffer.clone()))).await;
+                buffer.clear();
+            }
+        }
+        if !buffer.is_empty() {
+            let _ = tx.send(Ok(Event::default().data(buffer))).await;
+        }
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+}
+
+// ---------------------------------------------------------------------------
 // MCP Registry
 // ---------------------------------------------------------------------------
 
@@ -3428,6 +3819,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let public_api = Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
+        .route("/share/:token", get(get_shared_session))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -3450,7 +3842,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memory/queue/:id/approve", post(approve_memory_proposal))
         .route("/memory/queue/:id/reject", post(reject_memory_proposal))
         .route("/chat", post(chat))
+        .route("/chat/stream", post(chat_stream))
         .route("/chat/ws", get(ws_chat))
+        .route("/search", get(global_search))
         .route("/personas", get(list_personas))
         .route("/personas/switch", post(switch_persona))
         .route("/agents", get(list_agents))
@@ -3467,7 +3861,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sessions", get(list_chat_sessions))
         .route("/sessions/:id", get(get_chat_session))
         .route("/sessions/:id/export", get(export_chat_session))
+        .route("/sessions/:id/title", post(update_session_title))
+        .route("/sessions/:id/branch", post(branch_session))
+        .route("/sessions/:id/share", post(share_session))
         .route("/sessions/:id", delete(delete_chat_session))
+        .route("/memory/backup", get(backup_memories))
+        .route("/memory/restore", post(restore_memories))
         .route("/logout", post(logout))
         .route("/upload", post(upload_file))
         .route("/mcp/servers", get(list_mcp_servers))

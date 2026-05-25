@@ -355,6 +355,13 @@ impl StructuredMemoryManager {
         self.store.store(&entry)
     }
 
+    /// Store a memory entry directly (bypasses approval queue).
+    pub fn store(&self, entry: &MemoryEntry) -> Result<()> {
+        let mut e = entry.clone();
+        e.content_hash = e.compute_hash();
+        self.store.store(&e)
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------

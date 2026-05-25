@@ -2229,3 +2229,145 @@ body .hidden { display: none; }
 .status-error { color: var(--accent-red); border-color: var(--accent-red); }
 .card-full-width { grid-column: 1 / -1; }
 .empty-history { padding: 1rem 0; font-size: 0.8rem; }
+
+
+/* ============================================
+   New Feature Styles
+   ============================================ */
+
+/* Memories badge */
+.memories-badge {
+    font-size: 0.7rem;
+    background: rgba(100, 150, 255, 0.15);
+    color: var(--accent-blue, #6496ff);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 0.5rem;
+    cursor: help;
+}
+
+/* Message action buttons (speak, retry, branch) */
+.message-action-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim, #888);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+    margin-left: 2px;
+}
+.message-action-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--text-primary, #eee);
+}
+
+/* Streaming indicator */
+.message-body[data-streaming="true"]::after {
+    content: '▌';
+    animation: blink-cursor 1s step-end infinite;
+    color: var(--accent-blue, #6496ff);
+    margin-left: 2px;
+}
+@keyframes blink-cursor {
+    50% { opacity: 0; }
+}
+
+/* Offline indicator */
+.offline-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: var(--accent-orange, #f0a030);
+    color: #000;
+    text-align: center;
+    padding: 4px;
+    font-size: 0.8rem;
+    z-index: 10000;
+    display: none;
+}
+body.offline .offline-indicator {
+    display: block;
+}
+
+/* Share modal */
+.share-modal-input {
+    width: 100%;
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #333);
+    background: var(--bg-secondary, #1a1a1a);
+    color: var(--text-primary, #eee);
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+/* Global search results */
+.search-result-item {
+    padding: 0.75rem;
+    border-radius: 6px;
+    background: var(--bg-secondary, #1a1a1a);
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border-color, #333);
+}
+.search-result-item:hover {
+    border-color: var(--accent-blue, #6496ff);
+}
+.search-result-type {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--accent-blue, #6496ff);
+    margin-bottom: 0.25rem;
+}
+.search-result-title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.search-result-content {
+    font-size: 0.85rem;
+    color: var(--text-dim, #888);
+}
+
+/* Branch indicator */
+.branch-indicator {
+    font-size: 0.75rem;
+    color: var(--accent-green, #4caf50);
+    margin-left: 0.5rem;
+}
+
+/* Retry comparison mode */
+.message-wrapper.retrying {
+    opacity: 0.7;
+}
+.message-wrapper.retrying .message-body {
+    border-left: 3px solid var(--accent-orange, #f0a030);
+    padding-left: 0.5rem;
+}
+
+
+/* Inline file previews */
+.file-preview {
+    background: var(--bg-secondary, #1a1a1a);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.25rem;
+}
+.file-preview summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+.file-preview-content {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

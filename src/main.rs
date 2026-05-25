@@ -905,6 +905,7 @@ async fn run_web_server(bind: &str) {
         tool_config: Mutex::new(ToolConfig::load()),
         csrf_tokens: Mutex::new(std::collections::HashMap::new()),
         rng: ring::rand::SystemRandom::new(),
+        shared_sessions: Mutex::new(std::collections::HashMap::new()),
     });
 
     println!("🔐 Login with username 'admin' and your existing API key.");

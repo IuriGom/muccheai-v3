@@ -9,6 +9,11 @@ let statusPoller = null;
 let lastKnownModel = 'qwen3:14b';
 let ws = null;
 let wsConnected = false;
+let streamingEnabled = true;
+let offlineQueue = [];
+let isOnline = navigator.onLine;
+let currentStreamController = null;
+let retryComparisonMode = false;
 
 function initWebSocket() {
     const token = localStorage.getItem('muccheai_session_token');
@@ -25,7 +30,7 @@ function initWebSocket() {
             addMessage('error', data.error);
         } else {
             setTyping(false);
-            addMessage('ai', data.response || '(no response)');
+            addMessage('ai', data.response || '(no response)', false, { memories_used: data.memories_used || 0 });
             if (data.session_id) currentSessionId = data.session_id;
             if (data.session_secret) localStorage.setItem('current_session_secret', data.session_secret);
             checkApprovalQueue();
@@ -492,6 +497,7 @@ function switchTab(name) {
     if (name === 'status') loadStatusPage();
     if (name === 'personas') loadPersonas();
     if (name === 'mcp') loadMcpRegistry();
+    if (name === 'chat') loadInlineFilePreviews();
 
     history.pushState(null, '', '#' + name);
 }
@@ -772,13 +778,14 @@ function escapeJsString(text) {
         .replace(/`/g, '\\`');
 }
 
-function createMessageElement(role, text, timestamp) {
+function createMessageElement(role, text, timestamp, opts = {}) {
     const wrapper = document.createElement('div');
     wrapper.className = 'message-wrapper';
 
     const msgId = 'msg-' + Math.random().toString(36).slice(2, 10);
     wrapper.dataset.messageId = msgId;
     wrapper.dataset.rawText = text;
+    wrapper.dataset.role = role;
 
     const name = escapeHtml(role === 'user' ? t('you') : role === 'error' ? t('system') : getAiName());
     const nameClass = role === 'user' ? 'message-user' : role === 'error' ? 'message-error' : 'message-ai-name';
@@ -786,11 +793,32 @@ function createMessageElement(role, text, timestamp) {
         ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : getTimestamp();
 
+    const memoriesBadge = opts.memories_used > 0
+        ? `<span class="memories-badge" title="${opts.memories_used} memories active">🧠 ${opts.memories_used}</span>`
+        : '';
+
+    const isAi = role === 'ai';
+    const extraButtons = isAi ? `
+        <button class="message-action-btn" title="Read aloud" data-speak-target="${msgId}">
+            🔊
+        </button>
+        <button class="message-action-btn" title="Retry" data-retry-target="${msgId}">
+            🔄
+        </button>
+    ` : '';
+
+    const branchButton = `
+        <button class="message-action-btn" title="Branch conversation here" data-branch-target="${msgId}">
+            🌿
+        </button>
+    `;
+
     wrapper.innerHTML = `
         <div class="message ${escapeHtml(role)}">
             <div class="message-header">
                 <span class="${nameClass}">${name}</span>
                 <span class="message-time">${timeStr}</span>
+                ${memoriesBadge}
             </div>
             <div class="message-body">${renderMessageContent(text)}</div>
         </div>
@@ -802,6 +830,8 @@ function createMessageElement(role, text, timestamp) {
                 </svg>
                 <span class="copy-label">Copy</span>
             </button>
+            ${extraButtons}
+            ${branchButton}
         </div>
     `;
     return wrapper;
@@ -837,12 +867,12 @@ function copyMessageText(msgId) {
     });
 }
 
-function addMessage(role, text, skipStorage = false) {
+function addMessage(role, text, skipStorage = false, opts = {}) {
     const messages = document.getElementById('messages');
     const welcome = messages.querySelector('.welcome-message');
     if (welcome) welcome.remove();
 
-    const wrapper = createMessageElement(role, text, Date.now());
+    const wrapper = createMessageElement(role, text, Date.now(), opts);
     messages.appendChild(wrapper);
     scrollToBottom();
 
@@ -854,6 +884,7 @@ function addMessage(role, text, skipStorage = false) {
             saveLocalSessions(sessions);
         }
     }
+    return wrapper;
 }
 
 function setTyping(show) {
@@ -881,6 +912,22 @@ async function sendMessage() {
 
     input.value = '';
     sendBtn.disabled = true;
+
+    // Slash commands
+    if (text.startsWith('/')) {
+        const handled = await handleSlashCommand(text);
+        sendBtn.disabled = false;
+        if (handled) return;
+    }
+
+    // Offline queue
+    if (!navigator.onLine) {
+        offlineQueue.push({ text, sessionId: currentSessionId });
+        addMessage('system', '⏳ You are offline. Message queued and will be sent when connection resumes.');
+        sendBtn.disabled = false;
+        return;
+    }
+
     addMessage('user', text);
     setTyping(true);
 
@@ -904,6 +951,14 @@ async function sendMessage() {
         return;
     }
 
+    // Prefer SSE streaming
+    if (streamingEnabled) {
+        await sendMessageStream(text);
+        sendBtn.disabled = false;
+        return;
+    }
+
+    // Fallback to regular POST
     try {
         const res = await apiFetch('/api/chat', {
             method: 'POST',
@@ -921,7 +976,13 @@ async function sendMessage() {
         if (data.response && data.response.startsWith('(Error:')) {
             addMessage('error', data.response);
         } else {
-            addMessage('ai', data.response || '(no response)');
+            addMessage('ai', data.response || '(no response)', false, { memories_used: data.memories_used || 0 });
+            // Auto-title new sessions after first exchange
+            const sessions = getLocalSessions();
+            const s = sessions.find(x => x.id === currentSessionId);
+            if (s && s.messages.filter(m => m.role === 'ai').length === 1) {
+                autoUpdateSessionTitle(currentSessionId);
+            }
         }
         checkApprovalQueue();
     } catch (err) {
@@ -1050,10 +1111,6 @@ document.addEventListener('DOMContentLoaded', () => {
             submitRegister();
         });
     }
-            if (duressSection) duressSection.style.display = 'none';
-            submitApiKey();
-        });
-    }
 
     // AI Name modal
     const nameAiForm = document.querySelector('#nameAiModal form');
@@ -1117,6 +1174,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (apiPanelToggle) apiPanelToggle.addEventListener('click', toggleApiPanel);
     const newChatBtn = document.getElementById('newChatBtn');
     if (newChatBtn) newChatBtn.addEventListener('click', newChat);
+
+    // Share session
+    const shareSessionBtn = document.getElementById('shareSessionBtn');
+    if (shareSessionBtn) shareSessionBtn.addEventListener('click', shareCurrentSession);
+
+    // Global search
+    const globalSearchBtn = document.getElementById('globalSearchBtn');
+    if (globalSearchBtn) {
+        globalSearchBtn.addEventListener('click', () => {
+            const q = prompt('Search memories and chats:');
+            if (q) runGlobalSearch(q);
+        });
+    }
+
+    // Memory backup/restore
+    const backupMemoriesBtn = document.getElementById('backupMemoriesBtn');
+    if (backupMemoriesBtn) backupMemoriesBtn.addEventListener('click', backupMemories);
+    const restoreMemoriesBtn = document.getElementById('restoreMemoriesBtn');
+    if (restoreMemoriesBtn) restoreMemoriesBtn.addEventListener('click', restoreMemories);
 
     // Chat history search
     const chatHistorySearch = document.getElementById('chatHistorySearch');
@@ -2103,6 +2179,7 @@ function initFileUpload() {
             });
             if (res.ok) {
                 alert('File uploaded and stored as memory.');
+                loadInlineFilePreviews();
             } else {
                 alert('Upload failed: HTTP ' + res.status);
             }
@@ -2136,6 +2213,7 @@ document.addEventListener('DOMContentLoaded', () => {
     statusPoller = setInterval(pollStatus, 5000);
     initVoiceInput();
     initFileUpload();
+    loadInlineFilePreviews();
 });
 
 // ============================================
@@ -2221,3 +2299,480 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPersonas();
     fetchVersion();
 });
+
+// ============================================
+// Feature: Slash commands
+// ============================================
+async function handleSlashCommand(text) {
+    const parts = text.slice(1).split(' ');
+    const cmd = parts[0].toLowerCase();
+    const arg = parts.slice(1).join(' ').trim();
+
+    switch (cmd) {
+        case 'clear':
+            newChat();
+            return true;
+        case 'memory':
+            switchTab('memory');
+            return true;
+        case 'export':
+            if (currentSessionId) exportChat(currentSessionId);
+            else addMessage('system', 'No active session to export.');
+            return true;
+        case 'title':
+            if (arg && currentSessionId) {
+                await updateSessionTitle(currentSessionId, arg);
+            } else {
+                addMessage('system', 'Usage: /title <new title>');
+            }
+            return true;
+        case 'share':
+            if (currentSessionId) shareCurrentSession();
+            else addMessage('system', 'No active session to share.');
+            return true;
+        case 'search':
+            if (arg) runGlobalSearch(arg);
+            else addMessage('system', 'Usage: /search <query>');
+            return true;
+        case 'stream':
+            streamingEnabled = !streamingEnabled;
+            addMessage('system', `Streaming ${streamingEnabled ? 'enabled' : 'disabled'}.`);
+            return true;
+        case 'tts':
+            const ttsEnabled = localStorage.getItem('muccheai_tts') === '1';
+            localStorage.setItem('muccheai_tts', ttsEnabled ? '0' : '1');
+            addMessage('system', `TTS ${!ttsEnabled ? 'enabled' : 'disabled'}.`);
+            return true;
+        case 'help':
+            addMessage('system', `Available commands:
+/clear — start a new chat
+/memory — open memory page
+/export — export current chat
+/title <text> — rename session
+/share — generate share link
+/search <query> — search memories & chats
+/stream — toggle streaming mode
+/tts — toggle voice output
+/help — show this message`);
+            return true;
+        default:
+            return false;
+    }
+}
+
+// ============================================
+// Feature: Streaming chat (SSE)
+// ============================================
+async function sendMessageStream(text) {
+    const sendBtn = document.getElementById('send');
+    try {
+        const res = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...getAuthHeaders(),
+            },
+            body: JSON.stringify({ message: text, session_id: currentSessionId })
+        });
+        if (!res.ok) {
+            setTyping(false);
+            const errText = await res.text().catch(() => 'Unknown error');
+            addMessage('error', `Server error: HTTP ${res.status} — ${errText}`);
+            return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentAiWrapper = null;
+        let aiText = '';
+        let metaReceived = false;
+        let memoriesUsed = 0;
+
+        setTyping(false);
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6);
+                if (data === '[DONE]') continue;
+
+                let parsed;
+                try { parsed = JSON.parse(data); } catch { parsed = null; }
+
+                if (parsed && parsed.session_id) {
+                    // Meta event
+                    currentSessionId = parsed.session_id;
+                    localStorage.setItem('current_session_secret', parsed.session_secret || '');
+                    memoriesUsed = parsed.memories_used || 0;
+                    metaReceived = true;
+                    continue;
+                }
+                if (parsed && parsed.confirm) {
+                    const confirmed = confirm(parsed.confirm);
+                    if (confirmed) {
+                        // Re-send with research_confirmed
+                        await fetch('/api/chat/stream', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                            body: JSON.stringify({ message: text, session_id: currentSessionId, research: true, research_confirmed: true })
+                        });
+                    }
+                    continue;
+                }
+
+                // Content chunk
+                if (!currentAiWrapper) {
+                    currentAiWrapper = addMessage('ai', '', false, { memories_used: memoriesUsed });
+                    // Make the body editable for streaming
+                    const body = currentAiWrapper.querySelector('.message-body');
+                    if (body) body.dataset.streaming = 'true';
+                }
+                aiText += data;
+                const body = currentAiWrapper.querySelector('.message-body');
+                if (body) {
+                    body.innerHTML = renderMessageContent(aiText);
+                    currentAiWrapper.dataset.rawText = aiText;
+                }
+                scrollToBottom();
+            }
+        }
+
+        if (!currentAiWrapper && !metaReceived) {
+            addMessage('error', 'No response from streaming endpoint.');
+        }
+        // Auto-title new sessions after first exchange
+        const sessions = getLocalSessions();
+        const s = sessions.find(x => x.id === currentSessionId);
+        if (s && s.messages.filter(m => m.role === 'ai').length === 1) {
+            autoUpdateSessionTitle(currentSessionId);
+        }
+        checkApprovalQueue();
+    } catch (err) {
+        setTyping(false);
+        addMessage('error', `Stream error: ${err.message}`);
+    }
+    sendBtn.disabled = false;
+    scrollToBottom();
+}
+
+// ============================================
+// Feature: Voice output (TTS)
+// ============================================
+function speakText(text) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.1;
+    utterance.pitch = 1.0;
+    window.speechSynthesis.speak(utterance);
+}
+
+// ============================================
+// Feature: Conversation branching
+// ============================================
+async function branchAtMessage(msgId) {
+    const wrapper = document.querySelector(`[data-message-id="${msgId}"]`);
+    if (!wrapper) return;
+    const messages = document.getElementById('messages');
+    const allWrappers = Array.from(messages.querySelectorAll('.message-wrapper'));
+    const idx = allWrappers.indexOf(wrapper);
+    if (idx < 0) return;
+
+    try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/branch`, {
+            method: 'POST',
+            body: JSON.stringify({ message_index: idx })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        currentSessionId = data.session_id;
+        localStorage.setItem('current_session_secret', data.session_secret);
+
+        // Truncate local session messages to branch point
+        const sessions = getLocalSessions();
+        const s = sessions.find(x => x.id === currentSessionId);
+        if (s) {
+            s.messages = s.messages.slice(0, idx + 1);
+            saveLocalSessions(sessions);
+        }
+
+        // Refresh UI
+        loadSession(currentSessionId);
+        addMessage('system', '🌿 Branched conversation. You are now in a new session.');
+    } catch (e) {
+        addMessage('error', 'Branch failed: ' + e.message);
+    }
+}
+
+// ============================================
+// Feature: Message retry with comparison
+// ============================================
+async function retryMessage(msgId) {
+    const wrapper = document.querySelector(`[data-message-id="${msgId}"]`);
+    if (!wrapper) return;
+    const oldText = wrapper.dataset.rawText || '';
+
+    // Find the previous user message
+    const messages = document.getElementById('messages');
+    const allWrappers = Array.from(messages.querySelectorAll('.message-wrapper'));
+    const idx = allWrappers.indexOf(wrapper);
+    let userText = '';
+    for (let i = idx - 1; i >= 0; i--) {
+        if (allWrappers[i].dataset.role === 'user') {
+            userText = allWrappers[i].dataset.rawText || '';
+            break;
+        }
+    }
+    if (!userText) {
+        addMessage('error', 'Could not find the original question to retry.');
+        return;
+    }
+
+    setTyping(true);
+    try {
+        const res = await apiFetch('/api/chat', {
+            method: 'POST',
+            body: JSON.stringify({ message: userText, session_id: currentSessionId })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        setTyping(false);
+
+        const newText = data.response || '(no response)';
+        wrapper.dataset.rawText = newText;
+        wrapper.querySelector('.message-body').innerHTML = renderMessageContent(newText);
+
+        // Add comparison note
+        addMessage('system', '🔄 Retry complete. Hover the message to see it was regenerated.');
+    } catch (e) {
+        setTyping(false);
+        addMessage('error', 'Retry failed: ' + e.message);
+    }
+}
+
+// ============================================
+// Feature: Session sharing
+// ============================================
+async function shareCurrentSession() {
+    if (!currentSessionId) return;
+    try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(currentSessionId)}/share`, {
+            method: 'POST'
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const url = `${window.location.origin}/api/share/${data.share_token}`;
+        addMessage('system', `🔗 Share link (valid 24h):\n${url}`);
+    } catch (e) {
+        addMessage('error', 'Share failed: ' + e.message);
+    }
+}
+
+async function updateSessionTitle(sessionId, title) {
+    try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/title`, {
+            method: 'POST',
+            body: JSON.stringify({ title })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const sessions = getLocalSessions();
+        const s = sessions.find(x => x.id === sessionId);
+        if (s) { s.title = title; saveLocalSessions(sessions); }
+        renderChatHistory();
+        addMessage('system', `📌 Title updated to: "${title}"`);
+    } catch (e) {
+        addMessage('error', 'Title update failed: ' + e.message);
+    }
+}
+
+// ============================================
+// Feature: Global fuzzy search
+// ============================================
+async function runGlobalSearch(query) {
+    try {
+        const res = await apiFetch('/api/search?q=' + encodeURIComponent(query));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const results = data.results || [];
+        if (!results.length) {
+            addMessage('system', `🔍 No results for "${query}".`);
+            return;
+        }
+        let msg = `🔍 Search results for "${query}":\n\n`;
+        for (const r of results.slice(0, 10)) {
+            const icon = r.type === 'memory' ? '🧠' : '💬';
+            msg += `${icon} **${r.title}**\n${r.content.slice(0, 120)}${r.content.length > 120 ? '...' : ''}\n\n`;
+        }
+        addMessage('system', msg);
+    } catch (e) {
+        addMessage('error', 'Search failed: ' + e.message);
+    }
+}
+
+// ============================================
+// Feature: Memory backup / restore
+// ============================================
+async function backupMemories() {
+    try {
+        const res = await apiFetch('/api/memory/backup');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'muccheai-memories.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        alert('Memories backed up successfully.');
+    } catch (e) {
+        alert('Backup failed: ' + e.message);
+    }
+}
+
+async function restoreMemories() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const entries = JSON.parse(text);
+            const res = await apiFetch('/api/memory/restore', {
+                method: 'POST',
+                body: JSON.stringify({ entries })
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            alert(`Restored ${data.restored} memories.`);
+            loadMemory();
+        } catch (e) {
+            alert('Restore failed: ' + e.message);
+        }
+    };
+    input.click();
+}
+
+// ============================================
+// Feature: Offline queue
+// ============================================
+function processOfflineQueue() {
+    if (!navigator.onLine || !offlineQueue.length) return;
+    const queue = [...offlineQueue];
+    offlineQueue = [];
+    for (const item of queue) {
+        sendMessageFromQueue(item);
+    }
+}
+
+async function sendMessageFromQueue(item) {
+    const input = document.getElementById('input');
+    input.value = item.text;
+    await sendMessage();
+}
+
+window.addEventListener('online', () => {
+    isOnline = true;
+    addMessage('system', '🌐 Back online. Processing queued messages...');
+    processOfflineQueue();
+});
+
+window.addEventListener('offline', () => {
+    isOnline = false;
+    addMessage('system', '⚠️ You are offline. Messages will be queued.');
+});
+
+// ============================================
+// Delegated listeners for new message actions
+// ============================================
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-speak-target]');
+    if (btn) {
+        const wrapper = document.querySelector(`[data-message-id="${btn.dataset.speakTarget}"]`);
+        if (wrapper) speakText(wrapper.dataset.rawText || '');
+        return;
+    }
+    const retryBtn = e.target.closest('[data-retry-target]');
+    if (retryBtn) {
+        retryMessage(retryBtn.dataset.retryTarget);
+        return;
+    }
+    const branchBtn = e.target.closest('[data-branch-target]');
+    if (branchBtn) {
+        branchAtMessage(branchBtn.dataset.branchTarget);
+        return;
+    }
+});
+
+// Auto-update session title from first exchange
+async function autoUpdateSessionTitle(sessionId) {
+    const sessions = getLocalSessions();
+    const s = sessions.find(x => x.id === sessionId);
+    if (!s || !s.messages.length) return;
+    // Only auto-title if title is currently just the first message truncated
+    const firstUser = s.messages.find(m => m.role === 'user');
+    if (!firstUser) return;
+    const expectedDefault = firstUser.content.length > 40
+        ? firstUser.content.slice(0, 40) + '...'
+        : firstUser.content;
+    if (s.title !== expectedDefault) return; // user already renamed
+
+    // Ask the LLM for a short title
+    try {
+        const res = await apiFetch('/api/chat', {
+            method: 'POST',
+            body: JSON.stringify({
+                message: `Generate a very short 3-5 word title for this conversation. Reply with ONLY the title, no quotes, no punctuation.\n\nUser: ${firstUser.content}`,
+                session_id: null
+            })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const title = (data.response || '').trim().replace(/^["']|["']$/g, '').slice(0, 50);
+        if (title) {
+            await updateSessionTitle(sessionId, title);
+        }
+    } catch (e) {
+        // silently fail
+    }
+}
+
+
+// ============================================
+// Feature: Inline file previews
+// ============================================
+async function loadInlineFilePreviews() {
+    const container = document.getElementById('inlineFilePreviews');
+    if (!container) return;
+    try {
+        const res = await apiFetch('/api/memory');
+        if (!res.ok) return;
+        const data = await res.json();
+        const uploads = (data.entries || []).filter(e => e.key.startsWith('upload:'));
+        if (!uploads.length) {
+            container.style.display = 'none';
+            return;
+        }
+        container.style.display = 'block';
+        container.innerHTML = uploads.map(u => {
+            const filename = (u.value && u.value.filename) || u.key.replace('upload:', '');
+            const text = (u.value && u.value.text) || '';
+            const preview = text.slice(0, 300).replace(/</g, '&lt;');
+            return `<details class="file-preview">
+                <summary>📄 ${escapeHtml(filename)}</summary>
+                <pre class="file-preview-content">${preview}${text.length > 300 ? '...' : ''}</pre>
+            </details>`;
+        }).join('');
+    } catch (e) {
+        container.style.display = 'none';
+    }
+}
