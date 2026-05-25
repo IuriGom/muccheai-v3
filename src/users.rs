@@ -28,7 +28,17 @@ impl UserDb {
 
         if path.exists() {
             let text = std::fs::read_to_string(&path)?;
-            let users: Vec<User> = serde_json::from_str(&text)?;
+            // Decrypt if the file has the enc: prefix; otherwise read plaintext (legacy compat).
+            let plaintext = if let Some(hex_ct) = text.strip_prefix("enc:") {
+                let ciphertext = hex::decode(hex_ct).map_err(|e| anyhow::anyhow!("invalid hex: {}", e))?;
+                let key = crate::config::MuccheConfig::load_or_create_machine_key();
+                crate::config::decrypt_aes_256_gcm(&ciphertext, &key)
+                    .map_err(|e| anyhow::anyhow!("decrypt failed: {}", e))
+                    .and_then(|v| String::from_utf8(v).map_err(|e| anyhow::anyhow!("utf8: {}", e)))?
+            } else {
+                text
+            };
+            let users: Vec<User> = serde_json::from_str(&plaintext)?;
             let map: HashMap<String, User> = users
                 .into_iter()
                 .map(|u| (u.username.clone(), u))
@@ -45,8 +55,11 @@ impl UserDb {
     pub fn save(&self) -> anyhow::Result<()> {
         let users: Vec<&User> = self.users.values().collect();
         let json = serde_json::to_string_pretty(&users)?;
+        let key = crate::config::MuccheConfig::load_or_create_machine_key();
+        let ciphertext = crate::config::encrypt_aes_256_gcm(json.as_bytes(), &key)?;
+        let payload = format!("enc:{}", hex::encode(ciphertext));
         let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, json)?;
+        std::fs::write(&tmp, payload)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -104,7 +117,7 @@ impl UserDb {
     }
 }
 
-fn hash_password(password: &str, salt: &[u8; 16]) -> anyhow::Result<String> {
+pub(crate) fn hash_password(password: &str, salt: &[u8; 16]) -> anyhow::Result<String> {
     use argon2::{Argon2, Algorithm, Params, Version};
     let params = Params::new(65536, 3, 4, Some(32)).expect("valid argon2 params");
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);

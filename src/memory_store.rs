@@ -237,11 +237,7 @@ impl MemoryStore {
         let _lock = FileLock::acquire(&lock_path)?;
         let mut entries = self.read_entries()?;
         let original_len = entries.len();
-        if owner.is_empty() {
-            entries.retain(|e| e.key != key);
-        } else {
-            entries.retain(|e| e.key != key || e.owner_hash != owner);
-        }
+        entries.retain(|e| e.key != key || e.owner_hash != owner);
 
         if entries.len() == original_len {
             return Ok(false);

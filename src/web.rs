@@ -110,6 +110,7 @@ pub struct AppState {
     pub mcp_tools_cache: Mutex<Vec<CachedMcpTool>>,
     pub tool_config: Mutex<ToolConfig>,
     pub csrf_tokens: Mutex<HashMap<String, String>>,
+    pub rng: ring::rand::SystemRandom,
 }
 
 #[derive(Clone)]
@@ -400,12 +401,24 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 
 async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
     let token = extract_bearer_token(headers)?;
-    let mut sessions = state.sessions.lock().await;
-    const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-    let now = Instant::now();
-    // Evict expired sessions while we're here.
-    sessions.retain(|_, s| now.saturating_duration_since(s.created_at) <= SESSION_TTL);
-    sessions.get(&token).map(|s| s.owner_hash.clone())
+    // Fast path: read-only lookup.
+    let (owner, expired) = {
+        let sessions = state.sessions.lock().await;
+        match sessions.get(&token) {
+            Some(s) => {
+                const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+                let expired = Instant::now().saturating_duration_since(s.created_at) > SESSION_TTL;
+                (Some(s.owner_hash.clone()), expired)
+            }
+            None => (None, false),
+        }
+    };
+    // Slow path: evict just this token if it was expired.
+    if expired {
+        let mut sessions = state.sessions.lock().await;
+        sessions.remove(&token);
+    }
+    owner
 }
 
 /// Bearer token authentication middleware + CSRF protection for mutating requests
@@ -709,7 +722,7 @@ async fn rate_limit_middleware(
 ) -> Response {
     let direct_ip = addr.ip();
     let is_proxy = match direct_ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        std::net::IpAddr::V4(v4) => v4.is_loopback(),
         std::net::IpAddr::V6(v6) => v6.is_loopback(),
     };
     let ip = if is_proxy {
@@ -930,7 +943,7 @@ async fn chat(
     let mut sessions = state.chat_sessions.lock().await;
     let session_id = req.session_id.clone().unwrap_or_else(|| {
         let mut buf = [0u8; 16];
-        ring::rand::SystemRandom::new()
+        state.rng
             .fill(&mut buf)
             .expect("CSPRNG failure");
         format!("session-{}", hex::encode(buf))
@@ -1623,7 +1636,7 @@ async fn process_mcp_tool_calls(
                             timestamp: Timestamp::now(),
                             nonce: {
                                 let mut n = [0u8; 16];
-                                ring::rand::SystemRandom::new()
+                                state.rng
                                     .fill(&mut n)
                                     .expect("CSPRNG failure");
                                 n.to_vec()
@@ -1736,14 +1749,8 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
         let sandbox = state.sandbox.lock().await;
         let config = state.config.lock().await;
 
-        let last_audit = policy.query_audit_log(&AuditQuery {
-            from: Timestamp(0),
-            to: Timestamp::now(),
-            tool_id: None,
-            requester: None,
-            event_type: None,
-        });
-        let last_audit_entry = last_audit.entries.last().map(|_| "available".to_string());
+        // Do not expose audit log existence to unauthenticated callers.
+        let last_audit_entry: Option<String> = None;
 
         (
             sandbox.is_running(),
@@ -2274,20 +2281,27 @@ async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    if req.username.is_empty() || req.password.len() < 1 {
+    if req.username.is_empty() || req.password.len() < 8 {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let dummy_salt = [0u8; 16];
     let (owner_hash, username) = {
         let mut users = state.users.lock().await;
+        if users.get(&req.username).is_some() {
+            // Normalize timing: perform a dummy hash so the failure path
+            // takes roughly as long as a successful create_user.
+            let _ = crate::users::hash_password(&req.password, &dummy_salt);
+            return Err(StatusCode::CONFLICT);
+        }
         users.create_user(&req.username, &req.password)
-            .map_err(|_| StatusCode::CONFLICT)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let user = users.get(&req.username)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
         (user.owner_hash.clone(), user.username.clone())
     };
 
     let mut buf = [0u8; 32];
-    ring::rand::SystemRandom::new()
+    state.rng
         .fill(&mut buf)
         .expect("CSPRNG failure");
     let token = hex::encode(buf);
@@ -2311,6 +2325,7 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
+    let dummy_salt = [0u8; 16];
     let user = {
         let users = state.users.lock().await;
         users.verify(&req.username, &req.password).cloned()
@@ -2318,7 +2333,7 @@ async fn login(
     match user {
         Some(u) => {
             let mut buf = [0u8; 32];
-            ring::rand::SystemRandom::new()
+            state.rng
                 .fill(&mut buf)
                 .expect("CSPRNG failure");
             let token = hex::encode(buf);
@@ -2336,7 +2351,12 @@ async fn login(
                 username: u.username.clone(),
             }))
         }
-        None => Err(StatusCode::UNAUTHORIZED),
+        None => {
+            // Normalize timing: perform a dummy hash so failure path
+            // takes roughly as long as a successful verify.
+            let _ = crate::users::hash_password(&req.password, &dummy_salt);
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 }
 
@@ -2350,7 +2370,7 @@ async fn get_csrf(
         return Json(serde_json::json!({ "error": "Not authenticated" }));
     }
     let mut buf = [0u8; 32];
-    ring::rand::SystemRandom::new().fill(&mut buf).expect("CSPRNG failure");
+    state.rng.fill(&mut buf).expect("CSPRNG failure");
     let token = hex::encode(buf);
     let mut store = state.csrf_tokens.lock().await;
     store.insert(owner, token.clone());
@@ -2403,21 +2423,21 @@ async fn logout(
     headers: HeaderMap,
 ) -> StatusCode {
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
-    let mut chat = state.chat_sessions.lock().await;
-    chat.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
-    drop(chat);
-    let mut revoked = state.revoked_tokens.lock().await;
-    revoked.insert(owner.clone());
-    save_revoked_tokens(&revoked);
-    // Remove the session token itself.
+    if !owner.is_empty() {
+        let mut chat = state.chat_sessions.lock().await;
+        chat.retain(|s| !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()));
+        drop(chat);
+        let mut tokens = state.csrf_tokens.lock().await;
+        tokens.remove(&owner);
+    }
+    // Always revoke the bearer token itself, even if session already expired.
     if let Some(token) = extract_bearer_token(&headers) {
         let mut sessions = state.sessions.lock().await;
         sessions.remove(&token);
-    }
-    // Clear CSRF token keyed by owner_hash.
-    if !owner.is_empty() {
-        let mut tokens = state.csrf_tokens.lock().await;
-        tokens.remove(&owner);
+        drop(sessions);
+        let mut revoked = state.revoked_tokens.lock().await;
+        revoked.insert(token);
+        save_revoked_tokens(&revoked);
     }
     StatusCode::NO_CONTENT
 }
@@ -2581,8 +2601,6 @@ async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<McpServerL
     Json(McpServerListResponse { servers })
 }
 
-const ALLOWED_MCP_COMMANDS: &[&str] = &["npx", "npm", "node", "bun", "deno"];
-
 async fn add_mcp_server(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddMcpServerRequest>,
@@ -2594,11 +2612,8 @@ async fn add_mcp_server(
     if req.transport == "stdio" {
         if let Some(ref cmd) = req.command {
             let cmd_path = std::path::Path::new(cmd);
-            let cmd_name = cmd_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(cmd);
-            if !ALLOWED_MCP_COMMANDS.contains(&cmd_name) {
+            // Require absolute paths only — no PATH resolution, no interpreters.
+            if !cmd.starts_with('/') {
                 return Err(StatusCode::BAD_REQUEST);
             }
             if cmd_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -2638,6 +2653,18 @@ async fn add_mcp_server(
         }
     }
 
+    // Encrypt MCP API key before it ever touches disk.
+    let encrypted_key = req.api_key.as_ref().and_then(|k| {
+        let key = MuccheConfig::load_or_create_machine_key();
+        match crate::config::encrypt_aes_256_gcm(k.as_bytes(), &key) {
+            Ok(ct) => Some(format!("enc:{}", hex::encode(ct))),
+            Err(e) => {
+                tracing::warn!("Failed to encrypt MCP API key: {}", e);
+                None
+            }
+        }
+    });
+
     let mut cfg = state.tool_config.lock().await;
     if cfg.mcp.is_none() {
         cfg.mcp = Some(muccheai_tool_gateway::config::McpConfig::default());
@@ -2650,12 +2677,10 @@ async fn add_mcp_server(
             command: req.command,
             args: req.args,
             url: req.url,
-            api_key: req.api_key,
+            api_key: encrypted_key.or(req.api_key),
         },
     );
-    let mut cfg_save = cfg.clone();
-    crate::config::encrypt_mcp_keys(&mut cfg_save);
-    cfg_save.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     drop(cfg);
 
     // Refresh MCP tools cache in the background

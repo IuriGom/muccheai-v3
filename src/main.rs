@@ -856,6 +856,7 @@ async fn run_web_server(bind: &str) {
         mcp_tools_cache: Mutex::new(mcp_tools_cache),
         tool_config: Mutex::new(ToolConfig::load()),
         csrf_tokens: Mutex::new(std::collections::HashMap::new()),
+        rng: ring::rand::SystemRandom::new(),
     });
 
     println!("🔐 Login with username 'admin' and your existing API key.");

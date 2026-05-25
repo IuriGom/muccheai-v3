@@ -166,7 +166,7 @@ impl StructuredMemoryManager {
         let mut found = false;
         for p in &mut proposals {
             if p.id == id && p.status == ProposalStatus::Pending {
-                if !p.entry.owner_hash.is_empty() && p.entry.owner_hash != owner {
+                if p.entry.owner_hash != owner {
                     return Ok(false);
                 }
                 p.status = ProposalStatus::Approved;
@@ -197,7 +197,7 @@ impl StructuredMemoryManager {
         let mut found = false;
         for p in &mut proposals {
             if p.id == id && p.status == ProposalStatus::Pending {
-                if !p.entry.owner_hash.is_empty() && p.entry.owner_hash != owner {
+                if p.entry.owner_hash != owner {
                     return Ok(false);
                 }
                 p.status = ProposalStatus::Rejected;
@@ -259,7 +259,7 @@ impl StructuredMemoryManager {
         self.store
             .list()
             .into_iter()
-            .filter(|e| e.owner_hash.is_empty() || e.owner_hash == owner)
+            .filter(|e| e.owner_hash == owner)
             .collect()
     }
 
