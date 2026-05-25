@@ -121,11 +121,6 @@ pub enum SecurityEvent {
         /// Response phase (detect, contain, eradicate, recover)
         phase: String,
     },
-    /// Duress mode activated
-    DuressModeActivated {
-        /// What triggered duress mode
-        trigger: String,
-    },
     /// System boot verified
     BootVerified {
         /// TPM / secure boot measurements

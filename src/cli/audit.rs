@@ -233,7 +233,6 @@ pub fn audit(tool: Option<String>, from: Option<String>, to: Option<String>, jso
                 SecurityEvent::SandboxTerminated { .. } => "SandboxTerminated",
                 SecurityEvent::AnomalyDetected { .. } => "AnomalyDetected",
                 SecurityEvent::IncidentResponse { .. } => "IncidentResponse",
-                SecurityEvent::DuressModeActivated { .. } => "DuressModeActivated",
                 SecurityEvent::BootVerified { .. } => "BootVerified",
                 SecurityEvent::BuildAttestationVerified { .. } => "BuildAttestationVerified",
                 SecurityEvent::McpToolInvoked { .. } => "McpToolInvoked",

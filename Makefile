@@ -1,13 +1,13 @@
 # MuccheAI v3.0 — One-command install
 # Just type: make install
 
-.PHONY: install build test clean setup
+.PHONY: install build test clean setup reset deep-clean
 
 INSTALL_DIR := $(HOME)/.cargo/bin
 BINARY := $(INSTALL_DIR)/muccheai
 CONFIG := $(HOME)/.muccheai/config.toml
 
-install: build
+install:
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
 	@echo "║  Installing MuccheAI...                                      ║"
@@ -42,6 +42,11 @@ reset:
 	rm -rf $(HOME)/.muccheai
 	cargo clean
 	@echo "Reset complete. Run 'make install' to start fresh."
+
+deep-clean: clean
+	@echo "Clearing global cargo registry cache..."
+	rm -rf $(HOME)/.cargo/registry/cache
+	@echo "Deep clean complete."
 
 clean:
 	cargo clean

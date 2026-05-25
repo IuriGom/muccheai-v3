@@ -604,7 +604,7 @@ fn run_demo() {
     println!("\nInitializing Trusted UI...");
     let mut trusted_ui = TrustedUi::new();
     println!("  ✓ 4-tier approval system ready");
-    println!("  ✓ Duress detection: enabled");
+    println!("  ✓ Session isolation: per-user");
     println!("  ✓ Risk-proportional friction: configured");
 
     println!("\nFederation protocol initialized...");
