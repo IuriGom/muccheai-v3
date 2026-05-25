@@ -316,6 +316,10 @@ impl StructuredMemoryManager {
 
     /// Store a fact directly (bypasses queue — use only for user-initiated saves).
     pub fn store_fact(&self, key: &str, value: &MemoryValue) -> Result<()> {
+        self.store_fact_by_owner(key, value, "")
+    }
+
+    pub fn store_fact_by_owner(&self, key: &str, value: &MemoryValue, owner: &str) -> Result<()> {
         let mut entry = MemoryEntry {
             memory_type: MemoryType::Fact,
             key: key.to_string(),
@@ -323,7 +327,7 @@ impl StructuredMemoryManager {
             created_at: Timestamp::now(),
             user_signature: vec![],
             content_hash: vec![],
-            owner_hash: String::new(),
+            owner_hash: owner.to_string(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -331,6 +335,10 @@ impl StructuredMemoryManager {
 
     /// Store a preference directly (bypasses queue — use only for user-initiated saves).
     pub fn store_preference(&self, key: &str, value: &MemoryValue) -> Result<()> {
+        self.store_preference_by_owner(key, value, "")
+    }
+
+    pub fn store_preference_by_owner(&self, key: &str, value: &MemoryValue, owner: &str) -> Result<()> {
         if !value.fits_preference_limit() {
             return Err(anyhow::anyhow!("Preference exceeds 1KB limit"));
         }
@@ -341,7 +349,7 @@ impl StructuredMemoryManager {
             created_at: Timestamp::now(),
             user_signature: vec![],
             content_hash: vec![],
-            owner_hash: String::new(),
+            owner_hash: owner.to_string(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)

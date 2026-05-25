@@ -1086,7 +1086,25 @@ async fn ws_chat(
 
 async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppState>, token: String) {
     use axum::extract::ws::Message;
+    use std::time::{Duration, Instant};
+    let mut msg_count = 0u32;
+    let mut window_start = Instant::now();
+    const WS_MAX_MSG_PER_MIN: u32 = 60;
+    const WS_WINDOW: Duration = Duration::from_secs(60);
+
     while let Some(Ok(msg)) = socket.recv().await {
+        // Per-connection rate limiting
+        let now = Instant::now();
+        if now.duration_since(window_start) > WS_WINDOW {
+            window_start = now;
+            msg_count = 0;
+        }
+        msg_count += 1;
+        if msg_count > WS_MAX_MSG_PER_MIN {
+            let _ = socket.send(Message::Text(r#"{"error":"Rate limit exceeded"}"#.to_string())).await;
+            continue;
+        }
+
         if let Message::Text(text) = msg {
             let req: Result<ChatRequest, _> = serde_json::from_str(&text);
             if let Ok(req) = req {
@@ -2460,10 +2478,17 @@ async fn upload_file(
     let mut filename = String::new();
     let mut content = String::new();
 
+    const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024; // 10 MB
     while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
         if field.name() == Some("file") {
             filename = field.file_name().unwrap_or("upload.txt").to_string();
             let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            if data.len() > MAX_UPLOAD_SIZE {
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            if std::str::from_utf8(&data).is_err() {
+                return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            }
             content = String::from_utf8_lossy(&data).to_string();
         }
     }
@@ -2472,17 +2497,26 @@ async fn upload_file(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    // Sanitize filename before using as a memory key.
+    let safe_filename: String = filename.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .take(255)
+        .collect();
+    if safe_filename.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let sm = state.structured_memory.lock().await;
     let mut map = serde_json::Map::new();
-    map.insert("filename".to_string(), serde_json::Value::String(filename.clone()));
+    map.insert("filename".to_string(), serde_json::Value::String(safe_filename.clone()));
     map.insert("text".to_string(), serde_json::Value::String(content));
     let value = MemoryValue::JsonObject(map);
-    if let Err(e) = sm.store_fact(&format!("upload:{}", filename), &value) {
+    if let Err(e) = sm.store_fact_by_owner(&format!("upload:{}", safe_filename), &value, &owner) {
         tracing::warn!("Failed to store upload: {}", e);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    Ok(Json(serde_json::json!({ "success": true, "filename": filename })))
+    Ok(Json(serde_json::json!({ "success": true, "filename": safe_filename })))
 }
 
 /// Get CSRF token for web form protection.
@@ -2669,7 +2703,7 @@ async fn export_chat_session(
     let response = axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/markdown; charset=utf-8")
-        .header("Content-Disposition", format!("attachment; filename=\"{}-chat.md\"", id))
+        .header("Content-Disposition", format!("attachment; filename=\"{}-chat.md\"", id.replace('"', "_").replace('\n', "_").replace('\r', "_")))
         .body(axum::body::Body::from(markdown))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response)
@@ -2881,7 +2915,9 @@ async fn delete_mcp_server(
         .map(|m| m.servers.remove(&name).is_some())
         .unwrap_or(false);
     if removed {
-        cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut cfg_save = cfg.clone();
+        crate::config::encrypt_mcp_keys(&mut cfg_save);
+        cfg_save.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         drop(cfg);
 
         // Refresh MCP tools cache in the background
