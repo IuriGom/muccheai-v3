@@ -302,6 +302,10 @@ pub struct MuccheConfig {
     /// Show reasoning steps in the UI.
     #[serde(default = "default_true")]
     pub show_reasoning: bool,
+    /// IP addresses or CIDR ranges of trusted reverse proxies.
+    /// If empty (default), X-Forwarded-For is never trusted.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl std::fmt::Debug for MuccheConfig {
@@ -379,6 +383,7 @@ impl Default for MuccheConfig {
             dual_verification: true,
             auto_approve_low_risk: false,
             show_reasoning: true,
+            trusted_proxies: Vec::new(),
         }
     }
 }

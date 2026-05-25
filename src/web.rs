@@ -399,6 +399,28 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     auth.strip_prefix("Bearer ").map(|s| s.to_string())
 }
 
+/// Basic IPv4 CIDR check. Returns false for IPv6 or malformed input.
+fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
+    let parts: Vec<&str> = cidr.split('/').collect();
+    if parts.len() != 2 {
+        return ip == cidr;
+    }
+    let prefix_len: u32 = match parts[1].parse() {
+        Ok(n) if n <= 32 => n,
+        _ => return ip == parts[0],
+    };
+    let ip_u32 = match ip.parse::<std::net::Ipv4Addr>() {
+        Ok(a) => u32::from_be_bytes(a.octets()),
+        Err(_) => return false,
+    };
+    let base_u32 = match parts[0].parse::<std::net::Ipv4Addr>() {
+        Ok(a) => u32::from_be_bytes(a.octets()),
+        Err(_) => return false,
+    };
+    let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+    (ip_u32 & mask) == (base_u32 & mask)
+}
+
 async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
     let token = extract_bearer_token(headers)?;
     // Fast path: read-only lookup.
@@ -716,20 +738,29 @@ async fn rate_limit_middleware(
     next: Next,
 ) -> Response {
     let direct_ip = addr.ip();
-    let is_proxy = match direct_ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback(),
-        std::net::IpAddr::V6(v6) => v6.is_loopback(),
-    };
-    let ip = if is_proxy {
+    let config = state.config.lock().await;
+    let trusted = config.trusted_proxies.clone();
+    drop(config);
+    let direct_ip_str = direct_ip.to_string();
+    let is_trusted_proxy = !trusted.is_empty()
+        && trusted.iter().any(|p| {
+            // Support exact IP match or simple CIDR (e.g. "10.0.0.0/8")
+            if p.contains('/') {
+                ip_in_cidr(&direct_ip_str, p)
+            } else {
+                p == &direct_ip_str
+            }
+        });
+    let ip = if is_trusted_proxy {
         request
             .headers()
             .get("x-forwarded-for")
             .and_then(|h| h.to_str().ok())
             .and_then(|s| s.split(',').next())
             .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| direct_ip.to_string())
+            .unwrap_or_else(|| direct_ip_str.clone())
     } else {
-        direct_ip.to_string()
+        direct_ip_str
     };
     let now = Instant::now();
     let window = Duration::from_secs(60);
@@ -2715,9 +2746,7 @@ async fn delete_mcp_server(
         .map(|m| m.servers.remove(&name).is_some())
         .unwrap_or(false);
     if removed {
-        let mut cfg_save = cfg.clone();
-        crate::config::encrypt_mcp_keys(&mut cfg_save);
-        cfg_save.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         drop(cfg);
 
         // Refresh MCP tools cache in the background
