@@ -16,9 +16,7 @@ use muccheai_tool_gateway::config::ToolConfig;
 use muccheai_types::*;
 use muccheai_types::capabilities::*;
 use muccheai_types::crypto_primitives::*;
-use muccheai_types::memory
-// TODO: wire everything
-::*;
+use muccheai_types::memory::*;
 use muccheai_memory::MemoryEngine;
 use muccheai_ui::*;
 use muccheai_vault::*;
