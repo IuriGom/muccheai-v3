@@ -1106,11 +1106,15 @@ async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<A
         }
 
         if let Message::Text(text) = msg {
+            // Re-validate the token on every message.
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", format!("Bearer {}", token).parse().unwrap());
+            if get_session_owner(&state, &headers).await.is_none() {
+                let _ = socket.send(Message::Text(r#"{"error":"Session expired"}"#.to_string())).await;
+                break;
+            }
             let req: Result<ChatRequest, _> = serde_json::from_str(&text);
             if let Ok(req) = req {
-                // Reconstruct headers with bearer token for auth
-                let mut headers = HeaderMap::new();
-                headers.insert("authorization", format!("Bearer {}", token).parse().unwrap());
                 let response = process_chat(&state, &headers, &req).await;
                 let json = serde_json::to_string(&response).unwrap_or_default();
                 let _ = socket.send(Message::Text(json)).await;
@@ -2541,7 +2545,7 @@ async fn upload_file(
                 .await
                 .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
                 .map_err(|e| {
-                    tracing::warn!("PDF extraction failed: {:?}", e);
+                    tracing::warn!("PDF extraction panicked: {:?}", e);
                     StatusCode::BAD_REQUEST
                 })?
                 .map_err(|e| {
