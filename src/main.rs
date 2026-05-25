@@ -35,7 +35,26 @@ use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCo
 
 #[tokio::main]
 async fn main() {
-    if std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
+    let password_flag = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".muccheai")
+        .join(".password_required");
+    if password_flag.exists() && std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
+        eprintln!("╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("║  PASSWORD REQUIRED                                           ║");
+        eprintln!("╚══════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        eprintln!("  A password was configured during setup to protect your local key.");
+        eprintln!("  Set the environment variable before running MuccheAI:");
+        eprintln!();
+        eprintln!("    export MUCCHEAI_KEY_PASSWORD='your-password'");
+        eprintln!();
+        eprintln!("  Or run with the variable inline:");
+        eprintln!();
+        eprintln!("    MUCCHEAI_KEY_PASSWORD='your-password' muccheai ...");
+        eprintln!();
+        std::process::exit(1);
+    } else if std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
         eprintln!("WARNING: MUCCHEAI_KEY_PASSWORD not set. Machine key is raw material — set a password for Argon2id derivation.");
     }
 

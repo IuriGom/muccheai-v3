@@ -1791,13 +1791,32 @@ async function runResearch() {
     const researchPrompt = `${historyContext}\n---\nBased on the above chat history, please answer this research question:\n${query}`;
 
     try {
-        const res = await apiFetch('/api/chat', {
+        let res = await apiFetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: researchPrompt, research: true })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        let data = await res.json();
+
+        // External provider requires explicit confirmation
+        if (data.needs_confirmation) {
+            const confirmed = confirm(data.needs_confirmation + '\n\nDo you want to proceed?');
+            if (!confirmed) {
+                resultDiv.textContent = 'Research cancelled.';
+                loadingDiv.style.display = 'none';
+                return;
+            }
+            // Re-send with confirmation flag
+            res = await apiFetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: researchPrompt, research: true, research_confirmed: true })
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            data = await res.json();
+        }
+
         resultDiv.textContent = data.response || '(no response)';
     } catch (e) {
         resultDiv.textContent = 'Error: ' + e.message;

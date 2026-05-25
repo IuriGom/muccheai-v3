@@ -136,10 +136,12 @@ pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<String>,
     /// When true, the request is a research query that bundles chat history.
-    /// Research is blocked if any configured agent uses an external provider
-    /// to prevent private history from leaking to third-party APIs.
+    /// Research requires confirmation if any configured agent uses an external provider.
     #[serde(default)]
     pub research: bool,
+    /// User has explicitly confirmed they want to send history to an external provider.
+    #[serde(default)]
+    pub research_confirmed: bool,
 }
 
 /// Chat response
@@ -148,6 +150,10 @@ pub struct ChatResponse {
     pub response: String,
     pub session_id: String,
     pub session_secret: String,
+    /// If set, the frontend should show a confirmation dialog with this message
+    /// and re-send the request with `research_confirmed: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_confirmation: Option<String>,
 }
 
 /// System status
@@ -857,18 +863,21 @@ async fn process_chat(
 ) -> ChatResponse {
     let config = state.config.lock().await;
 
-    // Block research requests when any configured agent uses an external provider.
+    // Research with external providers requires explicit confirmation.
     if req.research {
         let has_external = std::iter::once(config.active_agent_config())
             .chain(config.agents.iter().cloned())
             .any(|a| a.provider != "ollama");
-        if has_external {
+        if has_external && !req.research_confirmed {
             drop(config);
             return ChatResponse {
-                response: "Research is disabled because an external LLM provider is configured. \
-                    Switch to a local provider (e.g. Ollama) to use research features.".to_string(),
+                response: String::new(),
                 session_id: req.session_id.clone().unwrap_or_default(),
                 session_secret: String::new(),
+                needs_confirmation: Some(
+                    "This research query will send your chat history to an external LLM provider (OpenAI / Anthropic). \
+                     Your data will leave this machine.".to_string()
+                ),
             };
         }
     }
@@ -1056,6 +1065,7 @@ async fn process_chat(
                 response: "Session access denied".to_string(),
                 session_id,
                 session_secret: String::new(),
+                needs_confirmation: None,
             };
         }
         sessions[idx].messages.push(ChatMessage {
@@ -1111,6 +1121,7 @@ async fn process_chat(
         response: text.trim().to_string(),
         session_id,
         session_secret: session_secret,
+        needs_confirmation: None,
     }
 }
 

@@ -10,7 +10,7 @@ use muccheai_policy_engine::rules::RuleAction;
 use rand::RngCore;
 use std::io::Write;
 
-const TOTAL_STEPS: usize = 6;
+const TOTAL_STEPS: usize = 7;
 
 pub fn is_first_run() -> bool {
     !MuccheConfig::config_path().exists()
@@ -98,6 +98,59 @@ pub fn run() -> anyhow::Result<bool> {
         .default(0)
         .items(&providers)
         .interact()?;
+
+    // ── Step 2: Local Key Password ────────────────────────────────────────
+    theme.print_step(2, TOTAL_STEPS, "Protect Your Local Key");
+    println!(
+        "  {}\n",
+        theme.style_secondary().apply_to(
+            "Set a password to encrypt your local API key and other secrets. \
+             If you forget this password, you will need to reset MuccheAI."
+        )
+    );
+
+    let set_password = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Set a password to protect your local key?")
+        .default(true)
+        .interact()?;
+
+    if set_password {
+        let pw: String = Password::with_theme(&ColorfulTheme::default())
+            .with_prompt("Password")
+            .with_confirmation("Confirm password", "Passwords do not match")
+            .interact()?;
+        // Validate password isn't empty
+        if pw.trim().is_empty() {
+            theme.print_warning("Empty password provided — skipping password protection.");
+        } else {
+            // Write flag file so the app knows a password is expected
+            let flag_path = MuccheConfig::config_path()
+                .parent()
+                .unwrap_or(&std::path::PathBuf::from("."))
+                .join(".password_required");
+            let _ = std::fs::write(&flag_path, "This file indicates that MUCCHEAI_KEY_PASSWORD is required.\n");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&flag_path) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o600);
+                    let _ = std::fs::set_permissions(&flag_path, perms);
+                }
+            }
+            theme.print_success("Password protection enabled");
+            println!(
+                "  {}\n",
+                theme.style_secondary().apply_to(
+                    "Remember: set the MUCCHEAI_KEY_PASSWORD environment variable \
+                     before running MuccheAI, or you will be prompted for it."
+                )
+            );
+        }
+    } else {
+        theme.print_info("Skipping password protection. Your local key will be stored as raw material.");
+    }
+    println!();
 
     let (agent, host, model) = match provider_idx {
         0 => {
@@ -230,8 +283,8 @@ pub fn run() -> anyhow::Result<bool> {
         }
     };
 
-    // ── Step 2: Tools ─────────────────────────────────────────────────────
-    theme.print_step(2, TOTAL_STEPS, "Choose Your Tools");
+    // ── Step 3: Tools ─────────────────────────────────────────────────────
+    theme.print_step(3, TOTAL_STEPS, "Choose Your Tools");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -255,8 +308,8 @@ pub fn run() -> anyhow::Result<bool> {
         theme.print_success(&format!("Enabled: {}", allowed_tools.join(", ")));
     }
 
-    // ── Step 3: Security ──────────────────────────────────────────────────
-    theme.print_step(3, TOTAL_STEPS, "Security Preferences");
+    // ── Step 4: Security ──────────────────────────────────────────────────
+    theme.print_step(4, TOTAL_STEPS, "Security Preferences");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -300,8 +353,8 @@ pub fn run() -> anyhow::Result<bool> {
 
     theme.print_success("Security preferences configured");
 
-    // ── Step 4: Vault ─────────────────────────────────────────────────────
-    theme.print_step(4, TOTAL_STEPS, "Create Your Vault");
+    // ── Step 5: Vault ─────────────────────────────────────────────────────
+    theme.print_step(5, TOTAL_STEPS, "Create Your Vault");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -371,8 +424,8 @@ pub fn run() -> anyhow::Result<bool> {
         theme.style_secondary().apply_to("5.")
     );
 
-    // ── Step 5: Persona ───────────────────────────────────────────────────
-    theme.print_step(5, TOTAL_STEPS, "Configure Your Persona");
+    // ── Step 6: Persona ───────────────────────────────────────────────────
+    theme.print_step(6, TOTAL_STEPS, "Configure Your Persona");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -413,8 +466,8 @@ pub fn run() -> anyhow::Result<bool> {
 
     theme.print_success("Persona configured");
 
-    // ── Step 6: Save & Finish ─────────────────────────────────────────────
-    theme.print_step(6, TOTAL_STEPS, "Save Configuration");
+    // ── Step 7: Save & Finish ─────────────────────────────────────────────
+    theme.print_step(7, TOTAL_STEPS, "Save Configuration");
 
     let mut config = MuccheConfig {
         ollama_host: host,
