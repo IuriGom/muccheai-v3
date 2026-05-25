@@ -434,14 +434,9 @@ async fn auth_middleware(
     tracing::trace!("auth_middleware: {} {}", method, uri);
 
     let token = extract_bearer_token(&headers);
-    let session_valid = if let Some(ref t) = token {
-        let sessions = state.sessions.lock().await;
-        sessions.get(t).is_some()
-    } else {
-        false
-    };
+    let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
 
-    if !session_valid {
+    if owner_hash.is_empty() {
         let client_ip = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
@@ -459,8 +454,6 @@ async fn auth_middleware(
         )
             .into_response();
     }
-
-    let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
     // Check token revocation by bearer token, not owner_hash.
     if let Some(ref t) = token {
         let revoked = state.revoked_tokens.lock().await;
@@ -2659,16 +2652,18 @@ async fn add_mcp_server(
     }
 
     // Encrypt MCP API key before it ever touches disk.
-    let encrypted_key = req.api_key.as_ref().and_then(|k| {
+    let encrypted_key = if let Some(ref k) = req.api_key {
         let key = MuccheConfig::load_or_create_machine_key();
         match crate::config::encrypt_aes_256_gcm(k.as_bytes(), &key) {
             Ok(ct) => Some(format!("enc:{}", hex::encode(ct))),
             Err(e) => {
-                tracing::warn!("Failed to encrypt MCP API key: {}", e);
-                None
+                tracing::error!("Failed to encrypt MCP API key: {}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
-    });
+    } else {
+        None
+    };
 
     let mut cfg = state.tool_config.lock().await;
     if cfg.mcp.is_none() {
@@ -2682,7 +2677,7 @@ async fn add_mcp_server(
             command: req.command,
             args: req.args,
             url: req.url,
-            api_key: encrypted_key.or(req.api_key),
+            api_key: encrypted_key,
         },
     );
     cfg.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
