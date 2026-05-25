@@ -55,6 +55,18 @@ impl Default for StoredKeypair {
     }
 }
 
+/// Decrypt a single MCP API key if it has the `enc:` prefix.
+pub fn decrypt_mcp_api_key(api_key: &str) -> Option<String> {
+    if let Some(hex_ct) = api_key.strip_prefix("enc:") {
+        let ciphertext = hex::decode(hex_ct).ok()?;
+        let key = MuccheConfig::load_or_create_machine_key();
+        let plaintext = decrypt_aes_256_gcm(&ciphertext, &key).ok()?;
+        String::from_utf8(plaintext).ok()
+    } else {
+        Some(api_key.to_string())
+    }
+}
+
 impl From<HybridKeypair> for StoredKeypair {
     fn from(kp: HybridKeypair) -> Self {
         Self {

@@ -418,7 +418,8 @@ async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<Stri
         let mut sessions = state.sessions.lock().await;
         sessions.remove(&token);
     }
-    owner
+    // Do NOT authenticate requests presenting an expired token.
+    if expired { None } else { owner }
 }
 
 /// Bearer token authentication middleware + CSRF protection for mutating requests
@@ -460,9 +461,10 @@ async fn auth_middleware(
     }
 
     let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
-    if !owner_hash.is_empty() {
+    // Check token revocation by bearer token, not owner_hash.
+    if let Some(ref t) = token {
         let revoked = state.revoked_tokens.lock().await;
-        if revoked.contains(&owner_hash) {
+        if revoked.contains(t) {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error":"Token has been revoked"})),
@@ -1472,7 +1474,8 @@ pub async fn init_mcp_tools() -> Vec<CachedMcpTool> {
                     continue;
                 }
                 if server_config.transport == "http" {
-                    McpTransport::Http { url, api_key: server_config.api_key.clone() }
+                    let decrypted_key = server_config.api_key.as_ref().and_then(|k| crate::config::decrypt_mcp_api_key(k));
+                    McpTransport::Http { url, api_key: decrypted_key }
                 } else {
                     McpTransport::Sse { url }
                 }
@@ -2293,7 +2296,9 @@ async fn register(
             let _ = crate::users::hash_password(&req.password, &dummy_salt);
             return Err(StatusCode::CONFLICT);
         }
-        users.create_user(&req.username, &req.password)
+        let mut salt = [0u8; 16];
+        state.rng.fill(&mut salt).expect("CSPRNG failure");
+        users.create_user(&req.username, &req.password, &salt)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let user = users.get(&req.username)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2801,9 +2806,10 @@ async fn test_mcp_server(
         }
         "http" | "sse" => {
             if let Some(url) = server.url {
+                let decrypted_key = server.api_key.as_ref().and_then(|k| crate::config::decrypt_mcp_api_key(k));
                 McpTransport::Http {
                     url,
-                    api_key: server.api_key,
+                    api_key: decrypted_key,
                 }
             } else {
                 return Json(McpTestResponse {

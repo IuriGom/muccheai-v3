@@ -75,23 +75,18 @@ impl UserDb {
         self.users.get(username)
     }
 
-    pub fn create_user(&mut self, username: &str, password: &str) -> anyhow::Result<()> {
+    pub fn create_user(&mut self, username: &str, password: &str, salt: &[u8; 16]) -> anyhow::Result<()> {
         if self.users.contains_key(username) {
             return Err(anyhow::anyhow!("user already exists"));
         }
-        let mut salt = [0u8; 16];
-        ring::rand::SystemRandom::new()
-            .fill(&mut salt)
-            .expect("CSPRNG failure");
-
-        let password_hash = hash_password(password, &salt)?;
+        let password_hash = hash_password(password, salt)?;
         let owner_hash = hex::encode(muccheai_crypto::sha3_512(password_hash.as_bytes()));
 
         self.users.insert(
             username.to_string(),
             User {
                 username: username.to_string(),
-                salt,
+                salt: *salt,
                 password_hash,
                 owner_hash,
             },
@@ -113,7 +108,11 @@ impl UserDb {
         if !self.users.is_empty() {
             return Ok(());
         }
-        self.create_user("admin", api_key)
+        let mut salt = [0u8; 16];
+        ring::rand::SystemRandom::new()
+            .fill(&mut salt)
+            .expect("CSPRNG failure");
+        self.create_user("admin", api_key, &salt)
     }
 }
 
