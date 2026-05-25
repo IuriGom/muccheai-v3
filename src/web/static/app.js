@@ -1781,7 +1781,7 @@ async function runResearch() {
         const res = await apiFetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: researchPrompt })
+            body: JSON.stringify({ message: researchPrompt, research: true })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();

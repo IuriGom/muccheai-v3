@@ -135,6 +135,11 @@ impl std::fmt::Debug for CachedMcpTool {
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<String>,
+    /// When true, the request is a research query that bundles chat history.
+    /// Research is blocked if any configured agent uses an external provider
+    /// to prevent private history from leaking to third-party APIs.
+    #[serde(default)]
+    pub research: bool,
 }
 
 /// Chat response
@@ -232,6 +237,13 @@ pub struct StoreMemoryRequest {
     pub value: serde_json::Value,
     /// Memory type.
     pub memory_type: MemoryType,
+}
+
+/// Store preference request (bypasses approval queue).
+#[derive(Debug, Deserialize)]
+pub struct StorePreferenceRequest {
+    pub key: String,
+    pub value: serde_json::Value,
 }
 
 /// Propose memory request (goes to approval queue).
@@ -421,6 +433,48 @@ fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
     (ip_u32 & mask) == (base_u32 & mask)
 }
 
+/// Check whether an IP is in the trusted-proxy list (exact match or CIDR).
+fn is_trusted_proxy(ip: &str, trusted: &[String]) -> bool {
+    trusted.iter().any(|p| {
+        if p.contains('/') {
+            ip_in_cidr(ip, p)
+        } else {
+            p == ip
+        }
+    })
+}
+
+/// Extract the client IP from a request, respecting trusted proxies.
+///
+/// If the direct connection came from a trusted proxy we parse
+/// `X-Forwarded-For` **from right to left** and return the first
+/// IP that is *not* itself a trusted proxy.  This prevents a client
+/// from prepending arbitrary IPs to the header and spoofing its
+/// address.
+fn extract_client_ip(direct_ip: &std::net::IpAddr, headers: &HeaderMap, trusted: &[String]) -> String {
+    let direct_ip_str = direct_ip.to_string();
+    if !is_trusted_proxy(&direct_ip_str, trusted) {
+        return direct_ip_str;
+    }
+    let xff = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    // Walk from right to left; the rightmost IP was added by the
+    // proxy closest to this server.  The first non-trusted IP in that
+    // direction is the real client.
+    for ip in xff.split(',').map(|s| s.trim()).rev() {
+        if ip.is_empty() {
+            continue;
+        }
+        if !is_trusted_proxy(ip, trusted) {
+            return ip.to_string();
+        }
+    }
+    // Everything in the chain is a trusted proxy — fall back to direct IP.
+    direct_ip_str
+}
+
 async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
     let token = extract_bearer_token(headers)?;
     // Fast path: read-only lookup.
@@ -447,6 +501,7 @@ async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<Stri
 /// Bearer token authentication middleware + CSRF protection for mutating requests
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     request: axum::extract::Request,
     next: Next,
@@ -459,10 +514,10 @@ async fn auth_middleware(
     let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
 
     if owner_hash.is_empty() {
-        let client_ip = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
+        let config = state.config.lock().await;
+        let trusted = config.trusted_proxies.clone();
+        drop(config);
+        let client_ip = extract_client_ip(&addr.ip(), &headers, &trusted);
         tracing::warn!(
             target: "security",
             "Authentication failed: method={} uri={} client={}",
@@ -741,27 +796,7 @@ async fn rate_limit_middleware(
     let config = state.config.lock().await;
     let trusted = config.trusted_proxies.clone();
     drop(config);
-    let direct_ip_str = direct_ip.to_string();
-    let is_trusted_proxy = !trusted.is_empty()
-        && trusted.iter().any(|p| {
-            // Support exact IP match or simple CIDR (e.g. "10.0.0.0/8")
-            if p.contains('/') {
-                ip_in_cidr(&direct_ip_str, p)
-            } else {
-                p == &direct_ip_str
-            }
-        });
-    let ip = if is_trusted_proxy {
-        request
-            .headers()
-            .get("x-forwarded-for")
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| direct_ip_str.clone())
-    } else {
-        direct_ip_str
-    };
+    let ip = extract_client_ip(&direct_ip, request.headers(), &trusted);
     let now = Instant::now();
     let window = Duration::from_secs(60);
     // GET requests get a higher limit than mutating requests.
@@ -821,6 +856,23 @@ async fn process_chat(
     req: &ChatRequest,
 ) -> ChatResponse {
     let config = state.config.lock().await;
+
+    // Block research requests when any configured agent uses an external provider.
+    if req.research {
+        let has_external = std::iter::once(config.active_agent_config())
+            .chain(config.agents.iter().cloned())
+            .any(|a| a.provider != "ollama");
+        if has_external {
+            drop(config);
+            return ChatResponse {
+                response: "Research is disabled because an external LLM provider is configured. \
+                    Switch to a local provider (e.g. Ollama) to use research features.".to_string(),
+                session_id: req.session_id.clone().unwrap_or_default(),
+                session_secret: String::new(),
+            };
+        }
+    }
+
     let persona = config
         .personas
         .iter()
@@ -2098,6 +2150,24 @@ async fn store_memory(
     }
 }
 
+/// Store a user preference directly (bypasses approval queue).
+async fn store_preference(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<StorePreferenceRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let sm = state.structured_memory.lock().await;
+    let value = json_value_to_memory_value(req.value);
+    match sm.store_preference_by_owner(&req.key, &value, &owner) {
+        Ok(()) => Ok(Json(serde_json::json!({"status":"ok"}))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 /// Delete a structured memory by key.
 async fn delete_memory(
     State(state): State<Arc<AppState>>,
@@ -2397,6 +2467,8 @@ async fn register(
             // Normalize timing: perform a dummy hash so the failure path
             // takes roughly as long as a successful create_user.
             let _ = crate::users::hash_password(&req.password, &dummy_salt);
+            // Also mirror the disk I/O that success does via create_user->save.
+            let _ = users.save();
             return Err(StatusCode::CONFLICT);
         }
         let mut salt = [0u8; 16];
@@ -2463,6 +2535,8 @@ async fn login(
             // Normalize timing: perform a dummy hash so failure path
             // takes roughly as long as a successful verify.
             let _ = crate::users::hash_password(&req.password, &dummy_salt);
+            // Mirror the sessions-lock I/O that the success path performs.
+            let _sessions = state.sessions.lock().await;
             Err(StatusCode::UNAUTHORIZED)
         }
     }
@@ -3258,6 +3332,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/build-verify", get(build_verify))
         .route("/memory", get(list_memories))
         .route("/memory", post(store_memory))
+        .route("/preferences", post(store_preference))
         .route("/memory/:key", delete(delete_memory))
         .route("/memory/queue", get(list_memory_queue))
         .route("/memory/queue", post(propose_memory))
