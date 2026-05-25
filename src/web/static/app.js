@@ -7,6 +7,37 @@ let currentSessionId = null;
 let currentPersona = '';
 let statusPoller = null;
 let lastKnownModel = 'qwen3:14b';
+let ws = null;
+let wsConnected = false;
+
+function initWebSocket() {
+    const token = localStorage.getItem('muccheai_session_token');
+    if (!token || wsConnected) return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/api/chat/ws`;
+    ws = new WebSocket(url);
+    ws.onopen = () => { wsConnected = true; };
+    ws.onclose = () => { wsConnected = false; ws = null; };
+    ws.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.error) {
+            setTyping(false);
+            addMessage('error', data.error);
+        } else {
+            setTyping(false);
+            addMessage('ai', data.response || '(no response)');
+            if (data.session_id) currentSessionId = data.session_id;
+            if (data.session_secret) localStorage.setItem('current_session_secret', data.session_secret);
+            checkApprovalQueue();
+        }
+        document.getElementById('send').disabled = false;
+        scrollToBottom();
+    };
+}
+
+function closeWebSocket() {
+    if (ws) { ws.close(); ws = null; wsConnected = false; }
+}
 
 // ============================================
 // Translations
@@ -198,6 +229,7 @@ async function logout() {
     } catch (e) {
         console.warn('Logout request failed:', e);
     }
+    closeWebSocket();
     localStorage.removeItem('muccheai_session_token');
     localStorage.removeItem('muccheai_session_time');
     localStorage.removeItem('muccheai_csrf_token');
@@ -327,6 +359,7 @@ async function submitApiKey() {
         } catch (e) { /* ignore csrf fetch errors */ }
         hideApiKeyModal();
         pollStatus();
+        initWebSocket();
         if (!localStorage.getItem('muccheai_name')) {
             setTimeout(() => showNameAiModal(), 300);
         }
@@ -386,6 +419,7 @@ async function submitRegister() {
         } catch (e) { /* ignore */ }
         hideApiKeyModal();
         pollStatus();
+        initWebSocket();
         if (!localStorage.getItem('muccheai_name')) {
             setTimeout(() => showNameAiModal(), 300);
         }
@@ -844,6 +878,12 @@ async function sendMessage() {
         renderChatHistory();
     }
 
+    // Prefer WebSocket if connected
+    if (wsConnected && ws) {
+        ws.send(JSON.stringify({ message: text, session_id: currentSessionId }));
+        return;
+    }
+
     try {
         const res = await apiFetch('/api/chat', {
             method: 'POST',
@@ -950,6 +990,7 @@ function renderChatHistory(filterText) {
         list.innerHTML = sessions.map(s => `
             <div class="history-item ${s.id === currentSessionId ? 'active' : ''}" data-session-id="${escapeHtml(s.id)}">
                 <span class="history-title">${escapeHtml(s.title)}</span>
+                <span class="history-export" data-export-id="${escapeHtml(s.id)}" title="Export">⬇️</span>
                 <span class="history-del" data-delete-id="${escapeHtml(s.id)}">🗑</span>
             </div>
         `).join('');
@@ -1098,6 +1139,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const subtabQueue = document.getElementById('subtab-queue');
     if (subtabQueue) subtabQueue.addEventListener('click', () => switchMemorySubtab('queue'));
 
+    // Memory search
+    const memorySearchInput = document.getElementById('memorySearchInput');
+    if (memorySearchInput) {
+        memorySearchInput.addEventListener('input', (e) => {
+            const q = e.target.value.trim();
+            renderMemories(q ? filterMemories(q) : allMemories);
+        });
+    }
+
     // Add memory
     const addMemoryBtn = document.querySelector('#memory-subtab-memories button');
     if (addMemoryBtn) addMemoryBtn.addEventListener('click', addMemoryDirect);
@@ -1139,6 +1189,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Check delete FIRST (it's inside the session item)
                 const del = e.target.closest('[data-delete-id]');
                 if (del) { deleteSession(del.dataset.deleteId, e); return; }
+                const exp = e.target.closest('[data-export-id]');
+                if (exp) { exportChat(exp.dataset.exportId); return; }
                 const item = e.target.closest('[data-session-id]');
                 if (item) { loadSession(item.dataset.sessionId); return; }
             } catch (err) {
@@ -1204,6 +1256,36 @@ function switchMemorySubtab(name) {
     else loadMemory();
 }
 
+function filterMemories(query) {
+    const q = query.toLowerCase();
+    return allMemories.filter(e => {
+        const val = typeof e.value === 'string' ? e.value : JSON.stringify(e.value);
+        return e.key.toLowerCase().includes(q) || val.toLowerCase().includes(q);
+    });
+}
+
+function renderMemories(entries) {
+    const factsEl = document.getElementById('factsList');
+    const prefsEl = document.getElementById('preferencesList');
+    const tasksEl = document.getElementById('taskHistoryList');
+
+    const facts = entries.filter(e => e.memory_type === 'Fact');
+    const prefs = entries.filter(e => e.memory_type === 'Preference');
+    const tasks = entries.filter(e => e.memory_type === 'TaskHistory');
+
+    factsEl.innerHTML = facts.length
+        ? facts.map(e => renderMemoryItem(e)).join('')
+        : '<div class="empty-state">No facts stored yet.</div>';
+
+    prefsEl.innerHTML = prefs.length
+        ? prefs.map(e => renderMemoryItem(e)).join('')
+        : '<div class="empty-state">No preferences stored yet.</div>';
+
+    tasksEl.innerHTML = tasks.length
+        ? tasks.map(e => renderMemoryItem(e)).join('')
+        : '<div class="empty-state">No task history yet.</div>';
+}
+
 async function loadMemory() {
     const factsEl = document.getElementById('factsList');
     const prefsEl = document.getElementById('preferencesList');
@@ -1218,22 +1300,7 @@ async function loadMemory() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         allMemories = data.entries || [];
-
-        const facts = allMemories.filter(e => e.memory_type === 'Fact');
-        const prefs = allMemories.filter(e => e.memory_type === 'Preference');
-        const tasks = allMemories.filter(e => e.memory_type === 'TaskHistory');
-
-        factsEl.innerHTML = facts.length
-            ? facts.map(e => renderMemoryItem(e)).join('')
-            : '<div class="empty-state">No facts stored yet.</div>';
-
-        prefsEl.innerHTML = prefs.length
-            ? prefs.map(e => renderMemoryItem(e)).join('')
-            : '<div class="empty-state">No preferences stored yet.</div>';
-
-        tasksEl.innerHTML = tasks.length
-            ? tasks.map(e => renderMemoryItem(e)).join('')
-            : '<div class="empty-state">No task history yet.</div>';
+        renderMemories(allMemories);
     } catch (e) {
         factsEl.innerHTML = `<div class="empty-state">Failed: ${escapeHtml(e.message)}</div>`;
         prefsEl.innerHTML = '';
@@ -1940,10 +2007,87 @@ function toggleMcpFields() {
     if (httpFields) httpFields.style.display = transport === 'stdio' ? 'none' : 'block';
 }
 
+// Voice input via Web Speech API
+function initVoiceInput() {
+    const voiceBtn = document.getElementById('voiceBtn');
+    if (!voiceBtn || !('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+        if (voiceBtn) voiceBtn.style.display = 'none';
+        return;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        const input = document.getElementById('input');
+        input.value = (input.value + ' ' + transcript).trim();
+        voiceBtn.textContent = '🎤';
+    };
+    recognition.onerror = () => { voiceBtn.textContent = '🎤'; };
+    recognition.onend = () => { voiceBtn.textContent = '🎤'; };
+
+    voiceBtn.addEventListener('click', () => {
+        voiceBtn.textContent = '🔴';
+        recognition.start();
+    });
+}
+
+// File upload handler
+function initFileUpload() {
+    const uploadBtn = document.getElementById('uploadBtn');
+    const fileInput = document.getElementById('fileInput');
+    if (!uploadBtn || !fileInput) return;
+
+    uploadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const res = await fetch('/api/upload', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('muccheai_session_token') || '') },
+                body: formData
+            });
+            if (res.ok) {
+                alert('File uploaded and stored as memory.');
+            } else {
+                alert('Upload failed: HTTP ' + res.status);
+            }
+        } catch (e) {
+            alert('Upload failed: ' + e.message);
+        }
+        fileInput.value = '';
+    });
+}
+
+// Chat export to markdown
+async function exportChat(sessionId) {
+    try {
+        const res = await apiFetch('/api/sessions/' + sessionId + '/export');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = sessionId + '-chat.md';
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Export failed: ' + e.message);
+    }
+}
+
 // Start polling
 document.addEventListener('DOMContentLoaded', () => {
     pollStatus();
     statusPoller = setInterval(pollStatus, 5000);
+    initVoiceInput();
+    initFileUpload();
 });
 
 // ============================================

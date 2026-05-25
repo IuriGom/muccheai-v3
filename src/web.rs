@@ -815,11 +815,11 @@ async fn rate_limit_middleware(
 
 /// Handle chat messages
 /// Supports Ollama, OpenAI, and Anthropic API formats.
-async fn chat(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(req): Json<ChatRequest>,
-) -> Json<ChatResponse> {
+async fn process_chat(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    req: &ChatRequest,
+) -> ChatResponse {
     let config = state.config.lock().await;
     let persona = config
         .personas
@@ -837,7 +837,6 @@ async fn chat(
             }));
 
     let agent = config.active_agent_config();
-    let provider = agent.provider.as_str();
 
     // Build enriched system prompt from persona + cached bootstrap context
     let mut system_prompt = persona.system_prompt.clone();
@@ -849,9 +848,8 @@ async fn chat(
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
     // Inject approved structured memories into the system prompt.
-    // Values are sanitized to prevent prompt injection via crafted memory content.
     {
-        let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+        let owner = get_session_owner(state, headers).await.unwrap_or_default();
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all_by_owner(&owner);
         if !memories.is_empty() {
@@ -922,13 +920,33 @@ async fn chat(
         }
     };
 
-    let text = match call_provider(&agent, provider, &system_prompt, &req.message, temperature, max_tokens, &history).await {
-        Ok(t) => t,
-        Err(_e) => {
-            tracing::error!("LLM provider error: {}", _e);
-            "(The AI service is temporarily unavailable. Please try again later.)".to_string()
+    // Try active agent first, then fall back through other configured agents.
+    let mut text = String::new();
+    let mut last_err = String::new();
+    {
+        let config = state.config.lock().await;
+        let agents_to_try: Vec<_> = std::iter::once(agent.clone())
+            .chain(config.agents.iter().filter(|a| a.name != agent.name).cloned())
+            .collect();
+        drop(config);
+        for fallback_agent in &agents_to_try {
+            let provider = fallback_agent.provider.as_str();
+            match call_provider(fallback_agent, provider, &system_prompt, &req.message, temperature, max_tokens, &history).await {
+                Ok(t) => {
+                    text = t;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Agent '{}' failed: {}", fallback_agent.name, e);
+                    last_err = e;
+                }
+            }
         }
-    };
+    }
+    if text.is_empty() {
+        tracing::error!("All LLM agents failed. Last error: {}", last_err);
+        text = "(The AI service is temporarily unavailable. Please try again later.)".to_string();
+    }
 
     // Extract memory proposals from LLM response and submit to approval queue
     let (cleaned_text, proposals) = extract_memory_proposals(&text);
@@ -936,7 +954,7 @@ async fn chat(
     if !proposals.is_empty() {
         let sm = state.structured_memory.lock().await;
         for (mem_type, key, value) in proposals {
-            let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+            let owner = get_session_owner(state, headers).await.unwrap_or_default();
             let entry = MemoryEntry {
                 memory_type: mem_type,
                 key: key.clone(),
@@ -954,11 +972,9 @@ async fn chat(
 
     // Process any MCP tool calls in the response
     if !mcp_tools.is_empty() && text.contains("<mcp_tool") {
-        let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &mcp_tools, &state).await;
+        let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &mcp_tools, state).await;
         if !tool_results.is_empty() {
             text = tool_cleaned;
-            // Optionally, make a second LLM call with tool results for better UX.
-            // For now, we include the results inline which is simpler and faster.
         }
     }
 
@@ -984,11 +1000,11 @@ async fn chat(
         .unwrap_or("");
     let session_secret = if let Some(idx) = existing {
         if !muccheai_crypto::constant_time::eq(sessions[idx].session_secret.as_bytes(), secret.as_bytes()) {
-            return Json(ChatResponse {
+            return ChatResponse {
                 response: "Session access denied".to_string(),
                 session_id,
                 session_secret: String::new(),
-            });
+            };
         }
         sessions[idx].messages.push(ChatMessage {
             role: "user".to_string(),
@@ -1014,13 +1030,13 @@ async fn chat(
             req.message.clone()
         };
         let mut sec = [0u8; 16];
-        ring::rand::SystemRandom::new().fill(&mut sec).expect("CSPRNG failure");
+        state.rng.fill(&mut sec).expect("CSPRNG failure");
         let secret = hex::encode(sec);
         sessions.push(ChatSession {
             id: session_id.clone(),
             title,
             created_at: timestamp,
-            owner_hash: get_session_owner(&state, &headers).await.unwrap_or_default(),
+            owner_hash: get_session_owner(state, headers).await.unwrap_or_default(),
             session_secret: secret.clone(),
             messages: vec![
                 ChatMessage {
@@ -1039,11 +1055,52 @@ async fn chat(
     };
     drop(sessions);
 
-    Json(ChatResponse {
+    ChatResponse {
         response: text.trim().to_string(),
         session_id,
         session_secret: session_secret,
-    })
+    }
+}
+
+async fn chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<ChatRequest>,
+) -> Json<ChatResponse> {
+    Json(process_chat(&state, &headers, &req).await)
+}
+
+/// WebSocket endpoint for real-time chat.
+async fn ws_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Response {
+    let token = extract_bearer_token(&headers);
+    let owner = get_session_owner(&state, &headers).await;
+    if owner.is_none() || token.is_none() {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    ws.on_upgrade(move |socket| handle_ws_socket(socket, state, token.unwrap()))
+}
+
+async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppState>, token: String) {
+    use axum::extract::ws::Message;
+    while let Some(Ok(msg)) = socket.recv().await {
+        if let Message::Text(text) = msg {
+            let req: Result<ChatRequest, _> = serde_json::from_str(&text);
+            if let Ok(req) = req {
+                // Reconstruct headers with bearer token for auth
+                let mut headers = HeaderMap::new();
+                headers.insert("authorization", format!("Bearer {}", token).parse().unwrap());
+                let response = process_chat(&state, &headers, &req).await;
+                let json = serde_json::to_string(&response).unwrap_or_default();
+                let _ = socket.send(Message::Text(json)).await;
+            } else {
+                let _ = socket.send(Message::Text(r#"{"error":"invalid request"}"#.to_string())).await;
+            }
+        }
+    }
 }
 
 /// Call the configured LLM provider and return the generated text.
@@ -2389,6 +2446,45 @@ async fn login(
     }
 }
 
+/// Upload a file and store its content as a memory entry.
+async fn upload_file(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let mut filename = String::new();
+    let mut content = String::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+        if field.name() == Some("file") {
+            filename = field.file_name().unwrap_or("upload.txt").to_string();
+            let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            content = String::from_utf8_lossy(&data).to_string();
+        }
+    }
+
+    if content.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let sm = state.structured_memory.lock().await;
+    let mut map = serde_json::Map::new();
+    map.insert("filename".to_string(), serde_json::Value::String(filename.clone()));
+    map.insert("text".to_string(), serde_json::Value::String(content));
+    let value = MemoryValue::JsonObject(map);
+    if let Err(e) = sm.store_fact(&format!("upload:{}", filename), &value) {
+        tracing::warn!("Failed to store upload: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    Ok(Json(serde_json::json!({ "success": true, "filename": filename })))
+}
+
 /// Get CSRF token for web form protection.
 async fn get_csrf(
     State(state): State<Arc<AppState>>,
@@ -2538,6 +2634,45 @@ async fn get_chat_session(
         .cloned()
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn export_chat_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, StatusCode> {
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let session = sessions
+        .iter()
+        .find(|s| {
+            s.id == id
+                && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        })
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut markdown = String::new();
+    markdown.push_str(&format!("# {}\n\n", session.title));
+    for msg in &session.messages {
+        let role = match msg.role.as_str() {
+            "user" => "## User",
+            "assistant" => "## Assistant",
+            _ => &format!("## {}", msg.role),
+        };
+        markdown.push_str(&format!("{}\n\n{}\n\n", role, msg.content));
+    }
+    drop(sessions);
+
+    let response = axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/markdown; charset=utf-8")
+        .header("Content-Disposition", format!("attachment; filename=\"{}-chat.md\"", id))
+        .body(axum::body::Body::from(markdown))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
 }
 
 async fn delete_chat_session(
@@ -3008,6 +3143,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memory/queue/:id/approve", post(approve_memory_proposal))
         .route("/memory/queue/:id/reject", post(reject_memory_proposal))
         .route("/chat", post(chat))
+        .route("/chat/ws", get(ws_chat))
         .route("/personas", get(list_personas))
         .route("/personas/switch", post(switch_persona))
         .route("/agents", get(list_agents))
@@ -3023,8 +3159,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/model", post(set_model))
         .route("/sessions", get(list_chat_sessions))
         .route("/sessions/:id", get(get_chat_session))
+        .route("/sessions/:id/export", get(export_chat_session))
         .route("/sessions/:id", delete(delete_chat_session))
         .route("/logout", post(logout))
+        .route("/upload", post(upload_file))
         .route("/mcp/servers", get(list_mcp_servers))
         .route("/mcp/servers", post(add_mcp_server))
         .route("/mcp/servers/:name", delete(delete_mcp_server))

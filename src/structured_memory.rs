@@ -263,6 +263,10 @@ impl StructuredMemoryManager {
             .collect()
     }
 
+    pub fn search_by_owner(&self, query: &str, owner: &str) -> Vec<MemoryEntry> {
+        self.store.search_by_owner(query, owner)
+    }
+
     /// Get a memory by key.
     pub fn get(&self, key: &str) -> Option<MemoryEntry> {
         self.store.get(key)

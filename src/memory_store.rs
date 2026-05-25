@@ -213,14 +213,19 @@ impl MemoryStore {
 
     /// Simple substring search over keys and JSON-serialized values.
     pub fn search(&self, query: &str) -> Vec<MemoryEntry> {
+        self.search_by_owner(query, "")
+    }
+
+    pub fn search_by_owner(&self, query: &str, owner: &str) -> Vec<MemoryEntry> {
         let query = query.to_lowercase();
         let mut entries = self.read_entries().unwrap_or_default();
         entries.retain(|e| {
-            e.key.to_lowercase().contains(&query)
-                || serde_json::to_string(&e.value)
-                    .unwrap_or_default()
-                    .to_lowercase()
-                    .contains(&query)
+            e.owner_hash == owner
+                && (e.key.to_lowercase().contains(&query)
+                    || serde_json::to_string(&e.value)
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&query))
         });
         entries.reverse();
         entries
