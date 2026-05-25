@@ -41,6 +41,8 @@ ring = { workspace = true }
 axum = { version = "0.7", features = ["macros", "ws", "multipart"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "cors", "set-header"] }
+pdf-extract = "0.10"
+docx = "1.1"
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tabled = { workspace = true }

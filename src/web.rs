@@ -2464,6 +2464,34 @@ async fn login(
     }
 }
 
+/// Extract plain text from a DOCX byte slice.
+fn extract_text_from_docx(data: &[u8]) -> Result<String, String> {
+    use std::io::Cursor;
+    let docx_file = docx::DocxFile::from_reader(Cursor::new(data)).map_err(|e| format!("docx read: {:?}", e))?;
+    let docx = docx_file.parse().map_err(|e| format!("docx parse: {:?}", e))?;
+    let mut text = String::new();
+    for body_content in &docx.document.body.content {
+        if let docx::document::BodyContent::Paragraph(paragraph) = body_content {
+            for para_content in &paragraph.content {
+                let run = match para_content {
+                    docx::document::ParagraphContent::Run(r) => Some(r),
+                    docx::document::ParagraphContent::Link(l) => Some(&l.content),
+                    _ => None,
+                };
+                if let Some(r) = run {
+                    for run_content in &r.content {
+                        if let docx::document::RunContent::Text(t) = run_content {
+                            text.push_str(&t.text);
+                        }
+                    }
+                }
+            }
+            text.push('\n');
+        }
+    }
+    Ok(text)
+}
+
 /// Upload a file and store its content as a memory entry.
 async fn upload_file(
     State(state): State<Arc<AppState>>,
@@ -2486,10 +2514,20 @@ async fn upload_file(
             if data.len() > MAX_UPLOAD_SIZE {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
-            if std::str::from_utf8(&data).is_err() {
-                return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let lower = filename.to_lowercase();
+            if lower.ends_with(".pdf") {
+                content = pdf_extract::extract_text_from_mem(&data)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?;
+            } else if lower.ends_with(".docx") {
+                content = extract_text_from_docx(&data)
+                    .map_err(|_| StatusCode::BAD_REQUEST)?;
+            } else {
+                // Plain text files must be valid UTF-8.
+                if std::str::from_utf8(&data).is_err() {
+                    return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+                }
+                content = String::from_utf8_lossy(&data).to_string();
             }
-            content = String::from_utf8_lossy(&data).to_string();
         }
     }
 
