@@ -97,7 +97,7 @@ async fn main() {
     let args = Cli::parse();
     let skip_setup = matches!(
         args.command,
-        Commands::Setup | Commands::Complete { .. } | Commands::Config { .. }
+        Commands::Setup | Commands::Complete { .. } | Commands::Config { .. } | Commands::Update
     ) || std::env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V");
 
     if is_first_run && !skip_setup {
@@ -137,6 +137,19 @@ async fn main() {
     }
 
     let format = OutputFormat::resolve(args.json, args.yaml);
+
+    // Non-blocking version check (cached, once per day).
+    // Skip for commands that shouldn't be delayed or don't need it.
+    let skip_version_check = matches!(
+        args.command,
+        Commands::Complete { .. }
+            | Commands::Update
+            | Commands::Setup
+    ) || std::env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V");
+
+    if !skip_version_check {
+        cli::update::print_update_banner().await;
+    }
 
     match args.command {
         Commands::Setup => {
@@ -466,6 +479,12 @@ async fn main() {
                 }
             }
         },
+        Commands::Update => {
+            if let Err(e) = cli::update::run_update() {
+                eprintln!("Update failed: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 

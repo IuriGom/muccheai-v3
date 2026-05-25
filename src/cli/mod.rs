@@ -12,6 +12,7 @@ pub mod policy;
 pub mod run;
 pub mod setup;
 pub mod status;
+pub mod update;
 pub mod vault;
 
 /// Output format for CLI commands.
@@ -141,6 +142,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: PersonaCommands,
     },
+    /// Update MuccheAI to the latest version.
+    Update,
 }
 
 /// Policy subcommands.
