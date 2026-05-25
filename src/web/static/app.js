@@ -322,7 +322,14 @@ async function submitApiKey() {
     const btn = document.getElementById('loginBtn');
     const username = (userInput?.value || '').trim();
     const password = (passInput?.value || '').trim();
-    if (!username || !password || apiKeyModalSubmitting) return;
+    if (!username || !password) {
+        alert('Please enter both username and password.');
+        return;
+    }
+    if (apiKeyModalSubmitting) {
+        console.log('Login already in progress, ignoring duplicate submit');
+        return;
+    }
 
     apiKeyModalSubmitting = true;
     lastApiKeySubmitTime = Date.now();
@@ -1020,6 +1027,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKeyForm = document.querySelector('#apiKeyModal form');
     if (apiKeyForm) {
         apiKeyForm.addEventListener('submit', (e) => { e.preventDefault(); submitApiKey(); });
+    }
+    // Belt-and-suspenders: also wire the Connect button directly in case
+    // the form submit event doesn't fire (some browsers / extensions block it).
+    const loginBtn = document.getElementById('loginBtn');
+    if (loginBtn) {
+        loginBtn.addEventListener('click', (e) => { e.preventDefault(); submitApiKey(); });
     }
     const registerBtn = document.getElementById('registerBtn');
     if (registerBtn) {

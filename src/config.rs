@@ -824,6 +824,16 @@ impl MuccheConfig {
             tracing::warn!("Failed to load agent API keys: {}", e);
         }
 
+        // Migration: if the plaintext api_key was still in config.toml, rewrite
+        // the file now so the secret moves to the encrypted sidecar and is
+        // stripped from the TOML.
+        let sidecar_path = Self::machine_key_path().with_extension("api_key_enc");
+        if !sidecar_path.exists() {
+            if let Err(e) = config.save() {
+                tracing::warn!("Failed to migrate plaintext API key to encrypted sidecar: {}", e);
+            }
+        }
+
         Ok(config)
     }
 
