@@ -3076,13 +3076,19 @@ async fn update_session_title(
     Path(id): Path<String>,
     Json(req): Json<UpdateTitleRequest>,
 ) -> StatusCode {
+    if is_duress_session(&state, &headers).await {
+        return StatusCode::FORBIDDEN;
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let mut sessions = state.chat_sessions.lock().await;
     if let Some(s) = sessions.iter_mut().find(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
     }) {
         s.title = req.title.chars().take(100).collect();
         StatusCode::OK
@@ -3097,16 +3103,22 @@ async fn branch_session(
     Path(id): Path<String>,
     Json(req): Json<BranchRequest>,
 ) -> Result<Json<BranchResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
-    let sessions = state.chat_sessions.lock().await;
+
+    const MAX_SESSIONS: usize = 100;
+    let mut sessions = state.chat_sessions.lock().await;
     let parent = sessions.iter().find(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
     }).cloned();
-    drop(sessions);
 
     let parent = parent.ok_or(StatusCode::NOT_FOUND)?;
     if req.message_index >= parent.messages.len() {
@@ -3114,16 +3126,18 @@ async fn branch_session(
     }
 
     let mut buf = [0u8; 16];
-    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let new_id = format!("session-{}", hex::encode(buf));
     let mut sec = [0u8; 16];
-    state.rng.fill(&mut sec).expect("CSPRNG failure");
+    state.rng.fill(&mut sec).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let new_secret = hex::encode(sec);
 
     let branched_messages: Vec<ChatMessage> = parent.messages[..=req.message_index].to_vec();
     let timestamp = Timestamp::now().0;
 
-    let mut sessions = state.chat_sessions.lock().await;
+    while sessions.len() >= MAX_SESSIONS {
+        sessions.remove(0);
+    }
     sessions.push(ChatSession {
         id: new_id.clone(),
         title: format!("Branch: {}", parent.title),
@@ -3146,13 +3160,19 @@ async fn share_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ShareResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let found = sessions.iter().any(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
     });
     drop(sessions);
     if !found {
@@ -3160,9 +3180,18 @@ async fn share_session(
     }
 
     let mut buf = [0u8; 32];
-    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let token = hex::encode(buf);
     let mut shared = state.shared_sessions.lock().await;
+    // Prune expired entries on write
+    let now = Instant::now();
+    shared.retain(|_, (_, created)| now.saturating_duration_since(*created) < Duration::from_secs(24 * 60 * 60));
+    // Cap per-session shares
+    const MAX_SHARES_PER_SESSION: usize = 10;
+    let existing_for_session = shared.iter().filter(|(_, (sid, _))| sid == &id).count();
+    if existing_for_session >= MAX_SHARES_PER_SESSION {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     shared.insert(token.clone(), (id, Instant::now()));
     Ok(Json(ShareResponse { share_token: token }))
 }
@@ -3238,13 +3267,24 @@ async fn restore_memories(
         return Err(StatusCode::FORBIDDEN);
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    const MAX_RESTORE_ENTRIES: usize = 1000;
+    if req.entries.len() > MAX_RESTORE_ENTRIES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
     let sm = state.structured_memory.lock().await;
     let mut restored = 0u32;
     for entry in req.entries {
+        if entry.memory_type == MemoryType::TaskHistory {
+            continue; // TaskHistory cannot be restored directly
+        }
+        let key: String = entry.key.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+        if key.is_empty() || key.len() > 128 {
+            continue;
+        }
         let value = json_value_to_memory_value(entry.value);
         let mem_entry = MemoryEntry {
             memory_type: entry.memory_type,
-            key: entry.key,
+            key,
             value,
             created_at: Timestamp(entry.created_at),
             user_signature: vec![],
@@ -3272,7 +3312,7 @@ async fn global_search(
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let q = query.q.unwrap_or_default().to_lowercase();
-    if q.len() < 2 {
+    if q.chars().count() < 2 {
         return Ok(Json(SearchResponse { results: vec![] }));
     }
 
@@ -3324,17 +3364,21 @@ async fn global_search(
     }
 
     // Sort by relevance: exact title matches first, then by recency
-    results.sort_by(|a, b| {
-        let a_title_exact = a.title.to_lowercase().contains(&q);
-        let b_title_exact = b.title.to_lowercase().contains(&q);
-        if a_title_exact && !b_title_exact {
-            std::cmp::Ordering::Less
-        } else if !a_title_exact && b_title_exact {
-            std::cmp::Ordering::Greater
-        } else {
-            b.created_at.cmp(&a.created_at)
+    let mut scored: Vec<(SearchResult, bool)> = results
+        .into_iter()
+        .map(|r| {
+            let exact = r.title.to_lowercase().contains(&q);
+            (r, exact)
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        match (a.1, b.1) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b.0.created_at.cmp(&a.0.created_at),
         }
     });
+    let mut results: Vec<SearchResult> = scored.into_iter().map(|(r, _)| r).collect();
 
     // Limit results
     results.truncate(50);
@@ -3357,16 +3401,18 @@ async fn chat_stream(
     tokio::spawn(async move {
         let response = process_chat(&state, &headers, &req).await;
         
-        // Send session info first
+        // Send session info first (do NOT leak session_secret over SSE)
         let meta = serde_json::json!({
             "session_id": response.session_id,
-            "session_secret": response.session_secret,
             "memories_used": response.memories_used,
         });
-        let _ = tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await;
+        if tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await.is_err() {
+            return; // client disconnected
+        }
 
         if let Some(confirm) = response.needs_confirmation {
-            let _ = tx.send(Ok(Event::default().event("confirm").data(confirm))).await;
+            let confirm_json = serde_json::json!({ "confirm": confirm });
+            let _ = tx.send(Ok(Event::default().event("confirm").data(confirm_json.to_string()))).await;
             let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
             return;
         }
@@ -3379,12 +3425,16 @@ async fn chat_stream(
         while let Some(c) = chars.next() {
             buffer.push(c);
             if buffer.len() >= chunk_size {
-                let _ = tx.send(Ok(Event::default().data(buffer.clone()))).await;
+                if tx.send(Ok(Event::default().data(buffer.clone()))).await.is_err() {
+                    return; // client disconnected
+                }
                 buffer.clear();
             }
         }
         if !buffer.is_empty() {
-            let _ = tx.send(Ok(Event::default().data(buffer))).await;
+            if tx.send(Ok(Event::default().data(buffer))).await.is_err() {
+                return;
+            }
         }
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
     });

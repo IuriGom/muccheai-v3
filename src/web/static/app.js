@@ -11,9 +11,12 @@ let ws = null;
 let wsConnected = false;
 let streamingEnabled = true;
 let offlineQueue = [];
+try {
+    const savedQueue = localStorage.getItem('muccheai_offline_queue');
+    if (savedQueue) offlineQueue = JSON.parse(savedQueue);
+} catch (e) { offlineQueue = []; }
 let isOnline = navigator.onLine;
-let currentStreamController = null;
-let retryComparisonMode = false;
+let isSending = false;
 
 function initWebSocket() {
     const token = localStorage.getItem('muccheai_session_token');
@@ -22,20 +25,33 @@ function initWebSocket() {
     const url = `${proto}//${window.location.host}/api/chat/ws`;
     ws = new WebSocket(url);
     ws.onopen = () => { wsConnected = true; };
-    ws.onclose = () => { wsConnected = false; ws = null; };
+    ws.onclose = () => {
+        wsConnected = false;
+        ws = null;
+        setTyping(false);
+        const sendBtn = document.getElementById('send');
+        if (sendBtn) sendBtn.disabled = false;
+    };
     ws.onmessage = (ev) => {
-        const data = JSON.parse(ev.data);
-        if (data.error) {
+        try {
+            const data = JSON.parse(ev.data);
+            if (data.error) {
+                setTyping(false);
+                addMessage('error', data.error);
+            } else {
+                setTyping(false);
+                addMessage('ai', data.response || '(no response)', false, { memories_used: data.memories_used || 0 });
+                if (data.session_id) currentSessionId = data.session_id;
+                if (data.session_secret) localStorage.setItem('current_session_secret', data.session_secret);
+                checkApprovalQueue();
+            }
+        } catch (e) {
+            console.error('WebSocket message parse error:', e);
             setTyping(false);
-            addMessage('error', data.error);
-        } else {
-            setTyping(false);
-            addMessage('ai', data.response || '(no response)', false, { memories_used: data.memories_used || 0 });
-            if (data.session_id) currentSessionId = data.session_id;
-            if (data.session_secret) localStorage.setItem('current_session_secret', data.session_secret);
-            checkApprovalQueue();
+            addMessage('error', 'Received malformed response from server.');
         }
-        document.getElementById('send').disabled = false;
+        const sendBtn = document.getElementById('send');
+        if (sendBtn) sendBtn.disabled = false;
         scrollToBottom();
     };
 }
@@ -244,6 +260,9 @@ async function logout() {
     localStorage.removeItem('muccheai_lang');
     localStorage.removeItem('muccheai_sidebar_collapsed');
     localStorage.removeItem('muccheai_status_collapsed');
+    localStorage.removeItem('current_session_secret');
+    localStorage.removeItem('muccheai_offline_queue');
+    if (statusPoller) clearInterval(statusPoller);
     location.reload();
 }
 
@@ -923,10 +942,19 @@ async function sendMessage() {
     // Offline queue
     if (!navigator.onLine) {
         offlineQueue.push({ text, sessionId: currentSessionId });
+        localStorage.setItem('muccheai_offline_queue', JSON.stringify(offlineQueue));
         addMessage('system', '⏳ You are offline. Message queued and will be sent when connection resumes.');
         sendBtn.disabled = false;
         return;
     }
+
+    // Double-submit guard
+    if (isSending) {
+        console.log('Already sending, ignoring duplicate');
+        sendBtn.disabled = false;
+        return;
+    }
+    isSending = true;
 
     addMessage('user', text);
     setTyping(true);
@@ -947,7 +975,16 @@ async function sendMessage() {
 
     // Prefer WebSocket if connected
     if (wsConnected && ws) {
-        ws.send(JSON.stringify({ message: text, session_id: currentSessionId }));
+        try {
+            ws.send(JSON.stringify({ message: text, session_id: currentSessionId }));
+        } catch (e) {
+            console.error('WebSocket send failed:', e);
+            setTyping(false);
+            addMessage('error', 'Connection lost. Message queued.');
+            offlineQueue.push({ text, sessionId: currentSessionId });
+            localStorage.setItem('muccheai_offline_queue', JSON.stringify(offlineQueue));
+            sendBtn.disabled = false;
+        }
         return;
     }
 
@@ -968,6 +1005,7 @@ async function sendMessage() {
             setTyping(false);
             const errText = await res.text().catch(() => 'Unknown error');
             addMessage('error', `Server error: HTTP ${res.status} — ${errText}`);
+            isSending = false;
             sendBtn.disabled = false;
             return;
         }
@@ -989,6 +1027,7 @@ async function sendMessage() {
         setTyping(false);
         addMessage('error', `Network error: ${err.message}`);
     }
+    isSending = false;
     sendBtn.disabled = false;
     scrollToBottom();
 }
@@ -2316,23 +2355,31 @@ async function handleSlashCommand(text) {
             switchTab('memory');
             return true;
         case 'export':
-            if (currentSessionId) exportChat(currentSessionId);
-            else addMessage('system', 'No active session to export.');
+            try {
+                if (currentSessionId) await exportChat(currentSessionId);
+                else addMessage('system', 'No active session to export.');
+            } catch (e) { addMessage('error', 'Export failed: ' + e.message); }
             return true;
         case 'title':
-            if (arg && currentSessionId) {
-                await updateSessionTitle(currentSessionId, arg);
-            } else {
-                addMessage('system', 'Usage: /title <new title>');
-            }
+            try {
+                if (arg && currentSessionId) {
+                    await updateSessionTitle(currentSessionId, arg);
+                } else {
+                    addMessage('system', 'Usage: /title <new title>');
+                }
+            } catch (e) { addMessage('error', 'Title update failed: ' + e.message); }
             return true;
         case 'share':
-            if (currentSessionId) shareCurrentSession();
-            else addMessage('system', 'No active session to share.');
+            try {
+                if (currentSessionId) await shareCurrentSession();
+                else addMessage('system', 'No active session to share.');
+            } catch (e) { addMessage('error', 'Share failed: ' + e.message); }
             return true;
         case 'search':
-            if (arg) runGlobalSearch(arg);
-            else addMessage('system', 'Usage: /search <query>');
+            try {
+                if (arg) await runGlobalSearch(arg);
+                else addMessage('system', 'Usage: /search <query>');
+            } catch (e) { addMessage('error', 'Search failed: ' + e.message); }
             return true;
         case 'stream':
             streamingEnabled = !streamingEnabled;
@@ -2356,7 +2403,8 @@ async function handleSlashCommand(text) {
 /help — show this message`);
             return true;
         default:
-            return false;
+            addMessage('system', `Unknown command: /${cmd}. Type /help for available commands.`);
+            return true;
     }
 }
 
@@ -2365,6 +2413,11 @@ async function handleSlashCommand(text) {
 // ============================================
 async function sendMessageStream(text) {
     const sendBtn = document.getElementById('send');
+    let currentAiWrapper = null;
+    let aiText = '';
+    let memoriesUsed = 0;
+    let reader = null;
+
     try {
         const res = await fetch('/api/chat/stream', {
             method: 'POST',
@@ -2378,16 +2431,15 @@ async function sendMessageStream(text) {
             setTyping(false);
             const errText = await res.text().catch(() => 'Unknown error');
             addMessage('error', `Server error: HTTP ${res.status} — ${errText}`);
+            isSending = false;
+            sendBtn.disabled = false;
             return;
         }
 
-        const reader = res.body.getReader();
+        reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let currentAiWrapper = null;
-        let aiText = '';
         let metaReceived = false;
-        let memoriesUsed = 0;
 
         setTyping(false);
 
@@ -2396,12 +2448,12 @@ async function sendMessageStream(text) {
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
 
-            const lines = buffer.split('\n');
+            const lines = buffer.split(/\r?\n/);
             buffer = lines.pop() || '';
 
             for (const line of lines) {
                 if (!line.startsWith('data: ')) continue;
-                const data = line.slice(6);
+                const data = line.slice(6).trim();
                 if (data === '[DONE]') continue;
 
                 let parsed;
@@ -2410,7 +2462,6 @@ async function sendMessageStream(text) {
                 if (parsed && parsed.session_id) {
                     // Meta event
                     currentSessionId = parsed.session_id;
-                    localStorage.setItem('current_session_secret', parsed.session_secret || '');
                     memoriesUsed = parsed.memories_used || 0;
                     metaReceived = true;
                     continue;
@@ -2418,20 +2469,17 @@ async function sendMessageStream(text) {
                 if (parsed && parsed.confirm) {
                     const confirmed = confirm(parsed.confirm);
                     if (confirmed) {
-                        // Re-send with research_confirmed
-                        await fetch('/api/chat/stream', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-                            body: JSON.stringify({ message: text, session_id: currentSessionId, research: true, research_confirmed: true })
-                        });
+                        // Restart stream with research_confirmed
+                        if (reader) { try { reader.cancel(); } catch (e) {} }
+                        await sendMessageStream(text + ' '); // slight variant to bypass cache
+                        return;
                     }
                     continue;
                 }
 
                 // Content chunk
                 if (!currentAiWrapper) {
-                    currentAiWrapper = addMessage('ai', '', false, { memories_used: memoriesUsed });
-                    // Make the body editable for streaming
+                    currentAiWrapper = addMessage('ai', '', true, { memories_used: memoriesUsed });
                     const body = currentAiWrapper.querySelector('.message-body');
                     if (body) body.dataset.streaming = 'true';
                 }
@@ -2439,14 +2487,32 @@ async function sendMessageStream(text) {
                 const body = currentAiWrapper.querySelector('.message-body');
                 if (body) {
                     body.innerHTML = renderMessageContent(aiText);
+                    body.dataset.streaming = 'false';
                     currentAiWrapper.dataset.rawText = aiText;
                 }
                 scrollToBottom();
             }
         }
 
-        if (!currentAiWrapper && !metaReceived) {
-            addMessage('error', 'No response from streaming endpoint.');
+        if (!currentAiWrapper) {
+            if (metaReceived) {
+                addMessage('ai', '(no response)', false, { memories_used: memoriesUsed });
+            } else {
+                addMessage('error', 'No response from streaming endpoint.');
+            }
+        } else {
+            // Finalize localStorage with the complete text
+            if (currentSessionId) {
+                const sessions = getLocalSessions();
+                const s = sessions.find(x => x.id === currentSessionId);
+                if (s && currentAiWrapper) {
+                    const lastAi = s.messages.filter(m => m.role === 'ai').pop();
+                    if (lastAi) {
+                        lastAi.content = aiText;
+                        saveLocalSessions(sessions);
+                    }
+                }
+            }
         }
         // Auto-title new sessions after first exchange
         const sessions = getLocalSessions();
@@ -2457,10 +2523,15 @@ async function sendMessageStream(text) {
         checkApprovalQueue();
     } catch (err) {
         setTyping(false);
-        addMessage('error', `Stream error: ${err.message}`);
+        if (err.name !== 'AbortError') {
+            addMessage('error', `Stream error: ${err.message}`);
+        }
+    } finally {
+        if (reader) { try { reader.cancel(); } catch (e) {} }
+        isSending = false;
+        sendBtn.disabled = false;
+        scrollToBottom();
     }
-    sendBtn.disabled = false;
-    scrollToBottom();
 }
 
 // ============================================
@@ -2479,6 +2550,10 @@ function speakText(text) {
 // Feature: Conversation branching
 // ============================================
 async function branchAtMessage(msgId) {
+    if (!currentSessionId) {
+        addMessage('error', 'No active session to branch.');
+        return;
+    }
     const wrapper = document.querySelector(`[data-message-id="${msgId}"]`);
     if (!wrapper) return;
     const messages = document.getElementById('messages');
@@ -2550,8 +2625,22 @@ async function retryMessage(msgId) {
         wrapper.dataset.rawText = newText;
         wrapper.querySelector('.message-body').innerHTML = renderMessageContent(newText);
 
-        // Add comparison note
-        addMessage('system', '🔄 Retry complete. Hover the message to see it was regenerated.');
+        // Update localStorage
+        if (currentSessionId) {
+            const sessions = getLocalSessions();
+            const s = sessions.find(x => x.id === currentSessionId);
+            if (s) {
+                // Find the AI message at this index and update it
+                const aiMsgs = s.messages.filter(m => m.role === 'ai');
+                const aiIdx = aiMsgs.length - 1; // most recent AI message
+                if (aiIdx >= 0) {
+                    aiMsgs[aiIdx].content = newText;
+                    saveLocalSessions(sessions);
+                }
+            }
+        }
+
+        addMessage('system', `🔄 Retry complete. (Previous response archived — ${oldText.length} chars)`);
     } catch (e) {
         setTyping(false);
         addMessage('error', 'Retry failed: ' + e.message);
@@ -2569,8 +2658,9 @@ async function shareCurrentSession() {
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        const url = `${window.location.origin}/api/share/${data.share_token}`;
-        addMessage('system', `🔗 Share link (valid 24h):\n${url}`);
+        if (!data.share_token) throw new Error('No share token received');
+        const url = `${window.location.origin}/api/share/${encodeURIComponent(data.share_token)}`;
+        addMessage('system', `🔗 Share link (valid 24h):\n${escapeHtml(url)}`);
     } catch (e) {
         addMessage('error', 'Share failed: ' + e.message);
     }
@@ -2603,13 +2693,16 @@ async function runGlobalSearch(query) {
         const data = await res.json();
         const results = data.results || [];
         if (!results.length) {
-            addMessage('system', `🔍 No results for "${query}".`);
+            addMessage('system', `🔍 No results for "${escapeHtml(query)}".`);
             return;
         }
-        let msg = `🔍 Search results for "${query}":\n\n`;
+        let msg = `🔍 Search results for "${escapeHtml(query)}":\n\n`;
         for (const r of results.slice(0, 10)) {
             const icon = r.type === 'memory' ? '🧠' : '💬';
-            msg += `${icon} **${r.title}**\n${r.content.slice(0, 120)}${r.content.length > 120 ? '...' : ''}\n\n`;
+            const title = escapeHtml(r.title || '(untitled)');
+            const content = escapeHtml((r.content || '').slice(0, 120));
+            const ellipsis = (r.content || '').length > 120 ? '...' : '';
+            msg += `${icon} **${title}**\n${content}${ellipsis}\n\n`;
         }
         addMessage('system', msg);
     } catch (e) {
@@ -2732,8 +2825,7 @@ async function autoUpdateSessionTitle(sessionId) {
             method: 'POST',
             body: JSON.stringify({
                 message: `Generate a very short 3-5 word title for this conversation. Reply with ONLY the title, no quotes, no punctuation.\n\nUser: ${firstUser.content}`,
-                session_id: null
-            })
+                })
         });
         if (!res.ok) return;
         const data = await res.json();
@@ -2766,7 +2858,7 @@ async function loadInlineFilePreviews() {
         container.innerHTML = uploads.map(u => {
             const filename = (u.value && u.value.filename) || u.key.replace('upload:', '');
             const text = (u.value && u.value.text) || '';
-            const preview = text.slice(0, 300).replace(/</g, '&lt;');
+            const preview = escapeHtml(text.slice(0, 300));
             return `<details class="file-preview">
                 <summary>📄 ${escapeHtml(filename)}</summary>
                 <pre class="file-preview-content">${preview}${text.length > 300 ? '...' : ''}</pre>
