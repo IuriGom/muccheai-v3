@@ -320,10 +320,14 @@ async function submitApiKey() {
     const userInput = document.getElementById('loginUser');
     const passInput = document.getElementById('loginPass');
     const btn = document.getElementById('loginBtn');
+    const errorEl = document.getElementById('loginError');
     const username = (userInput?.value || '').trim();
     const password = (passInput?.value || '').trim();
+
+    if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+
     if (!username || !password) {
-        alert('Please enter both username and password.');
+        if (errorEl) { errorEl.textContent = 'Please enter both username and password.'; errorEl.style.display = 'block'; }
         return;
     }
     if (apiKeyModalSubmitting) {
@@ -336,19 +340,23 @@ async function submitApiKey() {
     if (btn) { btn.textContent = t('connecting'); btn.disabled = true; }
 
     try {
+        console.log('Sending login request for user:', username);
         const loginRes = await fetch('/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
         });
+        console.log('Login response status:', loginRes.status);
         if (!loginRes.ok) {
-            alert('Invalid username or password.');
+            const errText = loginRes.status === 401 ? 'Invalid username or password.' : 'Login failed (HTTP ' + loginRes.status + ')';
+            if (errorEl) { errorEl.textContent = errText; errorEl.style.display = 'block'; }
             if (passInput) passInput.value = '';
             apiKeyModalSubmitting = false;
             if (btn) { btn.textContent = 'Connect'; btn.disabled = false; }
             return;
         }
         const loginData = await loginRes.json();
+        console.log('Login success, token received');
         localStorage.setItem('muccheai_session_token', loginData.token);
         localStorage.setItem('muccheai_session_time', Date.now().toString());
 
@@ -372,7 +380,7 @@ async function submitApiKey() {
         }
     } catch (e) {
         console.error('Connection error:', e);
-        alert('Could not connect. Is the server running?');
+        if (errorEl) { errorEl.textContent = 'Could not connect. Is the server running?'; errorEl.style.display = 'block'; }
     } finally {
         apiKeyModalSubmitting = false;
         if (btn) { btn.textContent = 'Connect'; btn.disabled = false; }
@@ -1032,17 +1040,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKeyForm = document.querySelector('#apiKeyModal form');
     if (apiKeyForm) {
         apiKeyForm.addEventListener('submit', (e) => { e.preventDefault(); submitApiKey(); });
-    }
-    // Belt-and-suspenders: also wire the Connect button directly in case
-    // the form submit event doesn't fire (some browsers / extensions block it).
-    const loginBtn = document.getElementById('loginBtn');
-    if (loginBtn) {
-        loginBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            const duressSection = document.getElementById('duressPinSection');
-            if (duressSection) duressSection.style.display = 'none';
-            submitApiKey();
-        });
     }
     const registerBtn = document.getElementById('registerBtn');
     if (registerBtn) {

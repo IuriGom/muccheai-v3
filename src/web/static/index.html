@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0">
     <title>MuccheAI — Secure AI Agent</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/style.css?v=9">
+    <link rel="stylesheet" href="/style.css?v=10">
 </head>
 <body>
     <!-- Login Modal -->
@@ -30,7 +30,7 @@
                     <button type="submit" class="btn btn-primary" id="loginBtn">Connect</button>
                     <button type="button" class="btn btn-secondary" id="registerBtn">Register</button>
                 </div>
-                <p id="loginToggle" style="font-size:0.8rem;color:var(--text-dim);margin-top:0.5rem;text-align:center;cursor:pointer;"></p>
+                <p id="loginError" style="font-size:0.8rem;color:#ff6b6b;margin-top:0.5rem;text-align:center;display:none;"></p>
             </form>
         </div>
     </div>
@@ -416,7 +416,7 @@
         </main>
     </div>
 
-    <script src="/app.js?v=9"></script>
+    <script src="/app.js?v=10"></script>
 
     <!-- Approval Notification Toast -->
     <div id="approvalToast" class="approval-toast" style="display:none;">

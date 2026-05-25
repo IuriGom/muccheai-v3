@@ -229,6 +229,8 @@ pub enum ConfigCommands {
     Path,
     /// Print the API key for web panel authentication.
     Key,
+    /// Reveal the raw decrypted API key (for external provider setup).
+    RevealKey,
     /// Get a configuration value.
     Get {
         /// Configuration key.

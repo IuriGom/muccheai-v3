@@ -397,7 +397,6 @@ async fn main() {
             ConfigCommands::Key => {
                 match crate::config::MuccheConfig::load() {
                     Ok(config) => {
-                        // Use config path + file read if you need the raw key.
                         let masked: String = config
                             .api_key
                             .chars()
@@ -405,6 +404,17 @@ async fn main() {
                             .map(|(i, c)| if i < 4 || i >= config.api_key.len() - 4 { c } else { '*' })
                             .collect();
                         println!("{}", masked);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load config: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            ConfigCommands::RevealKey => {
+                match crate::config::MuccheConfig::load() {
+                    Ok(config) => {
+                        println!("{}", config.api_key);
                     }
                     Err(e) => {
                         eprintln!("Failed to load config: {e}");
