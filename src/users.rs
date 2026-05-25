@@ -11,6 +11,10 @@ pub struct User {
     pub salt: [u8; 16],
     pub password_hash: String,
     pub owner_hash: String,
+    /// Optional duress PIN — if entered at login, the app silently wipes
+    /// all user data and returns a sanitized session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duress_pin_hash: Option<String>,
 }
 
 /// In-memory user database backed by JSON.
@@ -75,12 +79,15 @@ impl UserDb {
         self.users.get(username)
     }
 
-    pub fn create_user(&mut self, username: &str, password: &str, salt: &[u8; 16]) -> anyhow::Result<()> {
+    pub fn create_user(&mut self, username: &str, password: &str, salt: &[u8; 16], duress_pin: Option<&str>) -> anyhow::Result<()> {
         if self.users.contains_key(username) {
             return Err(anyhow::anyhow!("user already exists"));
         }
         let password_hash = hash_password(password, salt)?;
         let owner_hash = hex::encode(muccheai_crypto::sha3_512(password_hash.as_bytes()));
+        let duress_pin_hash = duress_pin
+            .map(|pin| hash_password(pin, salt))
+            .transpose()?;
 
         self.users.insert(
             username.to_string(),
@@ -89,11 +96,13 @@ impl UserDb {
                 salt: *salt,
                 password_hash,
                 owner_hash,
+                duress_pin_hash,
             },
         );
         self.save()
     }
 
+    /// Verify normal password.
     pub fn verify(&self, username: &str, password: &str) -> Option<&User> {
         let user = self.users.get(username)?;
         let computed = hash_password(password, &user.salt).ok()?;
@@ -104,6 +113,18 @@ impl UserDb {
         }
     }
 
+    /// Check whether the provided PIN matches the user's duress PIN.
+    /// Timing is normalized against the normal password verify path.
+    pub fn verify_duress(&self, username: &str, pin: &str) -> bool {
+        let Some(user) = self.users.get(username) else { return false };
+        let Some(ref duress_hash) = user.duress_pin_hash else { return false };
+        let computed = match hash_password(pin, &user.salt) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        muccheai_crypto::constant_time::eq(computed.as_bytes(), duress_hash.as_bytes())
+    }
+
     pub fn migrate_api_key(&mut self, api_key: &str) -> anyhow::Result<()> {
         if !self.users.is_empty() {
             return Ok(());
@@ -112,7 +133,7 @@ impl UserDb {
         ring::rand::SystemRandom::new()
             .fill(&mut salt)
             .expect("CSPRNG failure");
-        self.create_user("admin", api_key, &salt)
+        self.create_user("admin", api_key, &salt, None)
     }
 }
 

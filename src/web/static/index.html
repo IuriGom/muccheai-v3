@@ -19,6 +19,12 @@
             <form id="loginForm">
                 <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
                 <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
+                <div id="duressPinSection" style="display:none;">
+                    <input type="password" id="duressPin" placeholder="Duress PIN (optional)" autocomplete="off">
+                    <p style="font-size:0.75rem;color:var(--text-dim);margin:0.25rem 0 0.5rem;text-align:left;">
+                        🔒 <strong>Duress PIN</strong>: If someone forces you to unlock MuccheAI, enter this PIN instead of your password. The app will appear to work normally but all your data will be silently wiped.
+                    </p>
+                </div>
                 <div class="btn-row" style="gap:0.5rem;">
                     <button type="submit" class="btn btn-primary" id="loginBtn">Connect</button>
                     <button type="button" class="btn btn-secondary" id="registerBtn">Register</button>

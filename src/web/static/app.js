@@ -382,6 +382,7 @@ async function submitApiKey() {
 async function submitRegister() {
     const userInput = document.getElementById('loginUser');
     const passInput = document.getElementById('loginPass');
+    const duressInput = document.getElementById('duressPin');
     const btn = document.getElementById('registerBtn');
     const username = (userInput?.value || '').trim();
     const password = (passInput?.value || '').trim();
@@ -391,11 +392,15 @@ async function submitRegister() {
     lastApiKeySubmitTime = Date.now();
     if (btn) { btn.textContent = 'Creating...'; btn.disabled = true; }
 
+    const payload = { username, password };
+    const duressPin = (duressInput?.value || '').trim();
+    if (duressPin) payload.duress_pin = duressPin;
+
     try {
         const res = await fetch('/api/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
+            body: JSON.stringify(payload)
         });
         if (res.status === 409) {
             alert('Username already taken.');
@@ -1032,11 +1037,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // the form submit event doesn't fire (some browsers / extensions block it).
     const loginBtn = document.getElementById('loginBtn');
     if (loginBtn) {
-        loginBtn.addEventListener('click', (e) => { e.preventDefault(); submitApiKey(); });
+        loginBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const duressSection = document.getElementById('duressPinSection');
+            if (duressSection) duressSection.style.display = 'none';
+            submitApiKey();
+        });
     }
     const registerBtn = document.getElementById('registerBtn');
     if (registerBtn) {
-        registerBtn.addEventListener('click', (e) => { e.preventDefault(); submitRegister(); });
+        registerBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const duressSection = document.getElementById('duressPinSection');
+            if (duressSection) duressSection.style.display = 'block';
+            submitRegister();
+        });
+    }
+            if (duressSection) duressSection.style.display = 'none';
+            submitApiKey();
+        });
     }
 
     // AI Name modal

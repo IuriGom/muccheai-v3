@@ -41,7 +41,10 @@ reset:
 	@echo "Resetting MuccheAI (deleting config, memories, vault)..."
 	rm -rf $(HOME)/.muccheai
 	cargo clean
-	@echo "Reset complete. Run 'make install' to start fresh."
+	@echo ""
+	@echo "Reset complete. Next steps:"
+	@echo "  1. Run 'make install' to rebuild and auto-launch setup"
+	@echo "  2. Or run 'cargo run -- setup' to run setup with the dev build"
 
 deep-clean: clean
 	@echo "Clearing global cargo registry cache..."

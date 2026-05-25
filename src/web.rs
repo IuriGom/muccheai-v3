@@ -90,6 +90,9 @@ pub struct Session {
     pub owner_hash: String,
     pub username: String,
     pub created_at: Instant,
+    /// If true, this session was created via duress PIN.
+    /// All data endpoints return empty/sanitized results.
+    pub duress: bool,
 }
 
 pub struct AppState {
@@ -504,6 +507,13 @@ async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<Stri
     if expired { None } else { owner }
 }
 
+/// Check whether the current session was created via duress PIN.
+async fn is_duress_session(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(token) = extract_bearer_token(headers) else { return false };
+    let sessions = state.sessions.lock().await;
+    sessions.get(&token).map(|s| s.duress).unwrap_or(false)
+}
+
 /// Bearer token authentication middleware + CSRF protection for mutating requests
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -861,6 +871,16 @@ async fn process_chat(
     headers: &HeaderMap,
     req: &ChatRequest,
 ) -> ChatResponse {
+    // Duress sessions get generic responses without accessing or storing data.
+    if is_duress_session(state, headers).await {
+        return ChatResponse {
+            response: "I'm here to help. What would you like to know?".to_string(),
+            session_id: req.session_id.clone().unwrap_or_default(),
+            session_secret: String::new(),
+            needs_confirmation: None,
+        };
+    }
+
     let config = state.config.lock().await;
 
     // Research with external providers requires explicit confirmation.
@@ -2101,6 +2121,9 @@ async fn list_memories(
     headers: HeaderMap,
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<MemoryListResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(MemoryListResponse { entries: vec![] }));
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let all = {
         let sm = state.structured_memory.lock().await;
@@ -2139,6 +2162,9 @@ async fn store_memory(
     headers: HeaderMap,
     Json(req): Json<StoreMemoryRequest>,
 ) -> Result<Json<ProposeMemoryResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     if req.memory_type == MemoryType::TaskHistory {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -2203,6 +2229,9 @@ async fn list_memory_queue(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<MemoryQueueResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(MemoryQueueResponse { proposals: vec![] }));
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     let pending = sm.list_pending_by_owner(&owner);
@@ -2227,6 +2256,9 @@ async fn propose_memory(
     headers: HeaderMap,
     Json(req): Json<ProposeMemoryRequest>,
 ) -> Result<Json<ProposeMemoryResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     if req.memory_type == MemoryType::TaskHistory {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -2455,6 +2487,10 @@ async fn test_connection(
 struct LoginRequest {
     username: String,
     password: String,
+    /// Optional duress PIN — if provided during registration, the user can
+    /// enter this PIN at login to silently enter duress mode (all data wiped).
+    #[serde(default)]
+    duress_pin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2484,7 +2520,7 @@ async fn register(
         }
         let mut salt = [0u8; 16];
         state.rng.fill(&mut salt).expect("CSPRNG failure");
-        users.create_user(&req.username, &req.password, &salt)
+        users.create_user(&req.username, &req.password, &salt, req.duress_pin.as_deref())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let user = users.get(&req.username)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2503,6 +2539,7 @@ async fn register(
             owner_hash,
             username: username.clone(),
             created_at: Instant::now(),
+            duress: false,
         },
     );
     Ok(Json(LoginResponse {
@@ -2517,6 +2554,62 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
     let dummy_salt = [0u8; 16];
+
+    // Check for duress PIN first (same timing as normal verify).
+    let is_duress = {
+        let users = state.users.lock().await;
+        users.verify_duress(&req.username, &req.password)
+    };
+
+    if is_duress {
+        let owner_hash = {
+            let users = state.users.lock().await;
+            users.get(&req.username)
+                .map(|u| u.owner_hash.clone())
+                .unwrap_or_default()
+        };
+        if owner_hash.is_empty() {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+
+        // Wipe all data for this user.
+        {
+            let sm = state.structured_memory.lock().await;
+            let memories = sm.list_all_by_owner(&owner_hash);
+            for m in memories {
+                let _ = sm.delete_by_owner(&m.key, &owner_hash);
+            }
+        }
+        {
+            let mut sessions = state.chat_sessions.lock().await;
+            sessions.retain(|s| s.owner_hash != owner_hash);
+        }
+        {
+            let mut sessions = state.sessions.lock().await;
+            sessions.retain(|_, s| s.owner_hash != owner_hash);
+        }
+
+        tracing::warn!(target: "security", "Duress PIN used for user {}", req.username);
+
+        let mut buf = [0u8; 32];
+        state.rng.fill(&mut buf).expect("CSPRNG failure");
+        let token = hex::encode(buf);
+        let mut sessions = state.sessions.lock().await;
+        sessions.insert(
+            token.clone(),
+            Session {
+                owner_hash: owner_hash.clone(),
+                username: req.username.clone(),
+                created_at: Instant::now(),
+                duress: true,
+            },
+        );
+        return Ok(Json(LoginResponse {
+            token,
+            username: req.username.clone(),
+        }));
+    }
+
     let user = {
         let users = state.users.lock().await;
         users.verify(&req.username, &req.password).cloned()
@@ -2535,6 +2628,7 @@ async fn login(
                     owner_hash: u.owner_hash.clone(),
                     username: u.username.clone(),
                     created_at: Instant::now(),
+                    duress: false,
                 },
             );
             Ok(Json(LoginResponse {
@@ -2601,6 +2695,9 @@ async fn upload_file(
     headers: HeaderMap,
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
@@ -2845,6 +2942,9 @@ async fn export_chat_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<axum::response::Response, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
