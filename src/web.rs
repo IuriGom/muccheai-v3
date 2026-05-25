@@ -2492,6 +2492,20 @@ fn extract_text_from_docx(data: &[u8]) -> Result<String, String> {
     Ok(text)
 }
 
+/// Validate file magic bytes against the claimed extension.
+fn validate_magic_bytes(data: &[u8], filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    if lower.ends_with(".pdf") {
+        data.starts_with(b"%PDF")
+    } else if lower.ends_with(".docx") {
+        // DOCX is a ZIP archive; check PK header.
+        data.len() >= 2 && &data[..2] == b"PK"
+    } else {
+        // Text files — no magic bytes to check.
+        true
+    }
+}
+
 /// Upload a file and store its content as a memory entry.
 async fn upload_file(
     State(state): State<Arc<AppState>>,
@@ -2514,13 +2528,42 @@ async fn upload_file(
             if data.len() > MAX_UPLOAD_SIZE {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
+            if !validate_magic_bytes(&data, &filename) {
+                return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            }
             let lower = filename.to_lowercase();
             if lower.ends_with(".pdf") {
-                content = pdf_extract::extract_text_from_mem(&data)
-                    .map_err(|_| StatusCode::BAD_REQUEST)?;
+                let data = data.to_vec();
+                content = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&data)),
+                )
+                .await
+                .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
+                .map_err(|e| {
+                    tracing::warn!("PDF extraction failed: {:?}", e);
+                    StatusCode::BAD_REQUEST
+                })?
+                .map_err(|e| {
+                    tracing::warn!("PDF extraction error: {:?}", e);
+                    StatusCode::BAD_REQUEST
+                })?;
             } else if lower.ends_with(".docx") {
-                content = extract_text_from_docx(&data)
-                    .map_err(|_| StatusCode::BAD_REQUEST)?;
+                let data = data.to_vec();
+                content = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    tokio::task::spawn_blocking(move || extract_text_from_docx(&data)),
+                )
+                .await
+                .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
+                .map_err(|e| {
+                    tracing::warn!("DOCX extraction panicked: {:?}", e);
+                    StatusCode::BAD_REQUEST
+                })?
+                .map_err(|e| {
+                    tracing::warn!("DOCX extraction error: {}", e);
+                    StatusCode::BAD_REQUEST
+                })?;
             } else {
                 // Plain text files must be valid UTF-8.
                 if std::str::from_utf8(&data).is_err() {
@@ -3268,6 +3311,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             ServeDir::new(static_dir).fallback(ServeFile::new(static_dir.to_string() + "/index.html")),
         )
         .with_state(state)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(cors)
         .layer(csp)
         .layer(xcto)
