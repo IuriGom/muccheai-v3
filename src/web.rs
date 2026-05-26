@@ -862,7 +862,7 @@ async fn validate_no_ssrf_dns(url: &str) -> std::result::Result<(), String> {
 
     let lower = host.to_lowercase();
     if lower == "localhost" || lower == "127.0.0.1" || lower == "[::1]" {
-        return Ok(());
+        return Err("SSRF blocked: localhost not allowed via DNS".to_string());
     }
 
     let addrs = tokio::net::lookup_host(format!("{}:80", host)).await
@@ -4559,10 +4559,11 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
         let now = chrono::Local::now();
         let dt = now.naive_local();
         let current_key = (dt.minute(), dt.hour(), dt.day(), dt.month(), dt.weekday().num_days_from_monday() + 1);
-        // Prune last_executed entries older than 48h to prevent unbounded growth
-        last_executed.retain(|_, (m, h, d, mo, w)| {
-            let old = (*m != dt.minute() as u32) || (*h != dt.hour() as u32) || (*d != dt.day() as u32);
-            !old
+        // Prune last_executed entries from previous months/days to prevent unbounded growth
+        last_executed.retain(|_, (m, h, d, mo, _w)| {
+            let same = *m == dt.minute() as u32 && *h == dt.hour() as u32
+                && *d == dt.day() as u32 && *mo == dt.month() as u32;
+            same
         });
         for task in tasks {
             let should_run = cron_matches(&task.cron, &dt);
@@ -4598,23 +4599,30 @@ fn cron_matches(cron: &str, dt: &chrono::NaiveDateTime) -> bool {
     if parts.len() != 5 {
         return false;
     }
-    let values = [
-        dt.minute() as u32,
-        dt.hour() as u32,
-        dt.day() as u32,
-        dt.month() as u32,
-        dt.weekday().num_days_from_monday() + 1, // Mon=1 .. Sun=7
-    ];
-    let max_vals = [59u32, 23, 31, 12, 7];
-    for (i, part) in parts.iter().enumerate() {
-        if !cron_field_matches(part, values[i], max_vals[i]) {
-            return false;
-        }
-    }
-    true
+    let minute = dt.minute() as u32;
+    let hour = dt.hour() as u32;
+    let day = dt.day() as u32;
+    let month = dt.month() as u32;
+    // Standard cron: Sunday can be 0 or 7. Map both to 7 for comparison.
+    let weekday_raw = dt.weekday().num_days_from_monday() + 1; // Mon=1..Sun=7
+
+    let minute_ok = cron_field_matches(parts[0], minute);
+    let hour_ok = cron_field_matches(parts[1], hour);
+    let month_ok = cron_field_matches(parts[3], month);
+
+    // Standard cron semantics: if both day-of-month and day-of-week are non-*, they OR together.
+    let day_field = parts[2];
+    let weekday_field = parts[4];
+    let day_ok = if day_field != "*" && weekday_field != "*" {
+        cron_field_matches(day_field, day) || cron_field_matches(weekday_field, weekday_raw)
+    } else {
+        cron_field_matches(day_field, day) && cron_field_matches(weekday_field, weekday_raw)
+    };
+
+    minute_ok && hour_ok && day_ok && month_ok
 }
 
-fn cron_field_matches(field: &str, value: u32, max: u32) -> bool {
+fn cron_field_matches(field: &str, value: u32) -> bool {
     if field == "*" {
         return true;
     }
@@ -4625,29 +4633,39 @@ fn cron_field_matches(field: &str, value: u32, max: u32) -> bool {
         }
         return false;
     }
-    // Ranges: 1-5
-    if field.contains('-') {
-        let mut split = field.split('-');
-        if let (Some(start), Some(end)) = (split.next(), split.next()) {
-            if let (Ok(s), Ok(e)) = (start.parse::<u32>(), end.parse::<u32>()) {
-                return value >= s && value <= e;
-            }
-        }
-        return false;
-    }
-    // Lists: 1,3,5
+    // Lists and ranges combined: split by comma first, then check each segment as range or literal
     if field.contains(',') {
-        for item in field.split(',') {
-            if let Ok(v) = item.parse::<u32>() {
-                if v == value {
-                    return true;
-                }
+        for segment in field.split(',') {
+            if cron_segment_matches(segment.trim(), value) {
+                return true;
             }
         }
         return false;
     }
-    // Literal
-    field.parse::<u32>().map(|v| v == value).unwrap_or(false)
+    cron_segment_matches(field, value)
+}
+
+fn cron_segment_matches(segment: &str, value: u32) -> bool {
+    if segment == "*" {
+        return true;
+    }
+    // Range: 1-5
+    if let Some(dash) = segment.find('-') {
+        let start = segment[..dash].parse::<u32>();
+        let end = segment[dash + 1..].parse::<u32>();
+        if let (Ok(s), Ok(e)) = (start, end) {
+            return value >= s && value <= e;
+        }
+        return false;
+    }
+    // Literal (handle Sunday=0 as equivalent to 7 for weekday fields)
+    segment.parse::<u32>().map(|v| {
+        if v == 0 && value == 7 {
+            true
+        } else {
+            v == value
+        }
+    }).unwrap_or(false)
 }
 
 pub async fn serve(addr: &str, state: Arc<AppState>) {
