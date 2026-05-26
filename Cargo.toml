@@ -12,9 +12,11 @@ name = "muccheai"
 path = "src/main.rs"
 
 [profile.dev]
-# Reduce debug build bloat: line-tables-only instead of full debuginfo.
-# Saves ~1-2 GB on target/ for a project this size.
+# Aggressive bloat reduction for debug builds.
+# Full debuginfo is ~1 GB alone on a project this size.
 debug = 1
+# Minimal optimization reduces unoptimized codegen bloat without hurting compile times much.
+opt-level = 1
 
 [profile.release]
 strip = true
