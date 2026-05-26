@@ -13,7 +13,15 @@ let streamingEnabled = true;
 let offlineQueue = [];
 try {
     const savedQueue = localStorage.getItem('muccheai_offline_queue');
-    if (savedQueue) offlineQueue = JSON.parse(savedQueue);
+    if (savedQueue) {
+        const parsed = JSON.parse(savedQueue);
+        const now = Date.now();
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        // Drop messages older than 24h and cap at 50
+        offlineQueue = parsed
+            .filter(item => item.ts && (now - item.ts) < ONE_DAY)
+            .slice(-50);
+    }
 } catch (e) { offlineQueue = []; }
 let isOnline = navigator.onLine;
 let isSending = false;
@@ -946,7 +954,8 @@ async function sendMessage() {
 
     // Offline queue
     if (!navigator.onLine) {
-        offlineQueue.push({ text, sessionId: currentSessionId });
+        offlineQueue.push({ text, sessionId: currentSessionId, ts: Date.now() });
+        if (offlineQueue.length > 50) offlineQueue = offlineQueue.slice(-50);
         localStorage.setItem('muccheai_offline_queue', JSON.stringify(offlineQueue));
         addMessage('system', '⏳ You are offline. Message queued and will be sent when connection resumes.');
         sendBtn.disabled = false;
@@ -2122,6 +2131,14 @@ async function addMcpServer() {
         body.command = document.getElementById('mcpCommand').value.trim() || null;
         const argsStr = document.getElementById('mcpArgs').value.trim();
         body.args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
+        const cmd = body.command || '';
+        const dangerous = /\bnpx\b|\bnpm\b|\bnode\b|\bpython\b/i.test(cmd);
+        if (dangerous) {
+            if (!confirm('⚠️ WARNING: This MCP server uses an interpreter-based command (' + cmd + ') which can execute arbitrary code from the internet. Only proceed if you trust this source.')) {
+                return;
+            }
+            body.dangerous = true;
+        }
     } else {
         body.url = document.getElementById('mcpUrl').value.trim() || null;
         body.api_key = document.getElementById('mcpApiKey').value.trim() || null;

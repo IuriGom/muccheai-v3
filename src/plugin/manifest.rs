@@ -76,8 +76,15 @@ impl PluginManifest {
             return Err(anyhow::anyhow!("Plugin wasm_path is required"));
         }
         for host in &self.capabilities.http_hosts {
-            if host.contains('*') || host.contains('/') {
+            if host.is_empty() {
+                return Err(anyhow::anyhow!("Empty http_hosts entry is not allowed"));
+            }
+            if host.contains('*') || host.contains('/') || host.contains("..") {
                 return Err(anyhow::anyhow!("Invalid http_hosts entry: {}", host));
+            }
+            // Reject raw IP addresses — plugins should declare hostnames.
+            if host.parse::<std::net::IpAddr>().is_ok() {
+                return Err(anyhow::anyhow!("IP addresses not allowed in http_hosts (use hostnames): {}", host));
             }
         }
         Ok(())

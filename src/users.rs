@@ -15,6 +15,15 @@ pub struct User {
     /// all user data and returns a sanitized session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duress_pin_hash: Option<String>,
+    /// Independent salt for the duress PIN (so it can't be precomputed
+    /// from the known password salt). For legacy users this may be all-zeros,
+    /// in which case we fall back to `salt`.
+    #[serde(default = "zero_salt")]
+    pub duress_salt: [u8; 16],
+}
+
+fn zero_salt() -> [u8; 16] {
+    [0u8; 16]
 }
 
 /// In-memory user database backed by JSON.
@@ -85,9 +94,17 @@ impl UserDb {
         }
         let password_hash = hash_password(password, salt)?;
         let owner_hash = hex::encode(muccheai_crypto::sha3_512(password_hash.as_bytes()));
-        let duress_pin_hash = duress_pin
-            .map(|pin| hash_password(pin, salt))
-            .transpose()?;
+
+        let (duress_pin_hash, duress_salt) = if let Some(pin) = duress_pin {
+            let mut d_salt = [0u8; 16];
+            ring::rand::SystemRandom::new()
+                .fill(&mut d_salt)
+                .expect("CSPRNG failure");
+            let d_hash = hash_password(pin, &d_salt)?;
+            (Some(d_hash), d_salt)
+        } else {
+            (None, [0u8; 16])
+        };
 
         self.users.insert(
             username.to_string(),
@@ -97,6 +114,7 @@ impl UserDb {
                 password_hash,
                 owner_hash,
                 duress_pin_hash,
+                duress_salt,
             },
         );
         self.save()
@@ -114,11 +132,18 @@ impl UserDb {
     }
 
     /// Check whether the provided PIN matches the user's duress PIN.
-    /// Timing is normalized against the normal password verify path.
+    /// Uses an independent salt so the duress PIN cannot be brute-forced
+    /// from the known password salt.
     pub fn verify_duress(&self, username: &str, pin: &str) -> bool {
         let Some(user) = self.users.get(username) else { return false };
         let Some(ref duress_hash) = user.duress_pin_hash else { return false };
-        let computed = match hash_password(pin, &user.salt) {
+        // Legacy users may have an all-zero duress_salt; fall back to the main salt.
+        let salt = if user.duress_salt == [0u8; 16] {
+            &user.salt
+        } else {
+            &user.duress_salt
+        };
+        let computed = match hash_password(pin, salt) {
             Ok(h) => h,
             Err(_) => return false,
         };
