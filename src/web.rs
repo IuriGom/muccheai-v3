@@ -161,6 +161,9 @@ pub struct ChatRequest {
     /// User has explicitly confirmed they want to send history to an external provider.
     #[serde(default)]
     pub research_confirmed: bool,
+    /// Base64-encoded image for multi-modal input.
+    #[serde(default)]
+    pub image_b64: Option<String>,
 }
 
 /// Chat response
@@ -1189,7 +1192,7 @@ async fn process_chat(
         drop(config);
         for fallback_agent in &agents_to_try {
             let provider = fallback_agent.provider.as_str();
-            match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
+            match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref()).await {
                 Ok(t) => {
                     text = t;
                     break;
@@ -1233,6 +1236,41 @@ async fn process_chat(
         let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &ctx.mcp_tools, state).await;
         if !tool_results.is_empty() {
             text = tool_cleaned;
+        }
+    }
+
+    // Execute triggered plugins (run in spawn_blocking since WASM execution is CPU-bound + may do blocking I/O)
+    {
+        let pm = state.plugin_manager.lock().await;
+        let triggered = pm.find_triggered(&req.message);
+        if !triggered.is_empty() {
+            let plugin_inputs: Vec<_> = triggered.iter().map(|e| {
+                (e.name.clone(), e.manifest.clone(), e.wasm_hash.clone())
+            }).collect();
+            drop(pm);
+            let input_json = serde_json::json!({"message": req.message, "text": text}).to_string();
+            let plugin_results = tokio::task::spawn_blocking(move || {
+                let mut results = Vec::new();
+                let pm = match crate::plugin::PluginManager::new() {
+                    Ok(m) => m,
+                    Err(_) => return results,
+                };
+                for (name, manifest, _hash) in &plugin_inputs {
+                    if let Some(entry) = pm.get(name) {
+                        match pm.execute(entry, &input_json) {
+                            Ok(out) => results.push((name.clone(), out)),
+                            Err(e) => tracing::warn!("Plugin '{}' execution failed: {}", name, e),
+                        }
+                    }
+                }
+                results
+            }).await.unwrap_or_default();
+            if !plugin_results.is_empty() {
+                text.push_str("\n\n--- Plugin Results ---\n");
+                for (name, out) in plugin_results {
+                    text.push_str(&format!("**{}**: {}\n", name, out.chars().take(500).collect::<String>()));
+                }
+            }
         }
     }
 
@@ -1398,6 +1436,7 @@ async fn call_provider(
     temperature: f32,
     max_tokens: u32,
     history: &[ChatMessage],
+    image_b64: Option<&str>,
 ) -> Result<String, String> {
     match provider {
         "openai" => {
@@ -1421,7 +1460,17 @@ async fn call_provider(
                     "content": &msg.content
                 }));
             }
-            messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            if let Some(img) = image_b64 {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_message},
+                        {"type": "image_url", "image_url": {"url": format!("data:image/jpeg;base64,{}", img)}}
+                    ]
+                }));
+            } else {
+                messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            }
             let body = serde_json::json!({
                 "model": agent.model,
                 "messages": messages,
@@ -1492,7 +1541,17 @@ async fn call_provider(
                     "content": &msg.content
                 }));
             }
-            messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            if let Some(img) = image_b64 {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}},
+                        {"type": "text", "text": user_message}
+                    ]
+                }));
+            } else {
+                messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            }
             let body = serde_json::json!({
                 "model": agent.model,
                 "system": system_prompt,
@@ -1566,7 +1625,15 @@ async fn call_provider(
                     "content": &msg.content
                 }));
             }
-            messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            if let Some(img) = image_b64 {
+                messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": user_message,
+                    "images": [img]
+                }));
+            } else {
+                messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            }
             let body = serde_json::json!({
                 "model": agent.model,
                 "messages": messages,
@@ -1662,6 +1729,7 @@ async fn call_provider_stream(
     temperature: f32,
     max_tokens: u32,
     history: &[ChatMessage],
+    image_b64: Option<&str>,
 ) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(100);
 
@@ -1673,7 +1741,17 @@ async fn call_provider_stream(
                 "content": &msg.content
             }));
         }
-        m.push(serde_json::json!({"role": "user", "content": user_message}));
+        if let Some(img) = image_b64 {
+            m.push(serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_message},
+                    {"type": "image_url", "image_url": {"url": format!("data:image/jpeg;base64,{}", img)}}
+                ]
+            }));
+        } else {
+            m.push(serde_json::json!({"role": "user", "content": user_message}));
+        }
         m
     };
 
@@ -1747,7 +1825,17 @@ async fn call_provider_stream(
                     "content": &msg.content
                 }));
             }
-            api_messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            if let Some(img) = image_b64 {
+                api_messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}},
+                        {"type": "text", "text": user_message}
+                    ]
+                }));
+            } else {
+                api_messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            }
             let body = serde_json::json!({
                 "model": agent.model,
                 "system": system_prompt,
@@ -1804,9 +1892,25 @@ async fn call_provider_stream(
             }
             let pinned_client = build_pinned_client(base_url).await?;
             let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+            let mut ollama_messages: Vec<serde_json::Value> = vec![serde_json::json!({"role": "system", "content": system_prompt})];
+            for msg in history {
+                ollama_messages.push(serde_json::json!({
+                    "role": if msg.role == "ai" { "assistant" } else { &msg.role },
+                    "content": &msg.content
+                }));
+            }
+            if let Some(img) = image_b64 {
+                ollama_messages.push(serde_json::json!({
+                    "role": "user",
+                    "content": user_message,
+                    "images": [img]
+                }));
+            } else {
+                ollama_messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            }
             let body = serde_json::json!({
                 "model": agent.model,
-                "messages": messages,
+                "messages": ollama_messages,
                 "stream": true,
                 "keep_alive": "5m",
                 "options": {
@@ -3755,7 +3859,7 @@ async fn chat_stream(
             drop(config);
             for fallback_agent in &agents_to_try {
                 let provider = fallback_agent.provider.as_str();
-                match call_provider_stream(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
+                match call_provider_stream(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref()).await {
                     Ok(rx) => { stream_rx = Some(rx); break; }
                     Err(e) => tracing::warn!("Streaming agent '{}' failed: {}", fallback_agent.name, e),
                 }
@@ -3787,7 +3891,7 @@ async fn chat_stream(
                 drop(config);
                 for fallback_agent in &agents_to_try {
                     let provider = fallback_agent.provider.as_str();
-                    match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
+                    match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref()).await {
                         Ok(t) => { text = t; break; }
                         Err(e) => { tracing::warn!("Agent '{}' failed: {}", fallback_agent.name, e); last_err = e; }
                     }
@@ -3836,6 +3940,41 @@ async fn chat_stream(
         if !ctx.mcp_tools.is_empty() && full_text.contains("<mcp_tool") {
             let (tool_cleaned, _tool_results) = process_mcp_tool_calls(&full_text, &ctx.mcp_tools, &state).await;
             full_text = tool_cleaned;
+        }
+
+        // Execute triggered plugins in spawn_blocking (same as blocking path)
+        {
+            let pm = state.plugin_manager.lock().await;
+            let triggered = pm.find_triggered(&req.message);
+            if !triggered.is_empty() {
+                let plugin_inputs: Vec<_> = triggered.iter().map(|e| {
+                    (e.name.clone(), e.manifest.clone(), e.wasm_hash.clone())
+                }).collect();
+                drop(pm);
+                let input_json = serde_json::json!({"message": req.message, "text": full_text}).to_string();
+                let plugin_results = tokio::task::spawn_blocking(move || {
+                    let mut results = Vec::new();
+                    let pm = match crate::plugin::PluginManager::new() {
+                        Ok(m) => m,
+                        Err(_) => return results,
+                    };
+                    for (name, manifest, _hash) in &plugin_inputs {
+                        if let Some(entry) = pm.get(name) {
+                            match pm.execute(entry, &input_json) {
+                                Ok(out) => results.push((name.clone(), out)),
+                                Err(e) => tracing::warn!("Plugin '{}' execution failed: {}", name, e),
+                            }
+                        }
+                    }
+                    results
+                }).await.unwrap_or_default();
+                if !plugin_results.is_empty() {
+                    full_text.push_str("\n\n--- Plugin Results ---\n");
+                    for (name, out) in plugin_results {
+                        full_text.push_str(&format!("**{}**: {}\n", name, out.chars().take(500).collect::<String>()));
+                    }
+                }
+            }
         }
 
         const MAX_SESSIONS: usize = 100;
@@ -4196,30 +4335,41 @@ async fn test_mcp_server(
     };
 
     let mut client = muccheai_mcp::McpClient::new(transport);
-    let result = match client.connect().await {
-        Ok(_) => match client.discover_tools().await {
-            Ok(tools) => {
-                let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
-                Json(McpTestResponse {
-                    success: true,
-                    message: format!("Connected. Discovered {} tools.", tool_names.len()),
-                    tools: tool_names,
-                })
+    // Wrap MCP I/O in spawn_blocking since stdio transport may block on subprocess I/O.
+    match tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            match client.connect().await {
+                Ok(_) => match client.discover_tools().await {
+                    Ok(tools) => {
+                        let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+                        McpTestResponse {
+                            success: true,
+                            message: format!("Connected. Discovered {} tools.", tool_names.len()),
+                            tools: tool_names,
+                        }
+                    }
+                    Err(_e) => McpTestResponse {
+                        success: true,
+                        message: "Connected but failed to discover tools".to_string(),
+                        tools: vec![],
+                    },
+                },
+                Err(_e) => McpTestResponse {
+                    success: false,
+                    message: "Connection failed".to_string(),
+                    tools: vec![],
+                },
             }
-            Err(_e) => Json(McpTestResponse {
-                success: true,
-                message: "Connected but failed to discover tools".to_string(),
-                tools: vec![],
-            }),
-        },
+        })
+    }).await {
+        Ok(r) => Json(r),
         Err(_e) => Json(McpTestResponse {
             success: false,
-            message: "Connection failed".to_string(),
+            message: "MCP test task panicked".to_string(),
             tools: vec![],
         }),
-    };
-    client.disconnect().await;
-    result
+    }
 }
 
 /// Start the web server.
@@ -4610,10 +4760,11 @@ async fn chat_with_image(
     };
 
     let req = ChatRequest {
-        message: format!("[Image attached]\n{}", payload.message),
+        message: payload.message.clone(),
         session_id: Some(session_id),
         research: false,
         research_confirmed: false,
+        image_b64: Some(payload.image_b64.clone()).filter(|s| !s.is_empty()),
     };
     let resp = process_chat(&state, &headers, &req).await;
     Ok(Json(resp))
