@@ -1,30 +1,48 @@
 //! Plugin WASM runtime using wasmtime.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use wasmtime::{Engine, Linker, Module, Store, TypedFunc};
 
 use super::manifest::PluginManifest;
 
-pub struct PluginRuntime;
+pub struct PluginRuntime {
+    engine: Engine,
+    module_cache: std::sync::Mutex<HashMap<PathBuf, Module>>,
+}
 
 impl PluginRuntime {
     pub fn new() -> Self {
-        Self
+        Self {
+            engine: Engine::default(),
+            module_cache: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     /// Execute a plugin with the given input JSON.
     /// Returns the output JSON string.
+    /// 
+    /// **Important:** This function performs blocking I/O and WASM compilation.
+    /// Callers from async context MUST wrap this in `tokio::task::spawn_blocking`.
     pub fn execute(
         &self,
         wasm_path: &Path,
         manifest: &PluginManifest,
         input_json: &str,
     ) -> anyhow::Result<String> {
-        let engine = Engine::default();
-        let module = Module::from_file(&engine, wasm_path)?;
+        let module = {
+            let mut cache = self.module_cache.lock().unwrap();
+            if let Some(m) = cache.get(wasm_path) {
+                m.clone()
+            } else {
+                let m = Module::from_file(&self.engine, wasm_path)?;
+                cache.insert(wasm_path.to_path_buf(), m.clone());
+                m
+            }
+        };
 
-        let mut linker: Linker<PluginState> = Linker::new(&engine);
+        let mut linker: Linker<PluginState> = Linker::new(&self.engine);
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
             .inherit_stdout()
             .inherit_stderr()
@@ -45,7 +63,7 @@ impl PluginRuntime {
             log_buffer: Vec::new(),
         };
 
-        let mut store = Store::new(&engine, state);
+        let mut store = Store::new(&self.engine, state);
 
         let instance = linker.instantiate(&mut store, &module)?;
 

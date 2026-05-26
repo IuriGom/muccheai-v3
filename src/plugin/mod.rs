@@ -69,7 +69,7 @@ impl PluginManager {
                 tracing::warn!("Invalid plugin manifest at {:?}: {}", manifest_path, e);
                 continue;
             }
-            let wasm_path = path.join(&manifest.plugin.wasm_path);
+            let wasm_path = path.join(std::path::Path::new(&manifest.plugin.wasm_path).file_name().unwrap_or_else(|| std::ffi::OsStr::new("plugin.wasm")));
             let wasm_hash = match std::fs::read(&wasm_path) {
                 Ok(bytes) => {
                     use sha3::{Sha3_256, Digest};
@@ -131,6 +131,12 @@ impl PluginManager {
         let manifest = PluginManifest::load(&manifest_path)?;
         manifest.validate()?;
 
+        // Prevent path traversal in wasm_path
+        let wasm_name = std::path::Path::new(&manifest.plugin.wasm_path);
+        if wasm_name.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(..))) {
+            return Err(anyhow::anyhow!("wasm_path contains path traversal components"));
+        }
+
         let dest = self.plugins_dir.join(&manifest.plugin.name);
         if dest.exists() {
             std::fs::remove_dir_all(&dest)?;
@@ -140,15 +146,12 @@ impl PluginManager {
         // Copy manifest
         std::fs::copy(&manifest_path, dest.join("plugin.toml"))?;
 
-        // Copy WASM
-        let wasm_src = source.join(&manifest.plugin.wasm_path);
+        // Copy WASM (into plugin dir root, ignoring any directory components in wasm_name)
+        let wasm_src = source.join(wasm_name);
         if !wasm_src.exists() {
             return Err(anyhow::anyhow!("WASM file not found at {:?}", wasm_src));
         }
-        let wasm_dest = dest.join(&manifest.plugin.wasm_path);
-        if let Some(parent) = wasm_dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let wasm_dest = dest.join(wasm_name.file_name().unwrap_or_else(|| std::ffi::OsStr::new("plugin.wasm")));
         std::fs::copy(&wasm_src, &wasm_dest)?;
 
         // Copy source for audit trail
@@ -192,6 +195,12 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         let entry = entry?;
         let path = entry.path();
         let dest = dst.join(entry.file_name());
+        // Reject symlinks to prevent directory traversal / data exfiltration.
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            tracing::warn!(target: "plugin", "Skipping symlink during plugin install: {:?}", path);
+            continue;
+        }
         if path.is_dir() {
             copy_dir_all(&path, &dest)?;
         } else {

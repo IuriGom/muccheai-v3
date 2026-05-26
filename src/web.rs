@@ -11,7 +11,7 @@ use axum::{
 };
 use std::convert::Infallible;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -1003,22 +1003,32 @@ async fn rate_limit_middleware(
     next.run(request).await
 }
 
-/// Handle chat messages
-/// Supports Ollama, OpenAI, and Anthropic API formats.
-async fn process_chat(
+/// Shared context built for both blocking and streaming chat.
+struct ChatContext {
+    system_prompt: String,
+    agent: crate::config::AgentConfig,
+    temperature: f32,
+    max_tokens: u32,
+    history: Vec<ChatMessage>,
+    memories_count: usize,
+    mcp_tools: Vec<CachedMcpTool>,
+    needs_confirmation: Option<String>,
+}
+
+async fn build_chat_context(
     state: &Arc<AppState>,
     headers: &HeaderMap,
     req: &ChatRequest,
-) -> ChatResponse {
+) -> Result<ChatContext, ChatResponse> {
     // Duress sessions get generic responses without accessing or storing data.
     if is_duress_session(state, headers).await {
-        return ChatResponse {
+        return Err(ChatResponse {
             response: "I'm here to help. What would you like to know?".to_string(),
             session_id: req.session_id.clone().unwrap_or_default(),
             session_secret: String::new(),
             needs_confirmation: None,
             memories_used: None,
-        };
+        });
     }
 
     let config = state.config.lock().await;
@@ -1030,7 +1040,7 @@ async fn process_chat(
             .any(|a| a.provider != "ollama");
         if has_external && !req.research_confirmed {
             drop(config);
-            return ChatResponse {
+            return Err(ChatResponse {
                 response: String::new(),
                 session_id: req.session_id.clone().unwrap_or_default(),
                 session_secret: String::new(),
@@ -1039,7 +1049,7 @@ async fn process_chat(
                      Your data will leave this machine.".to_string()
                 ),
                 memories_used: None,
-            };
+            });
         }
     }
 
@@ -1144,18 +1154,42 @@ async fn process_chat(
         }
     };
 
+    Ok(ChatContext {
+        system_prompt,
+        agent,
+        temperature,
+        max_tokens,
+        history,
+        memories_count,
+        mcp_tools,
+        needs_confirmation: None,
+    })
+}
+
+/// Handle chat messages
+/// Supports Ollama, OpenAI, and Anthropic API formats.
+async fn process_chat(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    req: &ChatRequest,
+) -> ChatResponse {
+    let ctx = match build_chat_context(state, headers, req).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
     // Try active agent first, then fall back through other configured agents.
     let mut text = String::new();
     let mut last_err = String::new();
     {
         let config = state.config.lock().await;
-        let agents_to_try: Vec<_> = std::iter::once(agent.clone())
-            .chain(config.agents.iter().filter(|a| a.name != agent.name).cloned())
+        let agents_to_try: Vec<_> = std::iter::once(ctx.agent.clone())
+            .chain(config.agents.iter().filter(|a| a.name != ctx.agent.name).cloned())
             .collect();
         drop(config);
         for fallback_agent in &agents_to_try {
             let provider = fallback_agent.provider.as_str();
-            match call_provider(fallback_agent, provider, &system_prompt, &req.message, temperature, max_tokens, &history).await {
+            match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
                 Ok(t) => {
                     text = t;
                     break;
@@ -1195,8 +1229,8 @@ async fn process_chat(
     }
 
     // Process any MCP tool calls in the response
-    if !mcp_tools.is_empty() && text.contains("<mcp_tool") {
-        let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &mcp_tools, state).await;
+    if !ctx.mcp_tools.is_empty() && text.contains("<mcp_tool") {
+        let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &ctx.mcp_tools, state).await;
         if !tool_results.is_empty() {
             text = tool_cleaned;
         }
@@ -1288,7 +1322,7 @@ async fn process_chat(
         session_id,
         session_secret: session_secret,
         needs_confirmation: None,
-        memories_used: Some(memories_count),
+        memories_used: Some(ctx.memories_count),
     }
 }
 
@@ -1614,6 +1648,207 @@ async fn call_provider(
                     tracing::error!("Ollama unexpected response format");
                     "Provider returned unexpected data".to_string()
                 })
+        }
+    }
+}
+
+/// Streaming variant of `call_provider`. Returns a channel receiver that yields text chunks.
+/// Supports Ollama, OpenAI, and Anthropic streaming APIs.
+async fn call_provider_stream(
+    agent: &crate::config::AgentConfig,
+    provider: &str,
+    system_prompt: &str,
+    user_message: &str,
+    temperature: f32,
+    max_tokens: u32,
+    history: &[ChatMessage],
+) -> Result<tokio::sync::mpsc::Receiver<String>, String> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(100);
+
+    let messages: Vec<serde_json::Value> = {
+        let mut m = vec![serde_json::json!({"role": "system", "content": system_prompt})];
+        for msg in history {
+            m.push(serde_json::json!({
+                "role": if msg.role == "ai" { "assistant" } else { &msg.role },
+                "content": &msg.content
+            }));
+        }
+        m.push(serde_json::json!({"role": "user", "content": user_message}));
+        m
+    };
+
+    match provider {
+        "openai" => {
+            let base_url = agent.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
+            if validate_no_ssrf_external(base_url).is_err() || validate_no_ssrf_dns(base_url).await.is_err() {
+                return Err("Provider configuration rejected".into());
+            }
+            let pinned_client = build_pinned_client(base_url).await?;
+            let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": agent.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": true,
+            });
+            let mut req_builder = pinned_client.post(&url).json(&body);
+            if let Some(key) = &agent.api_key {
+                req_builder = req_builder.header("Authorization", format!("Bearer {}", key));
+            }
+            let resp = req_builder.send().await.map_err(|e| {
+                tracing::error!("OpenAI streaming request failed: {}", e);
+                "Provider request failed".to_string()
+            })?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                tracing::error!("OpenAI streaming API error: HTTP {} — {}", status, body_text);
+                return Err("Provider returned an error".to_string());
+            }
+            tokio::spawn(async move {
+                let mut stream = resp.bytes_stream();
+                let mut buffer = String::new();
+                while let Some(chunk) = stream.next().await {
+                    let bytes = match chunk {
+                        Ok(b) => b,
+                        Err(e) => { tracing::warn!("OpenAI stream error: {}", e); break; }
+                    };
+                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer.drain(..=pos).collect::<String>();
+                        let line = line.trim();
+                        if line.is_empty() || !line.starts_with("data: ") { continue; }
+                        let data = &line[6..];
+                        if data == "[DONE]" { continue; }
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                if !content.is_empty() && tx.send(content.to_string()).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            Ok(rx)
+        }
+        "anthropic" => {
+            let base_url = agent.base_url.as_deref().unwrap_or("https://api.anthropic.com");
+            if validate_no_ssrf_external(base_url).is_err() || validate_no_ssrf_dns(base_url).await.is_err() {
+                return Err("Provider configuration rejected".into());
+            }
+            let pinned_client = build_pinned_client(base_url).await?;
+            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+            let mut api_messages = Vec::new();
+            for msg in history {
+                api_messages.push(serde_json::json!({
+                    "role": if msg.role == "ai" { "assistant" } else { &msg.role },
+                    "content": &msg.content
+                }));
+            }
+            api_messages.push(serde_json::json!({"role": "user", "content": user_message}));
+            let body = serde_json::json!({
+                "model": agent.model,
+                "system": system_prompt,
+                "messages": api_messages,
+                "max_tokens": max_tokens,
+                "stream": true,
+            });
+            let mut req_builder = pinned_client.post(&url).json(&body);
+            if let Some(key) = &agent.api_key {
+                req_builder = req_builder.header("x-api-key", key);
+            }
+            req_builder = req_builder.header("anthropic-version", "2023-06-01");
+            let resp = req_builder.send().await.map_err(|e| {
+                tracing::error!("Anthropic streaming request failed: {}", e);
+                "Provider request failed".to_string()
+            })?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                tracing::error!("Anthropic streaming API error: HTTP {} — {}", status, body_text);
+                return Err("Provider returned an error".to_string());
+            }
+            tokio::spawn(async move {
+                let mut stream = resp.bytes_stream();
+                let mut buffer = String::new();
+                while let Some(chunk) = stream.next().await {
+                    let bytes = match chunk {
+                        Ok(b) => b,
+                        Err(e) => { tracing::warn!("Anthropic stream error: {}", e); break; }
+                    };
+                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer.drain(..=pos).collect::<String>();
+                        let line = line.trim();
+                        if line.is_empty() || !line.starts_with("data: ") { continue; }
+                        let data = &line[6..];
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(text) = json["delta"]["text"].as_str() {
+                                if !text.is_empty() && tx.send(text.to_string()).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            Ok(rx)
+        }
+        _ => {
+            // Ollama streaming
+            let base_url = agent.base_url.as_deref().unwrap_or("http://localhost:11434");
+            if validate_no_ssrf(base_url).is_err() || validate_no_ssrf_dns(base_url).await.is_err() {
+                return Err("Provider configuration rejected".into());
+            }
+            let pinned_client = build_pinned_client(base_url).await?;
+            let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": agent.model,
+                "messages": messages,
+                "stream": true,
+                "keep_alive": "5m",
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens
+                }
+            });
+            let resp = pinned_client.post(&url).json(&body).send().await.map_err(|e| {
+                tracing::error!("Ollama streaming request failed: {}", e);
+                "Provider request failed".to_string()
+            })?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                tracing::error!("Ollama streaming API error: HTTP {} — {}", status, body_text);
+                return Err("Provider returned an error".to_string());
+            }
+            tokio::spawn(async move {
+                let mut stream = resp.bytes_stream();
+                let mut buffer = String::new();
+                while let Some(chunk) = stream.next().await {
+                    let bytes = match chunk {
+                        Ok(b) => b,
+                        Err(e) => { tracing::warn!("Ollama stream error: {}", e); break; }
+                    };
+                    buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer.drain(..=pos).collect::<String>();
+                        let line = line.trim();
+                        if line.is_empty() { continue; }
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                            if json["done"].as_bool() == Some(true) { continue; }
+                            if let Some(content) = json["message"]["content"].as_str() {
+                                if !content.is_empty() && tx.send(content.to_string()).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            Ok(rx)
         }
     }
 }
@@ -3400,10 +3635,11 @@ async fn global_search(
 
     let mut results = Vec::new();
 
-    // Search memories
+    // Search memories (limit each source to 50 to bound memory usage)
     {
         let sm = state.structured_memory.lock().await;
         for entry in sm.list_all_by_owner(&owner) {
+            if results.len() >= 50 { break; }
             let key_match = entry.key.to_lowercase().contains(&q);
             let val_str = serde_json::to_string(&entry.value).unwrap_or_default();
             let val_match = val_str.to_lowercase().contains(&q);
@@ -3423,6 +3659,7 @@ async fn global_search(
     {
         let sessions = state.chat_sessions.lock().await;
         for session in sessions.iter().filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())) {
+            if results.len() >= 100 { break; }
             let title_match = session.title.to_lowercase().contains(&q);
             let mut content_match = false;
             let mut matched_content = String::new();
@@ -3481,44 +3718,161 @@ async fn chat_stream(
     let headers = headers.clone();
 
     tokio::spawn(async move {
-        let response = process_chat(&state, &headers, &req).await;
-        
-        // Send session info first (do NOT leak session_secret over SSE)
+        let ctx = match build_chat_context(&state, &headers, &req).await {
+            Ok(c) => c,
+            Err(resp) => {
+                let meta = serde_json::json!({
+                    "session_id": resp.session_id,
+                    "memories_used": resp.memories_used,
+                });
+                let _ = tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await;
+                if let Some(confirm) = resp.needs_confirmation {
+                    let confirm_json = serde_json::json!({ "confirm": confirm });
+                    let _ = tx.send(Ok(Event::default().event("confirm").data(confirm_json.to_string()))).await;
+                } else {
+                    let _ = tx.send(Ok(Event::default().data(resp.response))).await;
+                }
+                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                return;
+            }
+        };
+
         let meta = serde_json::json!({
-            "session_id": response.session_id,
-            "memories_used": response.memories_used,
+            "session_id": req.session_id.clone().unwrap_or_default(),
+            "memories_used": ctx.memories_count,
         });
         if tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await.is_err() {
-            return; // client disconnected
-        }
-
-        if let Some(confirm) = response.needs_confirmation {
-            let confirm_json = serde_json::json!({ "confirm": confirm });
-            let _ = tx.send(Ok(Event::default().event("confirm").data(confirm_json.to_string()))).await;
-            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
             return;
         }
 
-        // Stream the response in chunks (simulating token streaming)
-        let text = response.response;
-        let chunk_size = 4usize;
-        let mut chars = text.chars();
-        let mut buffer = String::new();
-        while let Some(c) = chars.next() {
-            buffer.push(c);
-            if buffer.len() >= chunk_size {
-                if tx.send(Ok(Event::default().data(buffer.clone()))).await.is_err() {
+        // Try real streaming first.
+        let mut stream_rx: Option<tokio::sync::mpsc::Receiver<String>> = None;
+        {
+            let config = state.config.lock().await;
+            let agents_to_try: Vec<_> = std::iter::once(ctx.agent.clone())
+                .chain(config.agents.iter().filter(|a| a.name != ctx.agent.name).cloned())
+                .collect();
+            drop(config);
+            for fallback_agent in &agents_to_try {
+                let provider = fallback_agent.provider.as_str();
+                match call_provider_stream(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
+                    Ok(rx) => { stream_rx = Some(rx); break; }
+                    Err(e) => tracing::warn!("Streaming agent '{}' failed: {}", fallback_agent.name, e),
+                }
+            }
+        }
+
+        let mut full_text = String::new();
+        let mut session_id = req.session_id.clone().unwrap_or_default();
+        let mut session_secret = String::new();
+
+        if let Some(mut rx) = stream_rx {
+            // Real streaming
+            while let Some(chunk) = rx.recv().await {
+                full_text.push_str(&chunk);
+                if tx.send(Ok(Event::default().data(chunk))).await.is_err() {
                     return; // client disconnected
                 }
-                buffer.clear();
+            }
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        } else {
+            // Fallback: blocking call + fake chunks
+            let mut text = String::new();
+            let mut last_err = String::new();
+            {
+                let config = state.config.lock().await;
+                let agents_to_try: Vec<_> = std::iter::once(ctx.agent.clone())
+                    .chain(config.agents.iter().filter(|a| a.name != ctx.agent.name).cloned())
+                    .collect();
+                drop(config);
+                for fallback_agent in &agents_to_try {
+                    let provider = fallback_agent.provider.as_str();
+                    match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history).await {
+                        Ok(t) => { text = t; break; }
+                        Err(e) => { tracing::warn!("Agent '{}' failed: {}", fallback_agent.name, e); last_err = e; }
+                    }
+                }
+            }
+            if text.is_empty() {
+                text = "(The AI service is temporarily unavailable. Please try again later.)".to_string();
+            }
+            full_text = text;
+            let chunk_size = 4usize;
+            let mut chars = full_text.chars();
+            let mut buffer = String::new();
+            while let Some(c) = chars.next() {
+                buffer.push(c);
+                if buffer.len() >= chunk_size {
+                    if tx.send(Ok(Event::default().data(buffer.clone()))).await.is_err() { return; }
+                    buffer.clear();
+                }
+            }
+            if !buffer.is_empty() {
+                if tx.send(Ok(Event::default().data(buffer))).await.is_err() { return; }
+            }
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        }
+
+        // Post-processing: memory extraction, MCP tools, session storage.
+        let (cleaned_text, proposals) = extract_memory_proposals(&full_text);
+        full_text = cleaned_text;
+        if !proposals.is_empty() {
+            let sm = state.structured_memory.lock().await;
+            for (mem_type, key, value) in proposals {
+                let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+                let entry = MemoryEntry {
+                    memory_type: mem_type,
+                    key: key.clone(),
+                    value: MemoryValue::ShortString(value),
+                    created_at: Timestamp::now(),
+                    user_signature: vec![],
+                    content_hash: vec![],
+                    owner_hash: owner.clone(),
+                };
+                let _ = sm.propose(entry, &format!("Suggested memory: {}", key));
             }
         }
-        if !buffer.is_empty() {
-            if tx.send(Ok(Event::default().data(buffer))).await.is_err() {
-                return;
-            }
+
+        if !ctx.mcp_tools.is_empty() && full_text.contains("<mcp_tool") {
+            let (tool_cleaned, _tool_results) = process_mcp_tool_calls(&full_text, &ctx.mcp_tools, &state).await;
+            full_text = tool_cleaned;
         }
-        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+
+        const MAX_SESSIONS: usize = 100;
+        const MAX_MESSAGES_PER_SESSION: usize = 500;
+        let mut sessions = state.chat_sessions.lock().await;
+        session_id = req.session_id.clone().unwrap_or_else(|| {
+            let mut buf = [0u8; 16];
+            state.rng.fill(&mut buf).expect("CSPRNG failure");
+            format!("session-{}", hex::encode(buf))
+        });
+        let existing = sessions.iter().position(|s| s.id == session_id);
+        let timestamp = Timestamp::now().0;
+        let secret = headers.get("x-session-secret").and_then(|h| h.to_str().ok()).unwrap_or("");
+        session_secret = if let Some(idx) = existing {
+            if muccheai_crypto::constant_time::eq(sessions[idx].session_secret.as_bytes(), secret.as_bytes()) {
+                sessions[idx].messages.push(ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp });
+                sessions[idx].messages.push(ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 });
+                while sessions[idx].messages.len() > MAX_MESSAGES_PER_SESSION { sessions[idx].messages.remove(0); }
+                sessions[idx].session_secret.clone()
+            } else { String::new() }
+        } else {
+            while sessions.len() >= MAX_SESSIONS { sessions.remove(0); }
+            let title = if req.message.chars().count() > 40 { format!("{}...", req.message.chars().take(40).collect::<String>()) } else { req.message.clone() };
+            let mut sec = [0u8; 16];
+            state.rng.fill(&mut sec).expect("CSPRNG failure");
+            let s = hex::encode(sec);
+            sessions.push(ChatSession {
+                id: session_id.clone(), title, created_at: timestamp,
+                owner_hash: get_session_owner(&state, &headers).await.unwrap_or_default(),
+                session_secret: s.clone(), parent_id: None, branch_point: None,
+                messages: vec![
+                    ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp },
+                    ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
+                ],
+            });
+            s
+        };
     });
 
     Sse::new(ReceiverStream::new(rx))
@@ -3551,6 +3905,9 @@ struct AddMcpServerRequest {
     args: Vec<String>,
     url: Option<String>,
     api_key: Option<String>,
+    /// Explicit opt-in required for interpreter-based commands (npx, node, python, etc.)
+    #[serde(default)]
+    dangerous: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3566,15 +3923,27 @@ async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<McpServerL
     if let Some(mcp) = cfg.mcp {
         for (name, s) in mcp.servers {
             let safe_url = s.url.map(|u| {
-                if let Ok(parsed) = url::Url::parse(&u) {
-                    let mut redacted = parsed.clone();
-                    if !redacted.username().is_empty() {
-                        let _ = redacted.set_username("");
+                if let Ok(mut parsed) = url::Url::parse(&u) {
+                    if !parsed.username().is_empty() {
+                        let _ = parsed.set_username("");
                     }
-                    if redacted.password().is_some() {
-                        let _ = redacted.set_password(None);
+                    if parsed.password().is_some() {
+                        let _ = parsed.set_password(None);
                     }
-                    redacted.to_string()
+                    // Strip query parameters that commonly contain API keys/secrets.
+                    let stripped: Vec<_> = parsed.query_pairs()
+                        .filter(|(k, _)| {
+                            let kl = k.to_lowercase();
+                            !kl.contains("key") && !kl.contains("token") && !kl.contains("secret") && !kl.contains("auth")
+                        })
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                    if stripped.is_empty() {
+                        parsed.set_query(None);
+                    } else {
+                        parsed.query_pairs_mut().clear().extend_pairs(&stripped);
+                    }
+                    parsed.to_string()
                 } else {
                     u
                 }
@@ -3609,6 +3978,16 @@ async fn add_mcp_server(
             }
             if cmd_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
                 return Err(StatusCode::BAD_REQUEST);
+            }
+            // Interpreter-based commands (npx, node, python, etc.) can execute arbitrary code.
+            // They require explicit dangerous=true opt-in.
+            let cmd_name = cmd_path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(cmd);
+            let dangerous_cmds = ["npx", "npm", "node", "python", "python3", "sh", "bash", "zsh", "cmd", "powershell"];
+            if dangerous_cmds.iter().any(|d| cmd_name.eq_ignore_ascii_case(d)) && !req.dangerous {
+                tracing::warn!("MCP stdio command '{}' rejected: interpreter-based commands require dangerous=true", cmd);
+                return Err(StatusCode::FORBIDDEN);
             }
             let invalid_chars = [';', '|', '&', '$', '`', '<', '>', '(', ')', '{', '}', '*', '?', '[', ']', '\\', '\'', '"'];
             for arg in &req.args {

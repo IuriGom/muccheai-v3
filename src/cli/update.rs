@@ -91,31 +91,67 @@ pub async fn print_update_banner() {
     }
 }
 
+/// Attempt to discover the local git repo path at runtime.
+/// Walks up from the current working directory looking for a .git folder.
+fn find_local_repo() -> Option<std::path::PathBuf> {
+    let mut current = std::env::current_dir().ok()?;
+    loop {
+        if current.join(".git").is_dir() && current.join("Cargo.toml").is_file() {
+            return Some(current);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
+}
+
 /// Run the self-update.
 pub fn run_update() -> anyhow::Result<()> {
     let theme = Theme::Cyber;
     theme.print_header("Updating MuccheAI");
 
-    let repo_path =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Warn user about security implications of auto-updates.
+    eprintln!("⚠️  SECURITY NOTICE:");
+    eprintln!("   This command fetches and executes code from the internet.");
+    eprintln!("   No commit signature verification is performed.");
+    eprintln!("   If you need supply-chain guarantees, build from a verified git tag instead.");
+    eprintln!();
 
-    let is_git_repo = repo_path.join(".git").is_dir();
+    let repo_path = find_local_repo();
 
-    if is_git_repo {
-        println!("  Detected local git repo at {}", repo_path.display());
+    if let Some(ref path) = repo_path {
+        println!("  Detected local git repo at {}", path.display());
         println!("  Pulling latest changes...\n");
 
+        // Fetch the latest commit hash so the user can verify it.
+        let hash_output = Command::new("git")
+            .args(["-C", &path.to_string_lossy(), "rev-parse", "HEAD"])
+            .output()?;
+        let before_hash = String::from_utf8_lossy(&hash_output.stdout).trim().to_string();
+        if before_hash.len() == 40 {
+            println!("  Current commit: {}", &before_hash[..12]);
+        }
+
         let status = Command::new("git")
-            .args(["-C", &repo_path.to_string_lossy(), "pull", "origin", "main"])
+            .args(["-C", &path.to_string_lossy(), "pull", "origin", "main"])
             .status()?;
 
         if !status.success() {
             anyhow::bail!("git pull failed — check for local changes and try again.");
         }
 
+        let hash_output = Command::new("git")
+            .args(["-C", &path.to_string_lossy(), "rev-parse", "HEAD"])
+            .output()?;
+        let after_hash = String::from_utf8_lossy(&hash_output.stdout).trim().to_string();
+        if after_hash.len() == 40 {
+            println!("  New commit: {}\n", &after_hash[..12]);
+        }
+
         println!("  Building and installing...\n");
         let install_status = Command::new("cargo")
-            .args(["install", "--path", &repo_path.to_string_lossy(), "--force"])
+            .args(["install", "--path", &path.to_string_lossy(), "--force"])
             .status()?;
 
         if !install_status.success() {
@@ -124,7 +160,9 @@ pub fn run_update() -> anyhow::Result<()> {
 
         theme.print_success("Update complete!");
     } else {
-        println!("  Installing from GitHub...\n");
+        println!("  No local git repo found — installing from GitHub...\n");
+        println!("  ⚠️  Installing from remote git without commit verification.");
+        println!("  ⚠️  Consider cloning the repo and running `cargo install --path .` instead.\n");
         let status = Command::new("cargo")
             .args([
                 "install",
