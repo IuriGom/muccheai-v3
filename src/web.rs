@@ -141,6 +141,8 @@ pub struct AppState {
     pub scheduled_tasks: Mutex<Vec<ScheduledTask>>,
     /// Plugin manager
     pub plugin_manager: Mutex<crate::plugin::PluginManager>,
+    /// Dedicated rate limiter for backup/restore to avoid consuming HTTP budget
+    pub backup_rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
 }
 
 #[derive(Clone)]
@@ -241,6 +243,7 @@ pub struct ConfigResponse {
     pub ollama_model: String,
     pub web_bind_address: String,
     pub policy_rules: Vec<String>,
+    pub policy_rule_count: usize,
 }
 
 /// Memory entry as exposed by the REST API.
@@ -677,6 +680,7 @@ fn html_escape(input: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#x27;"),
+            '/' => out.push_str("&#x2F;"),
             _ => out.push(c),
         }
     }
@@ -1340,6 +1344,9 @@ async fn process_chat(
         format!("session-{}", hex::encode(buf))
     });
 
+    // Ephemeral chats (e.g. scheduled tasks) should not persist to session storage.
+    let ephemeral = headers.get("x-ephemeral-chat").is_some();
+
     let existing = sessions.iter().position(|s| s.id == session_id);
     let timestamp = Timestamp::now().0;
 
@@ -1347,6 +1354,18 @@ async fn process_chat(
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
+
+    if ephemeral {
+        drop(sessions);
+        return ChatResponse {
+            response: text.trim().to_string(),
+            session_id: String::new(),
+            session_secret: String::new(),
+            needs_confirmation: None,
+            memories_used: Some(ctx.memories_count),
+        };
+    }
+
     let session_secret = if let Some(idx) = existing {
         if !muccheai_crypto::constant_time::eq(sessions[idx].session_secret.as_bytes(), secret.as_bytes()) {
             return ChatResponse {
@@ -1373,7 +1392,13 @@ async fn process_chat(
         sessions[idx].session_secret.clone()
     } else {
         while sessions.len() >= MAX_SESSIONS {
-            sessions.remove(0);
+            let dropped = sessions.remove(0);
+            tracing::warn!(
+                target: "security",
+                "Session limit reached ({}). Dropping oldest session: {}",
+                MAX_SESSIONS,
+                dropped.id
+            );
         }
         let title = if req.message.chars().count() > 40 {
             format!("{}...", req.message.chars().take(40).collect::<String>())
@@ -1438,7 +1463,11 @@ async fn ws_chat(
     if owner.is_none() || token.is_none() {
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
-    ws.on_upgrade(move |socket| handle_ws_socket(socket, state, token.unwrap()))
+    // SAFETY: unwrap is guarded by the check above, but use match for future-proofing
+    match token {
+        Some(t) => ws.on_upgrade(move |socket| handle_ws_socket(socket, state, t)),
+        None => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    }
 }
 
 async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppState>, token: String) {
@@ -2436,6 +2465,43 @@ async fn process_mcp_tool_calls(
 }
 
 /// Parse and execute custom HTTP tool calls from the LLM response.
+/// Single-pass template substitution that does NOT re-scan substituted values,
+/// preventing recursive injection when a value contains placeholder-like braces.
+fn substitute_template(template: &str, args: &serde_json::Map<String, serde_json::Value>) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut chars = template.chars();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut key = String::new();
+            let mut found_close = false;
+            for ch in chars.by_ref() {
+                if ch == '}' {
+                    found_close = true;
+                    break;
+                }
+                key.push(ch);
+            }
+            if found_close {
+                if let Some(v) = args.get(&key) {
+                    let val_str = v.to_string();
+                    let val = v.as_str().unwrap_or(&val_str);
+                    result.push_str(val);
+                } else {
+                    result.push('{');
+                    result.push_str(&key);
+                    result.push('}');
+                }
+            } else {
+                result.push('{');
+                result.push_str(&key);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 async fn process_custom_tool_calls(
     text: &str,
     tools: &[crate::config::CustomToolConfig],
@@ -2475,19 +2541,16 @@ async fn process_custom_tool_calls(
         if !tool_name.is_empty() {
             match tools.iter().find(|t| t.name == tool_name) {
                 Some(tool) => {
-                    // Parse LLM-provided args and substitute into templates
+                    // Parse LLM-provided args and substitute into templates.
+                    // SECURITY: single-pass substitution to prevent recursive template injection
+                    // (e.g. a substituted value containing another placeholder).
                     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
-                    let mut url = tool.url_template.clone();
-                    let mut body = tool.body_template.clone().unwrap_or_default();
-                    if let serde_json::Value::Object(map) = &args {
-                        for (k, v) in map {
-                            let placeholder = format!("{{{}}}", k);
-                            let val_str = v.to_string();
-                            let val = v.as_str().unwrap_or(&val_str);
-                            url = url.replace(&placeholder, val);
-                            body = body.replace(&placeholder, val);
-                        }
-                    }
+                    let map = match &args {
+                        serde_json::Value::Object(m) => m.clone(),
+                        _ => serde_json::Map::new(),
+                    };
+                    let url = substitute_template(&tool.url_template, &map);
+                    let body = substitute_template(&tool.body_template.clone().unwrap_or_default(), &map);
 
                     // SSRF validation (string + DNS resolution)
                     if let Err(e) = validate_no_ssrf_external(&url) {
@@ -2576,7 +2639,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
     let (
         sandbox_running,
         model,
-        policy_rules,
+        policy_rule_count,
         current_persona,
         temperature,
         max_tokens,
@@ -2595,11 +2658,13 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
 
         // Do not expose audit log existence to unauthenticated callers.
         let last_audit_entry: Option<String> = None;
+        // Do not expose full policy rules to status endpoint — leak security posture.
+        let policy_rule_count = policy.list_rules().len();
 
         (
             sandbox.is_running(),
             config.ollama_model.clone(),
-            policy.list_rules(),
+            policy_rule_count,
             config.current_persona.clone(),
             config.temperature,
             config.max_tokens,
@@ -2633,12 +2698,10 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
         false
     };
 
-    let policy_rule_count = policy_rules.len();
-
     Json(SystemStatus {
         sandbox_running,
         model,
-        policy_rules,
+        policy_rules: Vec::new(), // Redacted — see policy_rule_count instead
         pqc_enabled: true,
         current_persona,
         temperature,
@@ -2727,7 +2790,8 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
         ollama_url: "***REDACTED***".to_string(),
         ollama_model: config.ollama_model.clone(),
         web_bind_address: config.web_bind_address.clone(),
-        policy_rules: policy.list_rules(),
+        policy_rules: Vec::new(), // Redacted — do not leak security posture
+        policy_rule_count: policy.list_rules().len(),
     })
 }
 
@@ -3445,17 +3509,17 @@ async fn upload_file(
 async fn get_csrf(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
-        return Json(serde_json::json!({ "error": "Not authenticated" }));
+        return Err(StatusCode::UNAUTHORIZED);
     }
     let mut buf = [0u8; 32];
     state.rng.fill(&mut buf).expect("CSPRNG failure");
     let token = hex::encode(buf);
     let mut store = state.csrf_tokens.lock().await;
     store.insert(owner, token.clone());
-    Json(serde_json::json!({ "csrf_token": token }))
+    Ok(Json(serde_json::json!({ "csrf_token": token })))
 }
 
 /// Get settings.
@@ -3578,6 +3642,7 @@ async fn get_chat_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ChatSession>, StatusCode> {
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
@@ -3587,6 +3652,7 @@ async fn get_chat_session(
         .iter()
         .find(|s| {
             s.id == id
+                && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
                 && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
         })
         .cloned()
@@ -3602,6 +3668,7 @@ async fn export_chat_session(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
@@ -3611,6 +3678,7 @@ async fn export_chat_session(
         .iter()
         .find(|s| {
             s.id == id
+                && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
                 && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
         })
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -3641,6 +3709,7 @@ async fn delete_chat_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> StatusCode {
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
@@ -3649,6 +3718,7 @@ async fn delete_chat_session(
     let before = sessions.len();
     sessions.retain(|s| {
         s.id != id
+            || !muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
             || !muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     if sessions.len() < before {
@@ -3829,9 +3899,9 @@ async fn backup_memories(
         return Err(StatusCode::FORBIDDEN);
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
-    // Rate limit: 5 backups per hour per owner
+    // Rate limit: 5 backups per hour per owner (isolated from HTTP rate limiter)
     {
-        let mut limiter = state.rate_limiter.lock().await;
+        let mut limiter = state.backup_rate_limiter.lock().await;
         let now = Instant::now();
         let key = format!("backup:{}", owner);
         const BACKUP_WINDOW: Duration = Duration::from_secs(3600);
@@ -4556,10 +4626,14 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
             let tasks = state.scheduled_tasks.lock().await;
             tasks.iter().filter(|t| t.enabled).cloned().collect()
         };
+        // Prune entries for deleted tasks to prevent unbounded growth
+        let task_ids: std::collections::HashSet<_> = tasks.iter().map(|t| t.id.clone()).collect();
+        last_executed.retain(|id, _| task_ids.contains(id));
+
         let now = chrono::Local::now();
         let dt = now.naive_local();
         let current_key = (dt.minute(), dt.hour(), dt.day(), dt.month(), dt.weekday().num_days_from_monday() + 1);
-        // Prune last_executed entries from previous months/days to prevent unbounded growth
+        // Prune last_executed entries from previous months/days
         last_executed.retain(|_, (m, h, d, mo, _w)| {
             let same = *m == dt.minute() as u32 && *h == dt.hour() as u32
                 && *d == dt.day() as u32 && *mo == dt.month() as u32;
@@ -4579,7 +4653,12 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
                     research_confirmed: false,
                     image_b64: None,
                 };
-                let dummy_headers = HeaderMap::new();
+                // Use a synthetic owner so sessions aren't created with empty owner_hash
+                let mut dummy_headers = HeaderMap::new();
+                dummy_headers.insert(
+                    axum::http::header::HeaderName::from_static("x-ephemeral-chat"),
+                    axum::http::HeaderValue::from_static("1"),
+                );
                 let resp = process_chat(&state, &dummy_headers, &req).await;
                 tracing::info!("Scheduled task {} result: {}", task.id, resp.response);
                 // Clean up the ghost session created by the scheduled task
@@ -4832,6 +4911,15 @@ async fn install_preset(
         api_key: None,
     });
     cfg.active_agent = preset.name.clone();
+    // Also install the preset's system prompt as a persona so the personality is applied
+    if !cfg.personas.iter().any(|p| p.name == preset.name) {
+        cfg.personas.push(crate::config::Persona {
+            name: preset.name.clone(),
+            description: preset.description.clone(),
+            system_prompt: preset.system_prompt.clone(),
+        });
+    }
+    cfg.current_persona = preset.name.clone();
     let _ = cfg.save();
     Ok(StatusCode::OK)
 }
@@ -4848,7 +4936,10 @@ async fn get_knowledge_graph(
     let mut edges = Vec::new();
 
     let sessions = state.chat_sessions.lock().await;
-    let owner_sessions: Vec<_> = sessions.iter().filter(|s| s.owner_hash == owner).collect();
+    let owner_sessions: Vec<_> = sessions
+        .iter()
+        .filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
+        .collect();
     for sess in &owner_sessions {
         nodes.push(GraphNode {
             id: sess.id.clone(),
@@ -5123,7 +5214,7 @@ async fn chat_with_image(
                 folder: String::new(),
                 tags: Vec::new(),
             });
-            new_secret
+            id
         }
     };
 
@@ -5175,13 +5266,16 @@ async fn update_session_folder(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let mut sessions = state.chat_sessions.lock().await;
     let found = sessions.iter_mut().find(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     match found {
         Some(s) => { s.folder = payload.folder; Ok(StatusCode::OK) }
@@ -5198,13 +5292,16 @@ async fn update_session_tags(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let mut sessions = state.chat_sessions.lock().await;
     let found = sessions.iter_mut().find(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     match found {
         Some(s) => { s.tags = payload.tags; Ok(StatusCode::OK) }
@@ -5223,7 +5320,7 @@ async fn list_folders(
     let sessions = state.chat_sessions.lock().await;
     let mut folders: Vec<String> = sessions
         .iter()
-        .filter(|s| s.owner_hash == owner)
+        .filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes()))
         .map(|s| s.folder.clone())
         .filter(|f| !f.is_empty())
         .collect();
@@ -5242,13 +5339,16 @@ async fn get_session_digest(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let session = match sessions.iter().find(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     }) {
         Some(s) => s.clone(),
         None => return Err(StatusCode::NOT_FOUND),
@@ -5278,13 +5378,16 @@ async fn create_encrypted_share(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let found = sessions.iter().any(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     if !found {
         return Err(StatusCode::FORBIDDEN);
@@ -5323,15 +5426,22 @@ async fn get_encrypted_share(
 
 /// ─── Router ─────────────────────────────────────────────────────────
 pub fn router(state: Arc<AppState>) -> Router {
+    // CORS: default to localhost dev origins, override via MUCCHEAI_CORS_ORIGINS env var.
+    let cors_origins: std::collections::HashSet<String> = std::env::var("MUCCHEAI_CORS_ORIGINS")
+        .ok()
+        .map(|s| s.split(',').map(|o| o.trim().to_lowercase()).collect())
+        .unwrap_or_else(|| {
+            let mut set = std::collections::HashSet::new();
+            set.insert("http://localhost:3000".into());
+            set.insert("http://127.0.0.1:3000".into());
+            set.insert("https://localhost:3000".into());
+            set.insert("https://127.0.0.1:3000".into());
+            set
+        });
     let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
-            let origin_str = origin.to_str().unwrap_or("");
-            matches!(origin_str,
-                "http://localhost:3000"
-                | "http://127.0.0.1:3000"
-                | "https://localhost:3000"
-                | "https://127.0.0.1:3000"
-            )
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(move |origin, _| {
+            let origin_str = origin.to_str().unwrap_or("").to_lowercase();
+            cors_origins.contains(&origin_str)
         }))
         .allow_methods([
             axum::http::Method::GET,
@@ -5351,7 +5461,13 @@ pub fn router(state: Arc<AppState>) -> Router {
     let csp = tower_http::set_header::SetResponseHeaderLayer::overriding(
         axum::http::header::CONTENT_SECURITY_POLICY,
         axum::http::HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self';"
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+        ),
+    );
+    let permissions_policy = tower_http::set_header::SetResponseHeaderLayer::overriding(
+        axum::http::header::HeaderName::from_static("permissions-policy"),
+        axum::http::HeaderValue::from_static(
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
         ),
     );
     let xcto = tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -5488,6 +5604,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(tower_http::limit::RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(cors)
         .layer(csp)
+        .layer(permissions_policy)
         .layer(xcto)
         .layer(xfo)
         .layer(rp)
