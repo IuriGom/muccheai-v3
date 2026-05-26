@@ -106,6 +106,33 @@ fn find_local_repo() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Fetch the latest commit hash from GitHub API for the main branch.
+fn fetch_latest_commit_hash() -> Option<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let url = "https://api.github.com/repos/IuriGom/muccheai-v3/commits/main";
+    let resp = client.get(url).header("User-Agent", "muccheai-updater").send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().ok()?;
+    json.get("sha")?.as_str().map(|s| s.to_string())
+}
+
+/// Prompt the user for confirmation (stdin-based).
+fn confirm(prompt: &str) -> bool {
+    use std::io::Write;
+    print!("{} [y/N] ", prompt);
+    let _ = std::io::stdout().flush();
+    let mut buf = String::new();
+    if std::io::stdin().read_line(&mut buf).is_err() {
+        return false;
+    }
+    matches!(buf.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
 /// Run the self-update.
 pub fn run_update() -> anyhow::Result<()> {
     let theme = Theme::Cyber;
@@ -122,7 +149,6 @@ pub fn run_update() -> anyhow::Result<()> {
 
     if let Some(ref path) = repo_path {
         println!("  Detected local git repo at {}", path.display());
-        println!("  Pulling latest changes...\n");
 
         // Fetch the latest commit hash so the user can verify it.
         let hash_output = Command::new("git")
@@ -133,6 +159,24 @@ pub fn run_update() -> anyhow::Result<()> {
             println!("  Current commit: {}", &before_hash[..12]);
         }
 
+        // Fetch remote latest commit hash for verification.
+        if let Some(remote_hash) = fetch_latest_commit_hash() {
+            println!("  Remote latest:  {}", &remote_hash[..12.min(remote_hash.len())]);
+            if before_hash == remote_hash {
+                println!("  Already up to date.");
+                return Ok(());
+            }
+            if !confirm("  Proceed with update?") {
+                anyhow::bail!("Update cancelled by user.");
+            }
+        } else {
+            println!("  ⚠️  Could not fetch remote commit hash. Proceeding blindly.");
+            if !confirm("  Proceed without verification?") {
+                anyhow::bail!("Update cancelled by user.");
+            }
+        }
+
+        println!("  Pulling latest changes...\n");
         let status = Command::new("git")
             .args(["-C", &path.to_string_lossy(), "pull", "origin", "main"])
             .status()?;
@@ -163,6 +207,19 @@ pub fn run_update() -> anyhow::Result<()> {
         println!("  No local git repo found — installing from GitHub...\n");
         println!("  ⚠️  Installing from remote git without commit verification.");
         println!("  ⚠️  Consider cloning the repo and running `cargo install --path .` instead.\n");
+
+        if let Some(remote_hash) = fetch_latest_commit_hash() {
+            println!("  Remote latest: {}", &remote_hash[..12.min(remote_hash.len())]);
+            if !confirm("  Proceed with installation?") {
+                anyhow::bail!("Update cancelled by user.");
+            }
+        } else {
+            println!("  ⚠️  Could not fetch remote commit hash.");
+            if !confirm("  Proceed without verification?") {
+                anyhow::bail!("Update cancelled by user.");
+            }
+        }
+
         let status = Command::new("cargo")
             .args([
                 "install",

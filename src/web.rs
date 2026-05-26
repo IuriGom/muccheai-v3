@@ -656,6 +656,22 @@ async fn is_duress_session(state: &AppState, headers: &HeaderMap) -> bool {
     sessions.get(&token).map(|s| s.duress).unwrap_or(false)
 }
 
+/// Escape HTML special characters to prevent XSS from untrusted plugin output.
+fn html_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Bearer token authentication middleware + CSRF protection for mutating requests
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -1249,13 +1265,11 @@ async fn process_chat(
             }).collect();
             drop(pm);
             let input_json = serde_json::json!({"message": req.message, "text": text}).to_string();
+            let state_clone = state.clone();
             let plugin_results = tokio::task::spawn_blocking(move || {
-                let mut results = Vec::new();
-                let pm = match crate::plugin::PluginManager::new() {
-                    Ok(m) => m,
-                    Err(_) => return results,
-                };
-                for (name, manifest, _hash) in &plugin_inputs {
+                let pm = state_clone.plugin_manager.blocking_lock();
+                let mut results: Vec<(String, String)> = Vec::new();
+                for (name, _manifest, _hash) in &plugin_inputs {
                     if let Some(entry) = pm.get(name) {
                         match pm.execute(entry, &input_json) {
                             Ok(out) => results.push((name.clone(), out)),
@@ -1268,7 +1282,9 @@ async fn process_chat(
             if !plugin_results.is_empty() {
                 text.push_str("\n\n--- Plugin Results ---\n");
                 for (name, out) in plugin_results {
-                    text.push_str(&format!("**{}**: {}\n", name, out.chars().take(500).collect::<String>()));
+                    let safe_name = html_escape(&name);
+                    let safe_out = html_escape(&out.chars().take(500).collect::<String>());
+                    text.push_str(&format!("**{}**: {}\n", safe_name, safe_out));
                 }
             }
         }
@@ -3656,6 +3672,23 @@ async fn backup_memories(
         return Err(StatusCode::FORBIDDEN);
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    // Rate limit: 5 backups per hour per owner
+    {
+        let mut limiter = state.rate_limiter.lock().await;
+        let now = Instant::now();
+        let key = format!("backup:{}", owner);
+        const BACKUP_WINDOW: Duration = Duration::from_secs(3600);
+        const BACKUP_MAX: u32 = 5;
+        let entry = limiter.entry(key.clone()).or_insert((now, 0));
+        if now.saturating_duration_since(entry.0) > BACKUP_WINDOW {
+            entry.0 = now;
+            entry.1 = 0;
+        }
+        if entry.1 >= BACKUP_MAX {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        entry.1 += 1;
+    }
     let sm = state.structured_memory.lock().await;
     let memories = sm.list_all_by_owner(&owner);
     let entries: Vec<MemoryApiEntry> = memories
@@ -3880,40 +3913,10 @@ async fn chat_stream(
             }
             let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
         } else {
-            // Fallback: blocking call + fake chunks
-            let mut text = String::new();
-            let mut last_err = String::new();
-            {
-                let config = state.config.lock().await;
-                let agents_to_try: Vec<_> = std::iter::once(ctx.agent.clone())
-                    .chain(config.agents.iter().filter(|a| a.name != ctx.agent.name).cloned())
-                    .collect();
-                drop(config);
-                for fallback_agent in &agents_to_try {
-                    let provider = fallback_agent.provider.as_str();
-                    match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref()).await {
-                        Ok(t) => { text = t; break; }
-                        Err(e) => { tracing::warn!("Agent '{}' failed: {}", fallback_agent.name, e); last_err = e; }
-                    }
-                }
-            }
-            if text.is_empty() {
-                text = "(The AI service is temporarily unavailable. Please try again later.)".to_string();
-            }
-            full_text = text;
-            let chunk_size = 4usize;
-            let mut chars = full_text.chars();
-            let mut buffer = String::new();
-            while let Some(c) = chars.next() {
-                buffer.push(c);
-                if buffer.len() >= chunk_size {
-                    if tx.send(Ok(Event::default().data(buffer.clone()))).await.is_err() { return; }
-                    buffer.clear();
-                }
-            }
-            if !buffer.is_empty() {
-                if tx.send(Ok(Event::default().data(buffer))).await.is_err() { return; }
-            }
+            // All streaming agents failed — emit a single error event.
+            let err_text = "(The AI service is temporarily unavailable. Please try again later.)";
+            full_text = err_text.to_string();
+            let _ = tx.send(Ok(Event::default().data(err_text.to_string()))).await;
             let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
         }
 
@@ -3952,13 +3955,11 @@ async fn chat_stream(
                 }).collect();
                 drop(pm);
                 let input_json = serde_json::json!({"message": req.message, "text": full_text}).to_string();
+                let state_clone = state.clone();
                 let plugin_results = tokio::task::spawn_blocking(move || {
-                    let mut results = Vec::new();
-                    let pm = match crate::plugin::PluginManager::new() {
-                        Ok(m) => m,
-                        Err(_) => return results,
-                    };
-                    for (name, manifest, _hash) in &plugin_inputs {
+                    let pm = state_clone.plugin_manager.blocking_lock();
+                    let mut results: Vec<(String, String)> = Vec::new();
+                    for (name, _manifest, _hash) in &plugin_inputs {
                         if let Some(entry) = pm.get(name) {
                             match pm.execute(entry, &input_json) {
                                 Ok(out) => results.push((name.clone(), out)),
@@ -3971,7 +3972,9 @@ async fn chat_stream(
                 if !plugin_results.is_empty() {
                     full_text.push_str("\n\n--- Plugin Results ---\n");
                     for (name, out) in plugin_results {
-                        full_text.push_str(&format!("**{}**: {}\n", name, out.chars().take(500).collect::<String>()));
+                        let safe_name = html_escape(&name);
+                        let safe_out = html_escape(&out.chars().take(500).collect::<String>());
+                        full_text.push_str(&format!("**{}**: {}\n", safe_name, safe_out));
                     }
                 }
             }
@@ -4336,10 +4339,20 @@ async fn test_mcp_server(
 
     let mut client = muccheai_mcp::McpClient::new(transport);
     // Wrap MCP I/O in spawn_blocking since stdio transport may block on subprocess I/O.
+    // Use a dedicated runtime instead of Handle::current().block_on() to avoid nested-runtime deadlocks.
     match tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(_) => {
+                return McpTestResponse {
+                    success: false,
+                    message: "Failed to create test runtime".to_string(),
+                    tools: vec![],
+                };
+            }
+        };
         rt.block_on(async {
-            match client.connect().await {
+            let result = match client.connect().await {
                 Ok(_) => match client.discover_tools().await {
                     Ok(tools) => {
                         let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
@@ -4360,7 +4373,9 @@ async fn test_mcp_server(
                     message: "Connection failed".to_string(),
                     tools: vec![],
                 },
-            }
+            };
+            let _ = client.disconnect().await;
+            result
         })
     }).await {
         Ok(r) => Json(r),
@@ -4759,12 +4774,40 @@ async fn chat_with_image(
         }
     };
 
+    // Validate image_b64
+    let image_b64 = if payload.image_b64.is_empty() {
+        None
+    } else {
+        const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024; // 10 MB decoded
+        let decoded_len = payload.image_b64.len() * 3 / 4;
+        if decoded_len > MAX_IMAGE_SIZE {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        // Verify valid base64 charset
+        if !payload.image_b64.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=') {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        // Verify image magic bytes by decoding prefix
+        let prefix = match base64::decode(&payload.image_b64.as_bytes()[..std::cmp::min(payload.image_b64.len(), 32)]) {
+            Ok(p) => p,
+            Err(_) => return Err(StatusCode::BAD_REQUEST),
+        };
+        let is_jpeg = prefix.starts_with(&[0xFF, 0xD8, 0xFF]);
+        let is_png = prefix.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        let is_gif = prefix.starts_with(b"GIF87a") || prefix.starts_with(b"GIF89a");
+        let is_webp = prefix.len() > 12 && &prefix[8..12] == b"WEBP";
+        if !is_jpeg && !is_png && !is_gif && !is_webp {
+            return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+        Some(payload.image_b64.clone())
+    };
+
     let req = ChatRequest {
         message: payload.message.clone(),
         session_id: Some(session_id),
         research: false,
         research_confirmed: false,
-        image_b64: Some(payload.image_b64.clone()).filter(|s| !s.is_empty()),
+        image_b64,
     };
     let resp = process_chat(&state, &headers, &req).await;
     Ok(Json(resp))
@@ -4899,20 +4942,25 @@ async fn create_encrypted_share(
 async fn get_encrypted_share(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<Json<EncryptedShareResponse>, StatusCode> {
+) -> Result<Json<ChatSession>, StatusCode> {
     let mut shares = state.shared_sessions.lock().await;
     shares.retain(|_, (_, created)| created.elapsed() < Duration::from_secs(7 * 86400));
-    match shares.get(&token) {
-        Some((id, _)) => {
-            let sessions = state.chat_sessions.lock().await;
-            let found = sessions.iter().any(|s| s.id == *id);
-            if !found {
-                return Err(StatusCode::GONE);
-            }
-            Ok(Json(EncryptedShareResponse { share_token: token }))
-        }
-        None => Err(StatusCode::NOT_FOUND),
-    }
+    let session_id = shares.get(&token).map(|(id, _)| id.clone());
+    drop(shares);
+
+    let session_id = session_id.ok_or(StatusCode::NOT_FOUND)?;
+    let sessions = state.chat_sessions.lock().await;
+    sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .cloned()
+        .map(|mut s| {
+            // Sanitize sensitive fields for public sharing
+            s.owner_hash = String::new();
+            s.session_secret = String::new();
+            Json(s)
+        })
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// ─── Router ─────────────────────────────────────────────────────────

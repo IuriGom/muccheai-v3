@@ -995,7 +995,8 @@ async function sendMessage() {
             console.error('WebSocket send failed:', e);
             setTyping(false);
             addMessage('error', 'Connection lost. Message queued.');
-            offlineQueue.push({ text, sessionId: currentSessionId });
+            offlineQueue.push({ text, sessionId: currentSessionId, ts: Date.now() });
+            if (offlineQueue.length > 50) offlineQueue = offlineQueue.slice(-50);
             localStorage.setItem('muccheai_offline_queue', JSON.stringify(offlineQueue));
             sendBtn.disabled = false;
         }
@@ -2782,8 +2783,13 @@ async function restoreMemories() {
 // ============================================
 function processOfflineQueue() {
     if (!navigator.onLine || !offlineQueue.length) return;
+    const now = Date.now();
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    // Filter expired and cap size before processing
+    offlineQueue = offlineQueue.filter(item => item.ts && (now - item.ts) < ONE_DAY).slice(-50);
     const queue = [...offlineQueue];
     offlineQueue = [];
+    localStorage.setItem('muccheai_offline_queue', JSON.stringify(offlineQueue));
     for (const item of queue) {
         sendMessageFromQueue(item);
     }
