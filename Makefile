@@ -1,7 +1,7 @@
 # MuccheAI v3.0 — One-command install
 # Just type: make install
 
-.PHONY: install build test clean setup reset deep-clean
+.PHONY: install build test clean setup reset deep-clean run
 
 INSTALL_DIR := $(HOME)/.cargo/bin
 BINARY := $(INSTALL_DIR)/muccheai
@@ -28,6 +28,10 @@ install:
 	@echo "If 'muccheai' is not found, add $(INSTALL_DIR) to your PATH:"
 	@echo '  export PATH="$$HOME/.cargo/bin:$$PATH"'
 
+# Default `cargo run` builds debug (huge target/ dir). Use `make run` for release.
+run:
+	cargo run --release
+
 build:
 	cargo build --release
 
@@ -45,8 +49,11 @@ reset:
 	@echo "Reset complete. Next steps:"
 	@echo "  1. Run 'make install' to rebuild and auto-launch setup"
 	@echo "  2. Or run 'cargo run -- setup' to run setup with the dev build"
+	@echo ""
+	@echo "⚠️  NOTE: 'cargo run' without --release creates a ~3-6 GB debug target."
+	@echo "         Use 'make run' or 'cargo run --release' to avoid bloat."
 
-deep-clean: clean
+dep-clean: clean
 	@echo "Clearing global cargo registry cache..."
 	rm -rf $(HOME)/.cargo/registry/cache
 	@echo "Deep clean complete."
