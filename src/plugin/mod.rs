@@ -185,7 +185,7 @@ impl PluginManager {
     /// Execute a plugin and return its output.
     pub fn execute(&self, entry: &PluginEntry, input_json: &str) -> anyhow::Result<String> {
         let wasm_path = self.plugins_dir.join(&entry.name).join(&entry.manifest.plugin.wasm_path);
-        self.runtime.execute(&wasm_path, &entry.manifest, input_json)
+        self.runtime.execute(&wasm_path, &entry.manifest, &entry.wasm_hash, input_json)
     }
 }
 

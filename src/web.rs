@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use chrono::Timelike;
+use chrono::{Timelike, Datelike};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
 
@@ -2475,9 +2475,28 @@ async fn process_custom_tool_calls(
         if !tool_name.is_empty() {
             match tools.iter().find(|t| t.name == tool_name) {
                 Some(tool) => {
-                    // Build URL and body from templates
-                    let url = tool.url_template.clone();
-                    let body = tool.body_template.clone().unwrap_or_default();
+                    // Parse LLM-provided args and substitute into templates
+                    let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
+                    let mut url = tool.url_template.clone();
+                    let mut body = tool.body_template.clone().unwrap_or_default();
+                    if let serde_json::Value::Object(map) = &args {
+                        for (k, v) in map {
+                            let placeholder = format!("{{{}}}", k);
+                            let val_str = v.to_string();
+                            let val = v.as_str().unwrap_or(&val_str);
+                            url = url.replace(&placeholder, val);
+                            body = body.replace(&placeholder, val);
+                        }
+                    }
+
+                    // SSRF validation
+                    if let Err(e) = validate_no_ssrf_external(&url) {
+                        results.push(format!("{}: SSRF BLOCKED {}", tool_name, e));
+                        cleaned.push_str(&format!("\n[Custom tool '{}' blocked: SSRF]\n", tool_name));
+                        rest = &after_open[close_idx + 14..];
+                        continue;
+                    }
+
                     let mut request = match tool.method.to_uppercase().as_str() {
                         "GET" => http_client.get(&url),
                         "POST" => http_client.post(&url).body(body),
@@ -2491,6 +2510,7 @@ async fn process_custom_tool_calls(
                             continue;
                         }
                     };
+                    request = request.timeout(std::time::Duration::from_secs(30));
                     // Set content-type for POST/PUT/PATCH
                     if matches!(tool.method.to_uppercase().as_str(), "POST" | "PUT" | "PATCH") {
                         request = request.header("Content-Type", "application/json");
@@ -4523,27 +4543,34 @@ async fn test_mcp_server(
 /// Background task that checks and executes scheduled tasks every minute.
 async fn run_scheduled_tasks(state: Arc<AppState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    let mut last_executed: HashMap<String, (u32, u32, u32, u32, u32)> = HashMap::new();
     loop {
         interval.tick().await;
         let tasks: Vec<ScheduledTask> = {
             let tasks = state.scheduled_tasks.lock().await;
             tasks.iter().filter(|t| t.enabled).cloned().collect()
         };
+        let now = chrono::Local::now();
+        let dt = now.naive_local();
+        let current_key = (dt.minute(), dt.hour(), dt.day(), dt.month(), dt.weekday().num_days_from_monday() + 1);
         for task in tasks {
-            // Very basic cron check: execute if minute matches
-            let now = chrono::Local::now();
-            let time = now.naive_local().time();
+            // Full cron parsing: minute hour day month weekday
             let parts: Vec<&str> = task.cron.split_whitespace().collect();
-            let should_run = if parts.len() >= 2 {
-                let minute_ok = parts[0] == "*" || parts[0].parse::<u32>().map(|m| m == time.minute()).unwrap_or(false);
-                let hour_ok = parts[1] == "*" || parts[1].parse::<u32>().map(|h| h == time.hour()).unwrap_or(false);
-                minute_ok && hour_ok
+            let should_run = if parts.len() == 5 {
+                let minute_ok = parts[0] == "*" || parts[0].parse::<u32>().map(|m| m == dt.minute()).unwrap_or(false);
+                let hour_ok = parts[1] == "*" || parts[1].parse::<u32>().map(|h| h == dt.hour()).unwrap_or(false);
+                let day_ok = parts[2] == "*" || parts[2].parse::<u32>().map(|d| d == dt.day()).unwrap_or(false);
+                let month_ok = parts[3] == "*" || parts[3].parse::<u32>().map(|m| m == dt.month()).unwrap_or(false);
+                let weekday_ok = parts[4] == "*" || parts[4].parse::<u32>().map(|w| w == (dt.weekday().num_days_from_monday() + 1)).unwrap_or(false);
+                minute_ok && hour_ok && day_ok && month_ok && weekday_ok
             } else {
                 false
             };
-            if should_run {
+            // Rate limit: only execute once per (minute, hour, day, month, weekday) combo per task
+            let already_ran = last_executed.get(&task.id) == Some(&current_key);
+            if should_run && !already_ran {
+                last_executed.insert(task.id.clone(), current_key);
                 tracing::info!("Executing scheduled task: {} — {}", task.id, task.prompt);
-                // Create a dummy request to process the prompt
                 let req = ChatRequest {
                     message: task.prompt.clone(),
                     session_id: None,
@@ -4552,7 +4579,12 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
                     image_b64: None,
                 };
                 let dummy_headers = HeaderMap::new();
-                let _resp = process_chat(&state, &dummy_headers, &req).await;
+                let resp = process_chat(&state, &dummy_headers, &req).await;
+                // Clean up the ghost session created by the scheduled task
+                if !resp.session_id.is_empty() {
+                    let mut sessions = state.chat_sessions.lock().await;
+                    sessions.retain(|s| s.id != resp.session_id);
+                }
             }
         }
     }
@@ -4722,10 +4754,6 @@ async fn install_preset(
         api_key: None,
     });
     cfg.active_agent = preset.name.clone();
-    drop(cfg);
-
-    // Persist config
-    let cfg = state.config.lock().await;
     let _ = cfg.save();
     Ok(StatusCode::OK)
 }
@@ -5113,11 +5141,16 @@ async fn list_folders(
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
     }
-    let tools = state.custom_tools.lock().await;
-    let mut folders = vec!["General".into(), "Work".into(), "Personal".into()];
-    for t in tools.iter() {
-        folders.push(format!("tool-{}", t.name));
-    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let sessions = state.chat_sessions.lock().await;
+    let mut folders: Vec<String> = sessions
+        .iter()
+        .filter(|s| s.owner_hash == owner)
+        .map(|s| s.folder.clone())
+        .filter(|f| !f.is_empty())
+        .collect();
+    drop(sessions);
+    folders.push("General".into());
     folders.sort();
     folders.dedup();
     Ok(Json(folders))

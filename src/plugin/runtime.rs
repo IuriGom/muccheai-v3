@@ -29,6 +29,7 @@ impl PluginRuntime {
         &self,
         wasm_path: &Path,
         manifest: &PluginManifest,
+        wasm_hash: &str,
         input_json: &str,
     ) -> anyhow::Result<String> {
         let module = {
@@ -52,13 +53,13 @@ impl PluginRuntime {
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join(".muccheai")
                 .join("plugin-data")
-                .join(&manifest.plugin.name);
+                .join(format!("{}-{}", &manifest.plugin.name, &wasm_hash[..8.min(wasm_hash.len())]));
             let _ = std::fs::create_dir_all(&sandbox_dir);
             let _ = wasi_builder.preopened_dir(
                 &sandbox_dir,
                 "/data",
-                wasmtime_wasi::DirPerms::all(),
-                wasmtime_wasi::FilePerms::all(),
+                wasmtime_wasi::DirPerms::READ | wasmtime_wasi::DirPerms::MUTATE,
+                wasmtime_wasi::FilePerms::READ | wasmtime_wasi::FilePerms::WRITE,
             );
         }
 
