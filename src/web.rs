@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use chrono::Timelike;
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
 
@@ -60,6 +61,12 @@ pub struct ChatSession {
     pub parent_id: Option<String>,
     /// If branched, the message index in the parent where branching occurred.
     pub branch_point: Option<usize>,
+    /// Folder for organizing sessions.
+    #[serde(default)]
+    pub folder: String,
+    /// Tags for filtering/searching sessions.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,6 +74,10 @@ pub struct ChatSessionSummary {
     pub id: String,
     pub title: String,
     pub created_at: u64,
+    #[serde(default)]
+    pub folder: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 pub fn load_revoked_tokens() -> std::collections::HashSet<String> {
@@ -1031,6 +1042,7 @@ struct ChatContext {
     history: Vec<ChatMessage>,
     memories_count: usize,
     mcp_tools: Vec<CachedMcpTool>,
+    custom_tools: Vec<crate::config::CustomToolConfig>,
     needs_confirmation: Option<String>,
 }
 
@@ -1139,6 +1151,22 @@ async fn build_chat_context(
         system_prompt.push_str(&format_mcp_tools_for_prompt(&mcp_tools));
     }
 
+    // Inject available custom tools into the system prompt.
+    let custom_tools = {
+        let tools = state.custom_tools.lock().await;
+        tools.clone()
+    };
+    if !custom_tools.is_empty() {
+        system_prompt.push_str("\n\n--- Custom Tools ---\n");
+        for tool in &custom_tools {
+            system_prompt.push_str(&format!(
+                "- {} ({}): {}\n",
+                tool.name, tool.method, tool.url_template
+            ));
+        }
+        system_prompt.push_str("\nTo use a custom tool, output: <custom_tool name=\"NAME\">{\"param\": \"value\"}</custom_tool>\n");
+    }
+
     system_prompt.push_str("\n\n--- Memory Saving Protocol ---\n");
     system_prompt.push_str("Whenever you learn ANY personal information about the user (name, preferences, facts, important details), you MUST save it to memory. Do NOT just say you will remember it — you MUST output a memory tag.\n\n");
     system_prompt.push_str("Format: <memory type=\"TYPE\" key=\"KEY\">VALUE</memory>\n\n");
@@ -1181,6 +1209,7 @@ async fn build_chat_context(
         history,
         memories_count,
         mcp_tools,
+        custom_tools,
         needs_confirmation: None,
     })
 }
@@ -1250,6 +1279,14 @@ async fn process_chat(
     // Process any MCP tool calls in the response
     if !ctx.mcp_tools.is_empty() && text.contains("<mcp_tool") {
         let (tool_cleaned, tool_results) = process_mcp_tool_calls(&text, &ctx.mcp_tools, state).await;
+        if !tool_results.is_empty() {
+            text = tool_cleaned;
+        }
+    }
+
+    // Process any custom tool calls in the response
+    if !ctx.custom_tools.is_empty() && text.contains("<custom_tool") {
+        let (tool_cleaned, tool_results) = process_custom_tool_calls(&text, &ctx.custom_tools, &state.http_client).await;
         if !tool_results.is_empty() {
             text = tool_cleaned;
         }
@@ -1354,6 +1391,8 @@ async fn process_chat(
             session_secret: secret.clone(),
             parent_id: None,
             branch_point: None,
+            folder: String::new(),
+            tags: Vec::new(),
             messages: vec![
                 ChatMessage {
                     role: "user".to_string(),
@@ -2396,6 +2435,94 @@ async fn process_mcp_tool_calls(
     (cleaned, results)
 }
 
+/// Parse and execute custom HTTP tool calls from the LLM response.
+async fn process_custom_tool_calls(
+    text: &str,
+    tools: &[crate::config::CustomToolConfig],
+    http_client: &reqwest::Client,
+) -> (String, Vec<String>) {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut results = Vec::new();
+    let mut rest = text;
+
+    while let Some(start_idx) = rest.find("<custom_tool") {
+        cleaned.push_str(&rest[..start_idx]);
+        let after_tag = &rest[start_idx..];
+
+        let tag_end = match after_tag.find('>') {
+            Some(i) => i,
+            None => { cleaned.push_str(after_tag); break; }
+        };
+        let tag_content = &after_tag[..tag_end + 1];
+
+        // Extract name attribute
+        let mut tool_name = String::new();
+        for attr in tag_content.split_whitespace() {
+            if attr.starts_with("name=\"") {
+                if let Some(q) = attr[6..].find('"') {
+                    tool_name = attr[6..6 + q].to_string();
+                }
+            }
+        }
+
+        let after_open = &after_tag[tag_end + 1..];
+        let close_idx = match after_open.find("</custom_tool>") {
+            Some(i) => i,
+            None => { cleaned.push_str(after_tag); break; }
+        };
+        let args_json = after_open[..close_idx].trim();
+
+        if !tool_name.is_empty() {
+            match tools.iter().find(|t| t.name == tool_name) {
+                Some(tool) => {
+                    // Build URL and body from templates
+                    let url = tool.url_template.clone();
+                    let body = tool.body_template.clone().unwrap_or_default();
+                    let mut request = match tool.method.to_uppercase().as_str() {
+                        "GET" => http_client.get(&url),
+                        "POST" => http_client.post(&url).body(body),
+                        "PUT" => http_client.put(&url).body(body),
+                        "DELETE" => http_client.delete(&url),
+                        "PATCH" => http_client.patch(&url).body(body),
+                        _ => {
+                            results.push(format!("{}: ERROR Unknown method {}", tool_name, tool.method));
+                            cleaned.push_str(&format!("\n[Custom tool '{}' failed: unknown method]\n", tool_name));
+                            rest = &after_open[close_idx + 14..];
+                            continue;
+                        }
+                    };
+                    // Set content-type for POST/PUT/PATCH
+                    if matches!(tool.method.to_uppercase().as_str(), "POST" | "PUT" | "PATCH") {
+                        request = request.header("Content-Type", "application/json");
+                    }
+
+                    match request.send().await {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            let body_text = resp.text().await.unwrap_or_default();
+                            let truncated = body_text.chars().take(500).collect::<String>();
+                            results.push(format!("{}: HTTP {} — {}", tool_name, status, truncated));
+                            cleaned.push_str(&format!("\n[Custom tool '{}' returned HTTP {}]\n", tool_name, status));
+                        }
+                        Err(e) => {
+                            results.push(format!("{}: ERROR {}", tool_name, e));
+                            cleaned.push_str(&format!("\n[Custom tool '{}' failed: {}]\n", tool_name, e));
+                        }
+                    }
+                }
+                None => {
+                    results.push(format!("{}: ERROR Tool not found", tool_name));
+                    cleaned.push_str(&format!("\n[Custom tool '{}' not found]\n", tool_name));
+                }
+            }
+        }
+
+        rest = &after_open[close_idx + 14..];
+    }
+    cleaned.push_str(rest);
+    (cleaned, results)
+}
+
 /// Build a formatted MCP tools section for the system prompt.
 fn format_mcp_tools_for_prompt(tools: &[CachedMcpTool]) -> String {
     if tools.is_empty() {
@@ -3413,6 +3540,8 @@ async fn list_chat_sessions(
             id: s.id.clone(),
             title: s.title.clone(),
             created_at: s.created_at,
+            folder: s.folder.clone(),
+            tags: s.tags.clone(),
         })
         .collect();
     Json(ChatSessionsResponse { sessions: filtered })
@@ -3583,6 +3712,8 @@ async fn branch_session(
         session_secret: new_secret.clone(),
         parent_id: Some(parent.id.clone()),
         branch_point: Some(req.message_index),
+        folder: parent.folder.clone(),
+        tags: parent.tags.clone(),
         messages: branched_messages,
     });
 
@@ -4008,6 +4139,7 @@ async fn chat_stream(
                 id: session_id.clone(), title, created_at: timestamp,
                 owner_hash: get_session_owner(&state, &headers).await.unwrap_or_default(),
                 session_secret: s.clone(), parent_id: None, branch_point: None,
+                folder: String::new(), tags: Vec::new(),
                 messages: vec![
                     ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp },
                     ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
@@ -4388,7 +4520,51 @@ async fn test_mcp_server(
 }
 
 /// Start the web server.
+/// Background task that checks and executes scheduled tasks every minute.
+async fn run_scheduled_tasks(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        let tasks: Vec<ScheduledTask> = {
+            let tasks = state.scheduled_tasks.lock().await;
+            tasks.iter().filter(|t| t.enabled).cloned().collect()
+        };
+        for task in tasks {
+            // Very basic cron check: execute if minute matches
+            let now = chrono::Local::now();
+            let time = now.naive_local().time();
+            let parts: Vec<&str> = task.cron.split_whitespace().collect();
+            let should_run = if parts.len() >= 2 {
+                let minute_ok = parts[0] == "*" || parts[0].parse::<u32>().map(|m| m == time.minute()).unwrap_or(false);
+                let hour_ok = parts[1] == "*" || parts[1].parse::<u32>().map(|h| h == time.hour()).unwrap_or(false);
+                minute_ok && hour_ok
+            } else {
+                false
+            };
+            if should_run {
+                tracing::info!("Executing scheduled task: {} — {}", task.id, task.prompt);
+                // Create a dummy request to process the prompt
+                let req = ChatRequest {
+                    message: task.prompt.clone(),
+                    session_id: None,
+                    research: false,
+                    research_confirmed: false,
+                    image_b64: None,
+                };
+                let dummy_headers = HeaderMap::new();
+                let _resp = process_chat(&state, &dummy_headers, &req).await;
+            }
+        }
+    }
+}
+
 pub async fn serve(addr: &str, state: Arc<AppState>) {
+    // Spawn scheduled task runner in the background.
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        run_scheduled_tasks(state_clone).await;
+    });
+
     let addr = match addr.parse::<SocketAddr>() {
         Ok(a) => a,
         Err(e) => {
@@ -4527,12 +4703,31 @@ async fn install_preset(
         return Err(StatusCode::FORBIDDEN);
     }
     let _owner = get_session_owner(&state, &headers).await.unwrap_or_default();
-    let presets = list_presets(State(state.clone()), headers).await?.0;
-    if presets.iter().any(|p| p.name == payload.name) {
-        Ok(StatusCode::OK)
-    } else {
-        Err(StatusCode::NOT_FOUND)
+    let presets = list_presets(State(state.clone()), headers.clone()).await?.0;
+    let preset = match presets.iter().find(|p| p.name == payload.name) {
+        Some(p) => p.clone(),
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+
+    let mut cfg = state.config.lock().await;
+    // Add as a new agent if name doesn't conflict
+    if cfg.agents.iter().any(|a| a.name == preset.name) {
+        return Err(StatusCode::CONFLICT);
     }
+    cfg.agents.push(crate::config::AgentConfig {
+        name: preset.name.clone(),
+        provider: preset.provider.clone(),
+        model: preset.model.clone(),
+        base_url: None,
+        api_key: None,
+    });
+    cfg.active_agent = preset.name.clone();
+    drop(cfg);
+
+    // Persist config
+    let cfg = state.config.lock().await;
+    let _ = cfg.save();
+    Ok(StatusCode::OK)
 }
 
 async fn get_knowledge_graph(
@@ -4547,7 +4742,8 @@ async fn get_knowledge_graph(
     let mut edges = Vec::new();
 
     let sessions = state.chat_sessions.lock().await;
-    for sess in sessions.iter().filter(|s| s.owner_hash == owner) {
+    let owner_sessions: Vec<_> = sessions.iter().filter(|s| s.owner_hash == owner).collect();
+    for sess in &owner_sessions {
         nodes.push(GraphNode {
             id: sess.id.clone(),
             label: sess.title.clone(),
@@ -4557,16 +4753,65 @@ async fn get_knowledge_graph(
 
     let sm = state.structured_memory.lock().await;
     let entries = sm.list_all_by_owner(&owner);
-    for entry in entries.into_iter().take(50) {
+    let mut memory_keywords: HashMap<String, Vec<String>> = HashMap::new();
+    for entry in entries.iter().take(50) {
         let node_id = format!("mem-{}", entry.key);
         nodes.push(GraphNode {
             id: node_id.clone(),
             label: format!("{:?}: {}", entry.memory_type, entry.key.chars().take(30).collect::<String>()),
             group: format!("{:?}", entry.memory_type),
         });
+        // Extract keywords from key and value for edge generation
+        let keywords = extract_keywords(&format!("{} {:?}", entry.key, entry.value));
+        for kw in keywords {
+            memory_keywords.entry(kw).or_default().push(node_id.clone());
+        }
     }
 
+    // Generate edges from co-occurring keywords in memories
+    let memory_kw_copy: HashMap<String, Vec<String>> = memory_keywords.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (_, node_ids) in &memory_kw_copy {
+        for i in 0..node_ids.len() {
+            for j in (i + 1)..node_ids.len() {
+                edges.push(GraphEdge {
+                    from: node_ids[i].clone(),
+                    to: node_ids[j].clone(),
+                    label: "related".into(),
+                });
+            }
+        }
+    }
+
+    // Generate edges from session titles to matching memory keywords
+    for sess in &owner_sessions {
+        let title_keywords = extract_keywords(&sess.title);
+        for kw in title_keywords {
+            if let Some(mem_ids) = memory_kw_copy.get(&kw) {
+                for mem_id in mem_ids {
+                    edges.push(GraphEdge {
+                        from: sess.id.clone(),
+                        to: mem_id.clone(),
+                        label: "mentions".into(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Deduplicate edges
+    edges.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+    edges.dedup_by(|a, b| a.from == b.from && a.to == b.to);
+
     Ok(Json(GraphResponse { nodes, edges }))
+}
+
+/// Extract simple lowercase keywords from text for graph edge generation.
+fn extract_keywords(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 3)
+        .map(|s| s.to_string())
+        .collect()
 }
 
 async fn list_custom_tools(
@@ -4656,7 +4901,7 @@ async fn get_analytics(
         total_memories,
         queue_pending,
         top_model: cfg.ollama_model.clone(),
-        active_plugins: 0,
+        active_plugins: state.plugin_manager.lock().await.list().len(),
     }))
 }
 
@@ -4769,6 +5014,8 @@ async fn chat_with_image(
                 title: "Image chat".into(),
                 parent_id: None,
                 branch_point: None,
+                folder: String::new(),
+                tags: Vec::new(),
             });
             new_secret
         }
@@ -4817,7 +5064,7 @@ async fn update_session_folder(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(_payload): Json<UpdateFolderRequest>,
+    Json(payload): Json<UpdateFolderRequest>,
 ) -> Result<StatusCode, StatusCode> {
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
@@ -4826,21 +5073,21 @@ async fn update_session_folder(
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let sessions = state.chat_sessions.lock().await;
-    let found = sessions.iter().any(|s| {
+    let mut sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter_mut().find(|s| {
         s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
-    if !found {
-        return Err(StatusCode::FORBIDDEN);
+    match found {
+        Some(s) => { s.folder = payload.folder; Ok(StatusCode::OK) }
+        None => Err(StatusCode::FORBIDDEN),
     }
-    Ok(StatusCode::OK)
 }
 
 async fn update_session_tags(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(_payload): Json<UpdateTagsRequest>,
+    Json(payload): Json<UpdateTagsRequest>,
 ) -> Result<StatusCode, StatusCode> {
     if is_duress_session(&state, &headers).await {
         return Err(StatusCode::FORBIDDEN);
@@ -4849,14 +5096,14 @@ async fn update_session_tags(
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let sessions = state.chat_sessions.lock().await;
-    let found = sessions.iter().any(|s| {
+    let mut sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter_mut().find(|s| {
         s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
-    if !found {
-        return Err(StatusCode::FORBIDDEN);
+    match found {
+        Some(s) => { s.tags = payload.tags; Ok(StatusCode::OK) }
+        None => Err(StatusCode::FORBIDDEN),
     }
-    Ok(StatusCode::OK)
 }
 
 async fn list_folders(

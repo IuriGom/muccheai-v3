@@ -1122,13 +1122,17 @@ function renderChatHistory(filterText) {
             return;
         }
         if (section) section.style.display = 'block';
-        list.innerHTML = sessions.map(s => `
-            <div class="history-item ${s.id === currentSessionId ? 'active' : ''}" data-session-id="${escapeHtml(s.id)}">
+        list.innerHTML = sessions.map(s => {
+            const folderLabel = s.folder && s.folder !== 'General' ? `<span class="history-folder">${escapeHtml(s.folder)}</span>` : '';
+            const tagsLabel = s.tags && s.tags.length ? `<span class="history-tags">${s.tags.map(t => escapeHtml(t)).join(' ')}</span>` : '';
+            return `<div class="history-item ${s.id === currentSessionId ? 'active' : ''}" data-session-id="${escapeHtml(s.id)}">
                 <span class="history-title">${escapeHtml(s.title)}</span>
+                ${folderLabel}
+                ${tagsLabel}
                 <span class="history-export" data-export-id="${escapeHtml(s.id)}" title="Export">⬇️</span>
                 <span class="history-del" data-delete-id="${escapeHtml(s.id)}">🗑</span>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
     } catch (err) {
         console.error('renderChatHistory error:', err);
     }
@@ -2560,12 +2564,29 @@ async function sendMessageStream(text) {
 // ============================================
 // Feature: Voice output (TTS)
 // ============================================
+let ttsVoices = [];
+function loadTtsVoices() {
+    if (!('speechSynthesis' in window)) return;
+    ttsVoices = window.speechSynthesis.getVoices();
+    if (!ttsVoices.length) {
+        window.speechSynthesis.onvoiceschanged = () => {
+            ttsVoices = window.speechSynthesis.getVoices();
+        };
+    }
+}
+if ('speechSynthesis' in window) {
+    loadTtsVoices();
+}
+
 function speakText(text) {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.1;
     utterance.pitch = 1.0;
+    // Pick a non-default voice if available
+    const preferred = ttsVoices.find(v => v.lang.startsWith('en') && !v.default) || ttsVoices[0];
+    if (preferred) utterance.voice = preferred;
     window.speechSynthesis.speak(utterance);
 }
 
