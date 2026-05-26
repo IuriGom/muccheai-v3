@@ -43,10 +43,26 @@ impl PluginRuntime {
         };
 
         let mut linker: Linker<PluginState> = Linker::new(&self.engine);
-        let wasi = wasmtime_wasi::WasiCtxBuilder::new()
-            .inherit_stdout()
-            .inherit_stderr()
-            .build_p1();
+        let mut wasi_builder = wasmtime_wasi::WasiCtxBuilder::new();
+        wasi_builder.inherit_stdout().inherit_stderr();
+
+        // Restrict filesystem access to a plugin-specific sandbox directory.
+        if manifest.capabilities.filesystem != "none" {
+            let sandbox_dir = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".muccheai")
+                .join("plugin-data")
+                .join(&manifest.plugin.name);
+            let _ = std::fs::create_dir_all(&sandbox_dir);
+            let _ = wasi_builder.preopened_dir(
+                &sandbox_dir,
+                "/data",
+                wasmtime_wasi::DirPerms::all(),
+                wasmtime_wasi::FilePerms::all(),
+            );
+        }
+
+        let wasi = wasi_builder.build_p1();
 
         wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |state| &mut state.wasi)?;
 
