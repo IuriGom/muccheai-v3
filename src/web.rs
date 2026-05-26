@@ -2489,10 +2489,16 @@ async fn process_custom_tool_calls(
                         }
                     }
 
-                    // SSRF validation
+                    // SSRF validation (string + DNS resolution)
                     if let Err(e) = validate_no_ssrf_external(&url) {
                         results.push(format!("{}: SSRF BLOCKED {}", tool_name, e));
                         cleaned.push_str(&format!("\n[Custom tool '{}' blocked: SSRF]\n", tool_name));
+                        rest = &after_open[close_idx + 14..];
+                        continue;
+                    }
+                    if let Err(e) = validate_no_ssrf_dns(&url).await {
+                        results.push(format!("{}: SSRF DNS BLOCKED {}", tool_name, e));
+                        cleaned.push_str(&format!("\n[Custom tool '{}' blocked: SSRF DNS]\n", tool_name));
                         rest = &after_open[close_idx + 14..];
                         continue;
                     }
@@ -4553,19 +4559,13 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
         let now = chrono::Local::now();
         let dt = now.naive_local();
         let current_key = (dt.minute(), dt.hour(), dt.day(), dt.month(), dt.weekday().num_days_from_monday() + 1);
+        // Prune last_executed entries older than 48h to prevent unbounded growth
+        last_executed.retain(|_, (m, h, d, mo, w)| {
+            let old = (*m != dt.minute() as u32) || (*h != dt.hour() as u32) || (*d != dt.day() as u32);
+            !old
+        });
         for task in tasks {
-            // Full cron parsing: minute hour day month weekday
-            let parts: Vec<&str> = task.cron.split_whitespace().collect();
-            let should_run = if parts.len() == 5 {
-                let minute_ok = parts[0] == "*" || parts[0].parse::<u32>().map(|m| m == dt.minute()).unwrap_or(false);
-                let hour_ok = parts[1] == "*" || parts[1].parse::<u32>().map(|h| h == dt.hour()).unwrap_or(false);
-                let day_ok = parts[2] == "*" || parts[2].parse::<u32>().map(|d| d == dt.day()).unwrap_or(false);
-                let month_ok = parts[3] == "*" || parts[3].parse::<u32>().map(|m| m == dt.month()).unwrap_or(false);
-                let weekday_ok = parts[4] == "*" || parts[4].parse::<u32>().map(|w| w == (dt.weekday().num_days_from_monday() + 1)).unwrap_or(false);
-                minute_ok && hour_ok && day_ok && month_ok && weekday_ok
-            } else {
-                false
-            };
+            let should_run = cron_matches(&task.cron, &dt);
             // Rate limit: only execute once per (minute, hour, day, month, weekday) combo per task
             let already_ran = last_executed.get(&task.id) == Some(&current_key);
             if should_run && !already_ran {
@@ -4580,6 +4580,7 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
                 };
                 let dummy_headers = HeaderMap::new();
                 let resp = process_chat(&state, &dummy_headers, &req).await;
+                tracing::info!("Scheduled task {} result: {}", task.id, resp.response);
                 // Clean up the ghost session created by the scheduled task
                 if !resp.session_id.is_empty() {
                     let mut sessions = state.chat_sessions.lock().await;
@@ -4588,6 +4589,65 @@ async fn run_scheduled_tasks(state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// Check whether a cron expression matches the given datetime.
+/// Supports literals, * wildcards, ranges (1-5), lists (1,3,5), and steps (*/5).
+fn cron_matches(cron: &str, dt: &chrono::NaiveDateTime) -> bool {
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    let values = [
+        dt.minute() as u32,
+        dt.hour() as u32,
+        dt.day() as u32,
+        dt.month() as u32,
+        dt.weekday().num_days_from_monday() + 1, // Mon=1 .. Sun=7
+    ];
+    let max_vals = [59u32, 23, 31, 12, 7];
+    for (i, part) in parts.iter().enumerate() {
+        if !cron_field_matches(part, values[i], max_vals[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn cron_field_matches(field: &str, value: u32, max: u32) -> bool {
+    if field == "*" {
+        return true;
+    }
+    // Steps: */5
+    if field.starts_with("*/") {
+        if let Ok(step) = field[2..].parse::<u32>() {
+            return step > 0 && value % step == 0;
+        }
+        return false;
+    }
+    // Ranges: 1-5
+    if field.contains('-') {
+        let mut split = field.split('-');
+        if let (Some(start), Some(end)) = (split.next(), split.next()) {
+            if let (Ok(s), Ok(e)) = (start.parse::<u32>(), end.parse::<u32>()) {
+                return value >= s && value <= e;
+            }
+        }
+        return false;
+    }
+    // Lists: 1,3,5
+    if field.contains(',') {
+        for item in field.split(',') {
+            if let Ok(v) = item.parse::<u32>() {
+                if v == value {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    // Literal
+    field.parse::<u32>().map(|v| v == value).unwrap_or(false)
 }
 
 pub async fn serve(addr: &str, state: Arc<AppState>) {
