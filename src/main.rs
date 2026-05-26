@@ -26,6 +26,7 @@ mod cli;
 mod config;
 mod memory_store;
 mod notify;
+mod plugin;
 mod structured_memory;
 mod style;
 mod users;
@@ -906,6 +907,12 @@ async fn run_web_server(bind: &str) {
         csrf_tokens: Mutex::new(std::collections::HashMap::new()),
         rng: ring::rand::SystemRandom::new(),
         shared_sessions: Mutex::new(std::collections::HashMap::new()),
+        custom_tools: Mutex::new(Vec::new()),
+        scheduled_tasks: Mutex::new(Vec::new()),
+        plugin_manager: Mutex::new(crate::plugin::PluginManager::new().unwrap_or_else(|e| {
+            eprintln!("Warning: plugin manager init failed: {}", e);
+            crate::plugin::PluginManager::new_disabled()
+        })),
     });
 
     println!("🔐 Login with username 'admin' and your existing API key.");

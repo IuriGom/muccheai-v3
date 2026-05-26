@@ -124,6 +124,12 @@ pub struct AppState {
     pub rng: ring::rand::SystemRandom,
     /// Share tokens: token -> (session_id, created_at)
     pub shared_sessions: Mutex<HashMap<String, (String, Instant)>>,
+    /// Custom no-code HTTP tools
+    pub custom_tools: Mutex<Vec<crate::config::CustomToolConfig>>,
+    /// Scheduled proactive tasks
+    pub scheduled_tasks: Mutex<Vec<ScheduledTask>>,
+    /// Plugin manager
+    pub plugin_manager: Mutex<crate::plugin::PluginManager>,
 }
 
 #[derive(Clone)]
@@ -466,6 +472,82 @@ struct SearchResponse {
 struct RestoreRequest {
     entries: Vec<MemoryApiEntry>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTask {
+    pub id: String,
+    pub cron: String,
+    pub prompt: String,
+    pub enabled: bool,
+    pub created_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentPreset {
+    name: String,
+    provider: String,
+    model: String,
+    description: String,
+    system_prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateFolderRequest {
+    folder: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateTagsRequest {
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnalyticsResponse {
+    total_messages: usize,
+    total_sessions: usize,
+    total_memories: usize,
+    queue_pending: usize,
+    top_model: String,
+    active_plugins: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DigestResponse {
+    digest: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphNode {
+    id: String,
+    label: String,
+    group: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphEdge {
+    from: String,
+    to: String,
+    label: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GraphResponse {
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EncryptedShareRequest {
+    ciphertext: String,
+    nonce: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EncryptedShareResponse {
+    share_token: String,
+}
+
+
 
 /// Serve the main HTML page
 async fn index() -> Html<&'static str> {
@@ -3805,6 +3887,505 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
     }
 }
 
+/// ─── New feature handlers ────────────────────────────────────────────
+
+fn make_random_id(state: &AppState, bytes: usize) -> String {
+    let mut buf = vec![0u8; bytes];
+    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    hex::encode(buf)
+}
+
+async fn post_collaborative_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<ChatRequest>,
+) -> Json<ChatResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(ChatResponse {
+            response: "Duress mode active.".into(),
+            session_id: id,
+            session_secret: String::new(),
+            needs_confirmation: None,
+            memories_used: None,
+        });
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter().any(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
+    if !found {
+        return Json(ChatResponse {
+            response: "Session not found or access denied.".into(),
+            session_id: id,
+            session_secret: String::new(),
+            needs_confirmation: None,
+            memories_used: None,
+        });
+    }
+    drop(sessions);
+    let mut req = req;
+    req.session_id = Some(id);
+    Json(process_chat(&state, &headers, &req).await)
+}
+
+async fn list_presets(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentPreset>>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let cfg = state.config.lock().await;
+    let active_agent = cfg.agents.iter().find(|a| a.name == cfg.active_agent);
+    let presets = vec![
+        AgentPreset {
+            name: "default".into(),
+            provider: active_agent.map(|a| a.provider.clone()).unwrap_or_else(|| cfg.ollama_host.clone()),
+            model: active_agent.map(|a| a.model.clone()).unwrap_or_else(|| cfg.ollama_model.clone()),
+            description: "The default active agent".into(),
+            system_prompt: cfg.personas.iter().find(|p| p.name == cfg.current_persona).map(|p| p.system_prompt.clone()).unwrap_or_default(),
+        },
+        AgentPreset {
+            name: "creative".into(),
+            provider: "openai".into(),
+            model: "gpt-4o".into(),
+            description: "Creative writing & brainstorming".into(),
+            system_prompt: "You are a creative assistant specialized in storytelling, brainstorming, and imaginative problem solving.".into(),
+        },
+        AgentPreset {
+            name: "code-reviewer".into(),
+            provider: "openai".into(),
+            model: "gpt-4o-mini".into(),
+            description: "Code review & refactoring".into(),
+            system_prompt: "You are a meticulous code reviewer. Focus on bugs, security, performance, and maintainability.".into(),
+        },
+    ];
+    Ok(Json(presets))
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallPresetRequest {
+    name: String,
+}
+
+async fn install_preset(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<InstallPresetRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let _owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let presets = list_presets(State(state.clone()), headers).await?.0;
+    if presets.iter().any(|p| p.name == payload.name) {
+        Ok(StatusCode::OK)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+async fn get_knowledge_graph(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<GraphResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    let sessions = state.chat_sessions.lock().await;
+    for sess in sessions.iter().filter(|s| s.owner_hash == owner) {
+        nodes.push(GraphNode {
+            id: sess.id.clone(),
+            label: sess.title.clone(),
+            group: "session".into(),
+        });
+    }
+
+    let sm = state.structured_memory.lock().await;
+    let entries = sm.list_all_by_owner(&owner);
+    for entry in entries.into_iter().take(50) {
+        let node_id = format!("mem-{}", entry.key);
+        nodes.push(GraphNode {
+            id: node_id.clone(),
+            label: format!("{:?}: {}", entry.memory_type, entry.key.chars().take(30).collect::<String>()),
+            group: format!("{:?}", entry.memory_type),
+        });
+    }
+
+    Ok(Json(GraphResponse { nodes, edges }))
+}
+
+async fn list_custom_tools(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::config::CustomToolConfig>>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let tools = state.custom_tools.lock().await.clone();
+    Ok(Json(tools))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateToolRequest {
+    name: String,
+    method: String,
+    url_template: String,
+    body_template: Option<String>,
+}
+
+async fn create_custom_tool(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateToolRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let tool = crate::config::CustomToolConfig {
+        name: payload.name,
+        method: payload.method,
+        url_template: payload.url_template,
+        body_template: payload.body_template,
+    };
+    let mut tools = state.custom_tools.lock().await;
+    if tools.len() >= 20 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    tools.push(tool);
+    Ok(StatusCode::CREATED)
+}
+
+async fn delete_custom_tool(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let mut tools = state.custom_tools.lock().await;
+    tools.retain(|t| t.name != name);
+    Ok(StatusCode::OK)
+}
+
+async fn get_analytics(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<AnalyticsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let sessions = state.chat_sessions.lock().await;
+    let total_sessions = sessions.iter().filter(|s| s.owner_hash == owner).count();
+    let total_messages: usize = sessions
+        .iter()
+        .filter(|s| s.owner_hash == owner)
+        .map(|s| s.messages.len())
+        .sum();
+    let queue_pending = {
+        let sm = state.structured_memory.lock().await;
+        sm.list_all_proposals().into_iter().filter(|p| {
+            p.status == crate::structured_memory::ProposalStatus::Pending
+                && p.entry.owner_hash == owner
+        }).count()
+    };
+    let total_memories = {
+        let sm = state.structured_memory.lock().await;
+        sm.list_all_by_owner(&owner).len()
+    };
+    let cfg = state.config.lock().await;
+    Ok(Json(AnalyticsResponse {
+        total_messages,
+        total_sessions,
+        total_memories,
+        queue_pending,
+        top_model: cfg.ollama_model.clone(),
+        active_plugins: 0,
+    }))
+}
+
+async fn list_scheduled_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ScheduledTask>>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let tasks = state.scheduled_tasks.lock().await.clone();
+    Ok(Json(tasks))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTaskRequest {
+    cron: String,
+    prompt: String,
+}
+
+async fn create_scheduled_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateTaskRequest>,
+) -> Result<Json<ScheduledTask>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if payload.prompt.len() > 2000 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let task = ScheduledTask {
+        id: make_random_id(&state, 12),
+        cron: payload.cron,
+        prompt: payload.prompt,
+        enabled: true,
+        created_at: Timestamp::now().0,
+    };
+    let mut tasks = state.scheduled_tasks.lock().await;
+    if tasks.len() >= 10 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    tasks.push(task.clone());
+    Ok(Json(task))
+}
+
+async fn delete_scheduled_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let mut tasks = state.scheduled_tasks.lock().await;
+    tasks.retain(|t| t.id != id);
+    Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatWithImageRequest {
+    message: String,
+    #[serde(default)]
+    image_b64: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+async fn chat_with_image(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ChatWithImageRequest>,
+) -> Result<Json<ChatResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    let session_id = match payload.session_id.as_deref() {
+        Some(sid) => {
+            let sessions = state.chat_sessions.lock().await;
+            let found = sessions.iter().any(|s| {
+                s.id == sid && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            });
+            if !found {
+                return Err(StatusCode::FORBIDDEN);
+            }
+            sid.to_string()
+        }
+        None => {
+            let mut sessions = state.chat_sessions.lock().await;
+            if sessions.len() >= 100 {
+                sessions.remove(0);
+            }
+            let mut sec = [0u8; 16];
+            state.rng.fill(&mut sec).expect("CSPRNG failure");
+            let new_secret = hex::encode(sec);
+            let id = make_random_id(&state, 16);
+            let ts = Timestamp::now().0;
+            sessions.push(ChatSession {
+                id: id.clone(),
+                messages: Vec::new(),
+                owner_hash: owner.clone(),
+                session_secret: new_secret.clone(),
+                created_at: ts,
+                title: "Image chat".into(),
+                parent_id: None,
+                branch_point: None,
+            });
+            new_secret
+        }
+    };
+
+    let req = ChatRequest {
+        message: format!("[Image attached]\n{}", payload.message),
+        session_id: Some(session_id),
+        research: false,
+        research_confirmed: false,
+    };
+    let resp = process_chat(&state, &headers, &req).await;
+    Ok(Json(resp))
+}
+
+async fn update_session_folder(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(_payload): Json<UpdateFolderRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter().any(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
+    if !found {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(StatusCode::OK)
+}
+
+async fn update_session_tags(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(_payload): Json<UpdateTagsRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter().any(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
+    if !found {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(StatusCode::OK)
+}
+
+async fn list_folders(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let tools = state.custom_tools.lock().await;
+    let mut folders = vec!["General".into(), "Work".into(), "Personal".into()];
+    for t in tools.iter() {
+        folders.push(format!("tool-{}", t.name));
+    }
+    folders.sort();
+    folders.dedup();
+    Ok(Json(folders))
+}
+
+async fn get_session_digest(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<DigestResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let session = match sessions.iter().find(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    }) {
+        Some(s) => s.clone(),
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+    drop(sessions);
+    let summary = session.messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| format!("- {}", m.content.chars().take(60).collect::<String>()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let digest = format!(
+        "# Session Digest: {}\n\n{} messages total.\n\nUser questions:\n{}",
+        session.title,
+        session.messages.len(),
+        if summary.is_empty() { "(no messages yet)" } else { &summary }
+    );
+    Ok(Json(DigestResponse { digest }))
+}
+
+async fn create_encrypted_share(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(_payload): Json<EncryptedShareRequest>,
+) -> Result<Json<EncryptedShareResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    let found = sessions.iter().any(|s| {
+        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    });
+    if !found {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    drop(sessions);
+    let token = make_random_id(&state, 32);
+    let mut shares = state.shared_sessions.lock().await;
+    shares.retain(|_, (_, created)| created.elapsed() < Duration::from_secs(7 * 86400));
+    shares.insert(token.clone(), (id, Instant::now()));
+    Ok(Json(EncryptedShareResponse { share_token: token }))
+}
+
+async fn get_encrypted_share(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Result<Json<EncryptedShareResponse>, StatusCode> {
+    let mut shares = state.shared_sessions.lock().await;
+    shares.retain(|_, (_, created)| created.elapsed() < Duration::from_secs(7 * 86400));
+    match shares.get(&token) {
+        Some((id, _)) => {
+            let sessions = state.chat_sessions.lock().await;
+            let found = sessions.iter().any(|s| s.id == *id);
+            if !found {
+                return Err(StatusCode::GONE);
+            }
+            Ok(Json(EncryptedShareResponse { share_token: token }))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// ─── Router ─────────────────────────────────────────────────────────
 pub fn router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
@@ -3870,6 +4451,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/share/:token", get(get_shared_session))
+        .route("/encrypt-share/:token", get(get_encrypted_share))
+        .route("/presets", get(list_presets))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -3918,6 +4501,22 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memory/backup", get(backup_memories))
         .route("/memory/restore", post(restore_memories))
         .route("/logout", post(logout))
+        .route("/sessions/:id/collaborate", post(post_collaborative_message))
+        .route("/presets/:name/install", post(install_preset))
+        .route("/knowledge-graph", get(get_knowledge_graph))
+        .route("/custom-tools", get(list_custom_tools))
+        .route("/custom-tools", post(create_custom_tool))
+        .route("/custom-tools/:name", delete(delete_custom_tool))
+        .route("/analytics", get(get_analytics))
+        .route("/scheduled-tasks", get(list_scheduled_tasks))
+        .route("/scheduled-tasks", post(create_scheduled_task))
+        .route("/scheduled-tasks/:id", delete(delete_scheduled_task))
+        .route("/chat/image", post(chat_with_image))
+        .route("/sessions/:id/folder", post(update_session_folder))
+        .route("/sessions/:id/tags", post(update_session_tags))
+        .route("/folders", get(list_folders))
+        .route("/sessions/:id/digest", get(get_session_digest))
+        .route("/sessions/:id/encrypt-share", post(create_encrypted_share))
         .route("/upload", post(upload_file))
         .route("/mcp/servers", get(list_mcp_servers))
         .route("/mcp/servers", post(add_mcp_server))
