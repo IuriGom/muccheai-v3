@@ -8,7 +8,7 @@
     <meta http-equiv="Expires" content="0">
     <title>MuccheAI — Secure AI Agent</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/style.css?v=11">
+    <link rel="stylesheet" href="/style.css?v=12">
 </head>
 <body>
     <div class="offline-indicator">⚠️ You are offline — messages will be queued</div>
@@ -206,6 +206,24 @@
                 </a>
             </nav>
             <nav class="nav-section">
+                <div class="nav-label">Tools</div>
+                <a href="#analytics" class="nav-item" data-tab="analytics">
+                    <span class="nav-icon">📈</span> Analytics
+                </a>
+                <a href="#presets" class="nav-item" data-tab="presets">
+                    <span class="nav-icon">🎛️</span> Presets
+                </a>
+                <a href="#graph" class="nav-item" data-tab="graph">
+                    <span class="nav-icon">🕸️</span> Knowledge Graph
+                </a>
+                <a href="#tools" class="nav-item" data-tab="tools">
+                    <span class="nav-icon">🔧</span> Custom Tools
+                </a>
+                <a href="#tasks" class="nav-item" data-tab="tasks">
+                    <span class="nav-icon">⏰</span> Scheduled Tasks
+                </a>
+            </nav>
+            <nav class="nav-section">
                 <div class="nav-label">System</div>
                 <a href="#status" class="nav-item" data-tab="status">
                     <span class="nav-icon">📊</span> Status
@@ -275,6 +293,8 @@
                 </div>
                 <div class="topbar-right">
                     <button class="btn-icon" id="shareSessionBtn" title="Share session">🔗</button>
+                    <button class="btn-icon" id="digestSessionBtn" title="Session digest">📋</button>
+                    <button class="btn-icon" id="encryptShareBtn" title="Encrypted share">🔐</button>
                     <button class="btn-icon" id="darkModeBtn" title="Toggle dark mode">🌙</button>
                     <button class="btn-icon" id="logoutBtn" title="Logout">🚪</button>
                     <button class="btn btn-secondary mobile-menu-btn">☰</button>
@@ -305,7 +325,9 @@
                                 </div>
                                 <div class="chat-input">
                                     <input type="file" id="fileInput" style="display:none;" accept=".txt,.md,.json,.pdf,.docx">
+                                    <input type="file" id="imageInput" style="display:none;" accept="image/*">
                                     <button id="uploadBtn" title="Upload file">📎</button>
+                                    <button id="imageBtn" title="Send image">🖼️</button>
                                     <button id="voiceBtn" title="Voice input">🎤</button>
                                     <input type="text" id="input" placeholder="Message MuccheAI..." autocomplete="off">
                                     <button id="send">➤</button>
@@ -420,11 +442,62 @@
                         <div class="status-grid" id="statusGrid"></div>
                     </div>
                 </section>
+
+                <!-- Analytics Tab -->
+                <section class="tab" id="tab-analytics">
+                    <div class="page-container">
+                        <h2>📈 Analytics Dashboard</h2>
+                        <div class="analytics-grid" id="analyticsGrid"></div>
+                    </div>
+                </section>
+
+                <!-- Presets Tab -->
+                <section class="tab" id="tab-presets">
+                    <div class="page-container">
+                        <h2>🎛️ Agent Preset Marketplace</h2>
+                        <div class="preset-grid" id="presetGrid"></div>
+                    </div>
+                </section>
+
+                <!-- Knowledge Graph Tab -->
+                <section class="tab" id="tab-graph">
+                    <div class="page-container">
+                        <h2>🕸️ Knowledge Graph</h2>
+                        <div class="graph-container" id="graphContainer"></div>
+                    </div>
+                </section>
+
+                <!-- Custom Tools Tab -->
+                <section class="tab" id="tab-tools">
+                    <div class="page-container">
+                        <h2>🔧 Custom Tools</h2>
+                        <div class="tool-builder" id="toolBuilder">
+                            <input type="text" id="toolName" placeholder="Tool name">
+                            <select id="toolMethod"><option>GET</option><option>POST</option></select>
+                            <input type="text" id="toolUrl" placeholder="URL template (e.g. https://api.example.com/{query})">
+                            <button class="btn btn-primary" id="toolCreateBtn">Create Tool</button>
+                        </div>
+                        <div class="tool-list" id="toolList"></div>
+                    </div>
+                </section>
+
+                <!-- Scheduled Tasks Tab -->
+                <section class="tab" id="tab-tasks">
+                    <div class="page-container">
+                        <h2>⏰ Scheduled Tasks</h2>
+                        <div class="task-builder" id="taskBuilder">
+                            <input type="text" id="taskCron" placeholder="Cron expression (e.g. 0 9 * * *)">
+                            <input type="text" id="taskPrompt" placeholder="Prompt to run">
+                            <button class="btn btn-primary" id="taskCreateBtn">Create Task</button>
+                        </div>
+                        <div class="task-list" id="taskList"></div>
+                    </div>
+                </section>
             </div>
         </main>
     </div>
 
-    <script src="/app.js?v=11"></script>
+    <script src="/app.js?v=12"></script>
 
     <!-- Approval Notification Toast -->
     <div id="approvalToast" class="approval-toast" style="display:none;">

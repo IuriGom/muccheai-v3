@@ -1019,3 +1019,12 @@ pub fn decrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
         }
     }
 }
+
+/// No-code custom HTTP tool configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CustomToolConfig {
+    pub name: String,
+    pub method: String,
+    pub url_template: String,
+    pub body_template: Option<String>,
+}

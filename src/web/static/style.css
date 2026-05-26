@@ -2371,3 +2371,110 @@ body.offline .offline-indicator {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+
+/* ============================================
+   Feature Drop 2: Analytics, Presets, Graph, Tools, Tasks
+   ============================================ */
+
+.analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 1rem;
+}
+.analytics-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+}
+.analytics-card h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+}
+.analytics-val {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1rem;
+}
+.preset-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+.preset-card h4 { margin: 0 0 0.25rem; }
+.preset-meta { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+
+.graph-container {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+.graph-nodes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.graph-node {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+}
+.graph-group-session { border-left: 3px solid #4ecdc4; }
+.graph-group-Fact { border-left: 3px solid #ff6b6b; }
+.graph-group-Preference { border-left: 3px solid #ffe66d; }
+.graph-group-TaskHistory { border-left: 3px solid #a8e6cf; }
+
+.tool-builder, .task-builder {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    align-items: center;
+}
+.tool-builder input, .task-builder input {
+    flex: 1;
+    min-width: 180px;
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    color: var(--text);
+}
+.tool-list, .task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.tool-card, .task-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.tool-method {
+    background: var(--surface);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.task-status { margin-left: auto; }

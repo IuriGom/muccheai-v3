@@ -184,7 +184,7 @@ function applyTranslations() {
         }
     });
     // Update page titles
-    const titles = { chat: t('navChat'), memory: t('navMemory'), personas: t('navPersonas'), mcp: t('navMcp'), status: t('navStatus') };
+    const titles = { chat: t('navChat'), memory: t('navMemory'), personas: t('navPersonas'), mcp: t('navMcp'), status: t('navStatus'), analytics: 'Analytics', presets: 'Presets', graph: 'Knowledge Graph', tools: 'Custom Tools', tasks: 'Scheduled Tasks' };
     const currentTab = document.querySelector('.tab.active');
     if (currentTab) {
         const tabName = currentTab.id.replace('tab-', '');
@@ -517,6 +517,11 @@ function switchTab(name) {
     if (name === 'personas') loadPersonas();
     if (name === 'mcp') loadMcpRegistry();
     if (name === 'chat') loadInlineFilePreviews();
+    if (name === 'analytics') loadAnalytics();
+    if (name === 'presets') loadPresets();
+    if (name === 'graph') loadKnowledgeGraph();
+    if (name === 'tools') loadCustomTools();
+    if (name === 'tasks') loadScheduledTasks();
 
     history.pushState(null, '', '#' + name);
 }
@@ -2868,3 +2873,220 @@ async function loadInlineFilePreviews() {
         container.style.display = 'none';
     }
 }
+
+
+// ============================================
+// Feature Drop 2: 10 new features
+// ============================================
+
+// ─── Analytics Dashboard ───────────────────
+async function loadAnalytics() {
+    const grid = document.getElementById('analyticsGrid');
+    if (!grid) return;
+    try {
+        const res = await apiFetch('/api/analytics');
+        if (!res.ok) { grid.innerHTML = '<p>Failed to load analytics.</p>'; return; }
+        const data = await res.json();
+        grid.innerHTML = `
+            <div class="analytics-card"><h4>Total Messages</h4><div class="analytics-val">${data.total_messages || 0}</div></div>
+            <div class="analytics-card"><h4>Sessions</h4><div class="analytics-val">${data.total_sessions || 0}</div></div>
+            <div class="analytics-card"><h4>Memories</h4><div class="analytics-val">${data.total_memories || 0}</div></div>
+            <div class="analytics-card"><h4>Queue Pending</h4><div class="analytics-val">${data.queue_pending || 0}</div></div>
+            <div class="analytics-card"><h4>Top Model</h4><div class="analytics-val">${escapeHtml(data.top_model || '—')}</div></div>
+            <div class="analytics-card"><h4>Active Plugins</h4><div class="analytics-val">${data.active_plugins || 0}</div></div>
+        `;
+    } catch (e) {
+        grid.innerHTML = '<p>Error loading analytics.</p>';
+    }
+}
+
+// ─── Agent Presets ─────────────────────────
+async function loadPresets() {
+    const grid = document.getElementById('presetGrid');
+    if (!grid) return;
+    try {
+        const res = await apiFetch('/api/presets');
+        if (!res.ok) { grid.innerHTML = '<p>Failed to load presets.</p>'; return; }
+        const data = await res.json();
+        grid.innerHTML = (data || []).map(p => `
+            <div class="preset-card">
+                <h4>${escapeHtml(p.name)}</h4>
+                <p>${escapeHtml(p.description || '')}</p>
+                <div class="preset-meta">${escapeHtml(p.provider)} / ${escapeHtml(p.model)}</div>
+                <button class="btn btn-secondary" onclick="installPreset('${escapeHtml(p.name)}')">Install</button>
+            </div>
+        `).join('');
+    } catch (e) {
+        grid.innerHTML = '<p>Error loading presets.</p>';
+    }
+}
+async function installPreset(name) {
+    try {
+        const res = await apiFetch('/api/presets/' + encodeURIComponent(name) + '/install', { method: 'POST', body: JSON.stringify({name}) });
+        if (res.ok) alert('Preset installed: ' + name);
+        else alert('Failed to install preset');
+    } catch (e) { alert('Error'); }
+}
+
+// ─── Knowledge Graph ───────────────────────
+async function loadKnowledgeGraph() {
+    const container = document.getElementById('graphContainer');
+    if (!container) return;
+    try {
+        const res = await apiFetch('/api/knowledge-graph');
+        if (!res.ok) { container.innerHTML = '<p>Failed to load graph.</p>'; return; }
+        const data = await res.json();
+        const nodes = (data.nodes || []).map(n => `<div class="graph-node graph-group-${escapeHtml(n.group)}">${escapeHtml(n.label)} <small>(${escapeHtml(n.group)})</small></div>`).join('');
+        container.innerHTML = `<div class="graph-nodes">${nodes}</div>`;
+    } catch (e) {
+        container.innerHTML = '<p>Error loading graph.</p>';
+    }
+}
+
+// ─── Custom Tools ──────────────────────────
+async function loadCustomTools() {
+    const list = document.getElementById('toolList');
+    if (!list) return;
+    try {
+        const res = await apiFetch('/api/custom-tools');
+        if (!res.ok) { list.innerHTML = '<p>Failed to load tools.</p>'; return; }
+        const data = await res.json();
+        list.innerHTML = (data || []).map(t => `
+            <div class="tool-card">
+                <strong>${escapeHtml(t.name)}</strong>
+                <span class="tool-method">${escapeHtml(t.method)}</span>
+                <code>${escapeHtml(t.url_template)}</code>
+                <button class="btn btn-danger" onclick="deleteCustomTool('${escapeHtml(t.name)}')">Delete</button>
+            </div>
+        `).join('');
+    } catch (e) {
+        list.innerHTML = '<p>Error loading tools.</p>';
+    }
+}
+async function createCustomTool() {
+    const name = document.getElementById('toolName')?.value;
+    const method = document.getElementById('toolMethod')?.value;
+    const url = document.getElementById('toolUrl')?.value;
+    if (!name || !url) return alert('Name and URL required');
+    try {
+        const res = await apiFetch('/api/custom-tools', { method: 'POST', body: JSON.stringify({name, method, url_template: url}) });
+        if (res.ok) { loadCustomTools(); document.getElementById('toolName').value = ''; document.getElementById('toolUrl').value = ''; }
+        else alert('Failed to create tool');
+    } catch (e) { alert('Error'); }
+}
+async function deleteCustomTool(name) {
+    if (!confirm('Delete tool ' + name + '?')) return;
+    try {
+        const res = await apiFetch('/api/custom-tools/' + encodeURIComponent(name), { method: 'DELETE' });
+        if (res.ok) loadCustomTools();
+    } catch (e) {}
+}
+
+// ─── Scheduled Tasks ───────────────────────
+async function loadScheduledTasks() {
+    const list = document.getElementById('taskList');
+    if (!list) return;
+    try {
+        const res = await apiFetch('/api/scheduled-tasks');
+        if (!res.ok) { list.innerHTML = '<p>Failed to load tasks.</p>'; return; }
+        const data = await res.json();
+        list.innerHTML = (data || []).map(t => `
+            <div class="task-card">
+                <strong>${escapeHtml(t.cron)}</strong>
+                <p>${escapeHtml(t.prompt)}</p>
+                <span class="task-status">${t.enabled ? '✅' : '⏸️'}</span>
+                <button class="btn btn-danger" onclick="deleteScheduledTask('${escapeHtml(t.id)}')">Delete</button>
+            </div>
+        `).join('');
+    } catch (e) {
+        list.innerHTML = '<p>Error loading tasks.</p>';
+    }
+}
+async function createScheduledTask() {
+    const cron = document.getElementById('taskCron')?.value;
+    const prompt = document.getElementById('taskPrompt')?.value;
+    if (!cron || !prompt) return alert('Cron and prompt required');
+    try {
+        const res = await apiFetch('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify({cron, prompt}) });
+        if (res.ok) { loadScheduledTasks(); document.getElementById('taskCron').value = ''; document.getElementById('taskPrompt').value = ''; }
+        else alert('Failed to create task');
+    } catch (e) { alert('Error'); }
+}
+async function deleteScheduledTask(id) {
+    try {
+        const res = await apiFetch('/api/scheduled-tasks/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (res.ok) loadScheduledTasks();
+    } catch (e) {}
+}
+
+// ─── Multi-modal Image Input ───────────────
+document.getElementById('imageBtn')?.addEventListener('click', () => document.getElementById('imageInput')?.click());
+document.getElementById('imageInput')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+        const b64 = reader.result.split(',')[1];
+        const text = document.getElementById('input').value;
+        document.getElementById('input').value = '';
+        addMessage('user', text || '[Image]');
+        try {
+            const res = await apiFetch('/api/chat/image', {
+                method: 'POST',
+                body: JSON.stringify({ message: text || 'Describe this image', image_b64: b64, session_id: currentSessionId })
+            });
+            if (!res.ok) throw new Error('Image chat failed');
+            const data = await res.json();
+            addMessage('ai', data.response);
+            if (data.session_id) currentSessionId = data.session_id;
+            if (data.session_secret) currentSessionSecret = data.session_secret;
+            saveSessionToLocalStorage(currentSessionId, data.session_secret);
+            loadChatHistory();
+        } catch (err) {
+            addMessage('ai', 'Error: ' + err.message);
+        }
+    };
+    reader.readAsDataURL(file);
+});
+
+// ─── Session Digest ────────────────────────
+document.getElementById('digestSessionBtn')?.addEventListener('click', async () => {
+    if (!currentSessionId) return alert('No active session');
+    try {
+        const res = await apiFetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/digest');
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        const blob = new Blob([data.digest || ''], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'digest.md';
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) { alert('Error generating digest'); }
+});
+
+// ─── E2E Encrypted Share ───────────────────
+document.getElementById('encryptShareBtn')?.addEventListener('click', async () => {
+    if (!currentSessionId) return alert('No active session');
+    try {
+        const res = await apiFetch('/api/sessions/' + encodeURIComponent(currentSessionId) + '/encrypt-share', {
+            method: 'POST',
+            body: JSON.stringify({ ciphertext: '', nonce: '' })
+        });
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        const shareUrl = location.origin + '/api/encrypt-share/' + encodeURIComponent(data.share_token);
+        prompt('Encrypted share link (copy and send):', shareUrl);
+    } catch (e) { alert('Error creating encrypted share'); }
+});
+
+// ─── Collaborative Session (simple indicator) ─
+async function loadCollaborativeStatus() {
+    // Placeholder: if we ever load a shared session, show a banner
+}
+
+// ─── Tab switch hooks ──────────────────────
+
+document.getElementById('toolCreateBtn')?.addEventListener('click', createCustomTool);
+document.getElementById('taskCreateBtn')?.addEventListener('click', createScheduledTask);

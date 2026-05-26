@@ -37,6 +37,10 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"] }
+wasmtime = "29"
+wasmtime-wasi = "29"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 toml = { workspace = true }
 rand = { workspace = true }
 thiserror = { workspace = true }
