@@ -166,26 +166,22 @@ impl PluginRuntime {
                     tracing::warn!(target: "plugin", "HTTP request with credentials blocked: {}", url);
                     return -1;
                 }
-                // DNS rebinding guard: resolve and block internal IPs
-                use std::net::ToSocketAddrs;
-                if let Ok(addrs) = (&host as &str, 80).to_socket_addrs() {
-                    for addr in addrs {
-                        let ip = addr.ip();
-                        let blocked = match ip {
-                            std::net::IpAddr::V4(v4) => {
-                                v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                                    || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
-                                    || v4.is_documentation()
-                            }
-                            std::net::IpAddr::V6(v6) => {
-                                v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
-                                    || v6.is_unicast_link_local() || v6.is_multicast()
-                            }
-                        };
-                        if blocked {
-                            tracing::warn!(target: "plugin", "HTTP request to {} resolved to internal IP {}, blocked", host, ip);
-                            return -1;
+                // Block literal internal IPs; rely on allowed_hosts for hostnames
+                if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    let blocked = match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                                || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                                || v4.is_documentation()
                         }
+                        std::net::IpAddr::V6(v6) => {
+                            v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                                || v6.is_unicast_link_local() || v6.is_multicast()
+                        }
+                    };
+                    if blocked {
+                        tracing::warn!(target: "plugin", "HTTP request to literal internal IP {} blocked", ip);
+                        return -1;
                     }
                 }
 

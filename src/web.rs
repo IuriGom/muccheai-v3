@@ -1472,6 +1472,9 @@ async fn ws_chat(
     headers: HeaderMap,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> Response {
+    if is_duress_session(&state, &headers).await {
+        return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
     let token = extract_bearer_token(&headers);
     let owner = get_session_owner(&state, &headers).await;
     if owner.is_none() || token.is_none() {
@@ -3659,12 +3662,15 @@ async fn get_csrf(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(serde_json::json!({ "csrf_token": "duress-token" })));
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let mut buf = [0u8; 32];
-    state.rng.fill(&mut buf).expect("CSPRNG failure");
+    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let token = hex::encode(buf);
     let mut store = state.csrf_tokens.lock().await;
     store.insert(owner, token.clone());
@@ -3734,6 +3740,9 @@ async fn logout(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> StatusCode {
+    if is_duress_session(&state, &headers).await {
+        return StatusCode::NO_CONTENT;
+    }
     // Verify token and extract owner under the sessions lock, then tear down.
     let token = extract_bearer_token(&headers);
     let owner = if let Some(ref t) = token {
@@ -3830,6 +3839,9 @@ async fn get_chat_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ChatSession>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
@@ -3903,6 +3915,9 @@ async fn delete_chat_session(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> StatusCode {
+    if is_duress_session(&state, &headers).await {
+        return StatusCode::NO_CONTENT;
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return StatusCode::UNAUTHORIZED;
@@ -5442,7 +5457,7 @@ async fn chat_with_image(
                 sessions.remove(0);
             }
             let mut sec = [0u8; 16];
-            state.rng.fill(&mut sec).expect("CSPRNG failure");
+            state.rng.fill(&mut sec).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let new_secret = hex::encode(sec);
             let id = make_random_id(&state, 16);
             let ts = Timestamp::now().0;
