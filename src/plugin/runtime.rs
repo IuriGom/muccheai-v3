@@ -22,7 +22,7 @@ impl PluginRuntime {
 
     /// Execute a plugin with the given input JSON.
     /// Returns the output JSON string.
-    /// 
+    ///
     /// **Important:** This function performs blocking I/O and WASM compilation.
     /// Callers from async context MUST wrap this in `tokio::task::spawn_blocking`.
     pub fn execute(
@@ -33,7 +33,7 @@ impl PluginRuntime {
         input_json: &str,
     ) -> anyhow::Result<String> {
         let module = {
-            let mut cache = self.module_cache.lock().unwrap();
+            let mut cache = self.module_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(m) = cache.get(wasm_path) {
                 m.clone()
             } else {
@@ -96,9 +96,17 @@ impl PluginRuntime {
 
         let input_bytes = input_json.as_bytes();
         let out_len = 8192;
-        // Simple allocation: input at offset 0, output at offset after input (aligned)
         let input_ptr = 1024;
         let output_ptr = input_ptr + input_bytes.len() + 1024;
+
+        // Bounds check against WASM memory size to prevent runtime crash
+        let mem_size = memory.data_size(&store);
+        if input_ptr + input_bytes.len() > mem_size {
+            return Err(anyhow::anyhow!("Plugin input ({} bytes) exceeds WASM memory ({} bytes)", input_bytes.len(), mem_size));
+        }
+        if output_ptr + out_len > mem_size {
+            return Err(anyhow::anyhow!("Plugin output buffer would exceed WASM memory ({} bytes)", mem_size));
+        }
 
         memory.write(&mut store, input_ptr, input_bytes)?;
 
@@ -143,14 +151,42 @@ impl PluginRuntime {
                     Err(_) => return -1,
                 };
 
-                // Validate host against allowlist
-                let host = match url::Url::parse(&url) {
-                    Ok(u) => u.host_str().unwrap_or("").to_string(),
+                // Validate URL structure and SSRF
+                let parsed = match url::Url::parse(&url) {
+                    Ok(u) => u,
                     Err(_) => return -1,
                 };
+                let host = parsed.host_str().unwrap_or("").to_string();
                 if !allowed_hosts.iter().any(|h| h == &host) {
                     tracing::warn!(target: "plugin", "HTTP request to {} blocked by capability manifest", host);
                     return -1;
+                }
+                // Reject userinfo tricks (e.g. http://example.com@127.0.0.1/)
+                if !parsed.username().is_empty() || parsed.password().is_some() {
+                    tracing::warn!(target: "plugin", "HTTP request with credentials blocked: {}", url);
+                    return -1;
+                }
+                // DNS rebinding guard: resolve and block internal IPs
+                use std::net::ToSocketAddrs;
+                if let Ok(addrs) = (&host as &str, 80).to_socket_addrs() {
+                    for addr in addrs {
+                        let ip = addr.ip();
+                        let blocked = match ip {
+                            std::net::IpAddr::V4(v4) => {
+                                v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                                    || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                                    || v4.is_documentation()
+                            }
+                            std::net::IpAddr::V6(v6) => {
+                                v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                                    || v6.is_unicast_link_local() || v6.is_multicast()
+                            }
+                        };
+                        if blocked {
+                            tracing::warn!(target: "plugin", "HTTP request to {} resolved to internal IP {}, blocked", host, ip);
+                            return -1;
+                        }
+                    }
                 }
 
                 let client = match &caller.data().http_client {

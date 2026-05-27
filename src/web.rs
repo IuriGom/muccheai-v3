@@ -2578,7 +2578,7 @@ async fn process_custom_tool_calls(
                         _ => serde_json::Map::new(),
                     };
                     let url = substitute_template(&tool.url_template, &map);
-                    let body = substitute_template(&tool.body_template.clone().unwrap_or_default(), &map);
+                    let body_opt = tool.body_template.as_ref().map(|t| substitute_template(t, &map));
 
                     // SSRF validation (string + DNS resolution)
                     if let Err(e) = validate_no_ssrf_external(&url) {
@@ -2596,10 +2596,28 @@ async fn process_custom_tool_calls(
 
                     let mut request = match tool.method.to_uppercase().as_str() {
                         "GET" => http_client.get(&url),
-                        "POST" => http_client.post(&url).body(body),
-                        "PUT" => http_client.put(&url).body(body),
+                        "POST" => {
+                            let mut req = http_client.post(&url);
+                            if let Some(ref b) = body_opt {
+                                req = req.body(b.clone());
+                            }
+                            req
+                        }
+                        "PUT" => {
+                            let mut req = http_client.put(&url);
+                            if let Some(ref b) = body_opt {
+                                req = req.body(b.clone());
+                            }
+                            req
+                        }
                         "DELETE" => http_client.delete(&url),
-                        "PATCH" => http_client.patch(&url).body(body),
+                        "PATCH" => {
+                            let mut req = http_client.patch(&url);
+                            if let Some(ref b) = body_opt {
+                                req = req.body(b.clone());
+                            }
+                            req
+                        }
                         _ => {
                             results.push(format!("{}: ERROR Unknown method {}", tool_name, tool.method));
                             cleaned.push_str(&format!("\n[Custom tool '{}' failed: unknown method]\n", tool_name));
@@ -2662,7 +2680,32 @@ fn format_mcp_tools_for_prompt(tools: &[CachedMcpTool]) -> String {
 }
 
 /// Get system status
-async fn status(State(state): State<Arc<AppState>>) -> Json<SystemStatus> {
+async fn status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<SystemStatus> {
+    if is_duress_session(&state, &headers).await {
+        return Json(SystemStatus {
+            sandbox_running: false,
+            model: String::new(),
+            policy_rules: vec![],
+            pqc_enabled: true,
+            current_persona: "Assistant".into(),
+            temperature: 0.7,
+            max_tokens: 2048,
+            sandbox_memory_limit_mb: 512,
+            dual_verification: false,
+            auto_approve_low_risk: false,
+            show_reasoning: false,
+            active_agent: String::new(),
+            agents: vec![],
+            ollama_host: "***REDACTED***".into(),
+            ollama_connected: false,
+            policy_rule_count: 0,
+            last_audit_entry: None,
+            active_tokens: 0,
+        });
+    }
     // Collect all data while holding locks, then drop them before any network I/O.
     let (
         sandbox_running,
@@ -2771,7 +2814,16 @@ async fn revoke(
 }
 
 /// Build verification status
-async fn build_verify() -> Json<BuildVerifyResponse> {
+async fn build_verify(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<BuildVerifyResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(BuildVerifyResponse {
+            status: "unknown".into(),
+            ci_systems: vec![],
+        });
+    }
     // Use the actual git commit hash from build.rs, or a placeholder if
     // the repository is not available at build time.
     let hex_commit = env!("GIT_COMMIT_HASH");
@@ -2811,7 +2863,19 @@ async fn build_verify() -> Json<BuildVerifyResponse> {
 }
 
 /// Return current configuration with secrets redacted
-async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
+async fn get_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<ConfigResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(ConfigResponse {
+            ollama_url: "***REDACTED***".into(),
+            ollama_model: String::new(),
+            web_bind_address: String::new(),
+            policy_rules: vec![],
+            policy_rule_count: 0,
+        });
+    }
     let policy = state.policy.lock().await;
     let config = state.config.lock().await;
     Json(ConfigResponse {
@@ -2940,6 +3004,9 @@ async fn store_preference(
     headers: HeaderMap,
     Json(req): Json<StorePreferenceRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
@@ -2958,6 +3025,9 @@ async fn delete_memory(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
     match sm.delete_by_owner(&key, &owner) {
@@ -3034,6 +3104,9 @@ async fn approve_memory_proposal(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     tracing::trace!("approve_memory_proposal: id={}", id);
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
@@ -3050,6 +3123,9 @@ async fn reject_memory_proposal(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     tracing::trace!("reject_memory_proposal: id={}", id);
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let sm = state.structured_memory.lock().await;
@@ -3061,7 +3137,16 @@ async fn reject_memory_proposal(
 }
 
 /// List personas.
-async fn list_personas(State(state): State<Arc<AppState>>) -> Json<PersonasResponse> {
+async fn list_personas(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<PersonasResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(PersonasResponse {
+            personas: vec![],
+            current: "Assistant".into(),
+        });
+    }
     let config = state.config.lock().await;
     Json(PersonasResponse {
         personas: config.personas.clone(),
@@ -3072,8 +3157,12 @@ async fn list_personas(State(state): State<Arc<AppState>>) -> Json<PersonasRespo
 /// Switch active persona.
 async fn switch_persona(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<SwitchPersonaRequest>,
 ) -> Result<Json<PersonasResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut config = state.config.lock().await;
     if !config.personas.iter().any(|p| p.name == req.name) {
         return Err(StatusCode::NOT_FOUND);
@@ -3088,7 +3177,16 @@ async fn switch_persona(
 }
 
 /// List agents.
-async fn list_agents(State(state): State<Arc<AppState>>) -> Json<AgentsResponse> {
+async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<AgentsResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(AgentsResponse {
+            agents: vec![],
+            active: String::new(),
+        });
+    }
     let config = state.config.lock().await;
     Json(AgentsResponse {
         agents: config.agents.iter().map(|a| a.sanitized()).collect(),
@@ -3099,8 +3197,12 @@ async fn list_agents(State(state): State<Arc<AppState>>) -> Json<AgentsResponse>
 /// Save or update an agent.
 async fn save_agent(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<SaveAgentRequest>,
 ) -> Result<Json<AgentsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     // Validate base_url to prevent SSRF via agent configuration.
     if let Some(ref base_url) = req.base_url {
         if !base_url.is_empty() {
@@ -3138,8 +3240,12 @@ async fn save_agent(
 /// Delete an agent.
 async fn delete_agent(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<Json<AgentsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut config = state.config.lock().await;
     config.agents.retain(|a| a.name != name);
     if config.active_agent == name {
@@ -3156,8 +3262,12 @@ async fn delete_agent(
 /// Set active agent.
 async fn set_active_agent(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<Json<AgentsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut config = state.config.lock().await;
     if name.is_empty() || config.agents.iter().any(|a| a.name == name) {
         config.active_agent = name;
@@ -3173,8 +3283,15 @@ async fn set_active_agent(
 /// Test connection to a provider.
 async fn test_connection(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<TestConnectionRequest>,
 ) -> Json<TestConnectionResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(TestConnectionResponse {
+            success: false,
+            message: "Connection test unavailable".into(),
+        });
+    }
     let base = req.base_url.as_deref().unwrap_or(match req.provider.as_str() {
         "ollama" => "http://localhost:11434",
         "openai" => "https://api.openai.com/v1",
@@ -3467,36 +3584,40 @@ async fn upload_file(
             let lower = filename.to_lowercase();
             if lower.ends_with(".pdf") {
                 let data = data.to_vec();
-                content = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&data)),
-                )
-                .await
-                .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
-                .map_err(|e| {
-                    tracing::warn!("PDF extraction panicked: {:?}", e);
-                    StatusCode::BAD_REQUEST
-                })?
-                .map_err(|e| {
-                    tracing::warn!("PDF extraction error: {:?}", e);
-                    StatusCode::BAD_REQUEST
-                })?;
+                let mut handle = tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&data));
+                content = match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await {
+                    Ok(Ok(Ok(text))) => text,
+                    Ok(Ok(Err(e))) => {
+                        tracing::warn!("PDF extraction error: {:?}", e);
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                    Ok(Err(join_err)) => {
+                        tracing::warn!("PDF extraction task failed: {:?}", join_err);
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        return Err(StatusCode::REQUEST_TIMEOUT);
+                    }
+                };
             } else if lower.ends_with(".docx") {
                 let data = data.to_vec();
-                content = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    tokio::task::spawn_blocking(move || extract_text_from_docx(&data)),
-                )
-                .await
-                .map_err(|_| StatusCode::REQUEST_TIMEOUT)?
-                .map_err(|e| {
-                    tracing::warn!("DOCX extraction panicked: {:?}", e);
-                    StatusCode::BAD_REQUEST
-                })?
-                .map_err(|e| {
-                    tracing::warn!("DOCX extraction error: {}", e);
-                    StatusCode::BAD_REQUEST
-                })?;
+                let mut handle = tokio::task::spawn_blocking(move || extract_text_from_docx(&data));
+                content = match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await {
+                    Ok(Ok(Ok(text))) => text,
+                    Ok(Ok(Err(e))) => {
+                        tracing::warn!("DOCX extraction error: {}", e);
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                    Ok(Err(join_err)) => {
+                        tracing::warn!("DOCX extraction task failed: {:?}", join_err);
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        return Err(StatusCode::REQUEST_TIMEOUT);
+                    }
+                };
             } else {
                 // Plain text files must be valid UTF-8.
                 if std::str::from_utf8(&data).is_err() {
@@ -3551,7 +3672,21 @@ async fn get_csrf(
 }
 
 /// Get settings.
-async fn get_settings(State(state): State<Arc<AppState>>) -> Json<SettingsResponse> {
+async fn get_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<SettingsResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(SettingsResponse {
+            model: String::new(),
+            temperature: 0.7,
+            max_tokens: 2048,
+            sandbox_memory_limit_mb: 512,
+            dual_verification: false,
+            auto_approve_low_risk: false,
+            show_reasoning: false,
+        });
+    }
     let config = state.config.lock().await;
     Json(SettingsResponse {
         model: config.ollama_model.clone(),
@@ -3567,8 +3702,12 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> Json<SettingsRespon
 /// Save settings.
 async fn save_settings(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<SaveSettingsRequest>,
 ) -> Result<Json<SettingsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut config = state.config.lock().await;
     config.ollama_model = req.model;
     config.temperature = req.temperature.clamp(0.0, 1.0);
@@ -3628,7 +3767,13 @@ async fn get_version() -> Json<VersionResponse> {
 }
 
 /// Get current model.
-async fn get_model(State(state): State<Arc<AppState>>) -> Json<ModelResponse> {
+async fn get_model(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<ModelResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(ModelResponse { model: String::new() });
+    }
     let config = state.config.lock().await;
     Json(ModelResponse {
         model: config.ollama_model.clone(),
@@ -3638,8 +3783,12 @@ async fn get_model(State(state): State<Arc<AppState>>) -> Json<ModelResponse> {
 /// Set current model.
 async fn set_model(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<SetModelRequest>,
 ) -> Result<Json<ModelResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut config = state.config.lock().await;
     config.ollama_model = req.model;
     config.save()
@@ -4352,7 +4501,13 @@ struct McpTestResponse {
     tools: Vec<String>,
 }
 
-async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<McpServerListResponse> {
+async fn list_mcp_servers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<McpServerListResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(McpServerListResponse { servers: vec![] });
+    }
     let cfg = state.tool_config.lock().await.clone();
     let mut servers = Vec::new();
     if let Some(mcp) = cfg.mcp {
@@ -4398,8 +4553,12 @@ async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> Json<McpServerL
 
 async fn add_mcp_server(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<AddMcpServerRequest>,
 ) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     if req.name.is_empty() || req.transport.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -4513,8 +4672,12 @@ async fn add_mcp_server(
 
 async fn delete_mcp_server(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut cfg = state.tool_config.lock().await;
     let removed = cfg
         .mcp
@@ -4553,8 +4716,16 @@ async fn delete_mcp_server(
 
 async fn test_mcp_server(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Json<McpTestResponse> {
+    if is_duress_session(&state, &headers).await {
+        return Json(McpTestResponse {
+            success: false,
+            message: "MCP test unavailable".into(),
+            tools: vec![],
+        });
+    }
     let cfg = state.tool_config.lock().await;
     let server = match cfg
         .mcp
@@ -5246,6 +5417,9 @@ async fn chat_with_image(
         return Err(StatusCode::FORBIDDEN);
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
