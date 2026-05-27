@@ -3770,9 +3770,15 @@ async fn save_settings(
     }
     let mut config = state.config.lock().await;
     config.ollama_model = req.model;
+    if req.max_tokens < 1 || req.max_tokens > 8192 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if req.sandbox_memory_limit_mb < 128 || req.sandbox_memory_limit_mb > 8192 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     config.temperature = req.temperature.clamp(0.0, 1.0);
-    config.max_tokens = req.max_tokens.clamp(1, 8192);
-    config.sandbox_memory_limit_mb = req.sandbox_memory_limit_mb.clamp(128, 8192);
+    config.max_tokens = req.max_tokens;
+    config.sandbox_memory_limit_mb = req.sandbox_memory_limit_mb;
     config.dual_verification = req.dual_verification;
     config.auto_approve_low_risk = req.auto_approve_low_risk;
     config.show_reasoning = req.show_reasoning;

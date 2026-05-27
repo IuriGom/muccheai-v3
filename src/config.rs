@@ -1004,8 +1004,8 @@ pub fn encrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
                     Ok(ct) => {
                         server.api_key = Some(format!("enc:{}", hex::encode(ct)));
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to encrypt MCP API key: {}", e);
+                    Err(_) => {
+                        tracing::warn!("Failed to encrypt MCP API key");
                     }
                 }
             }
@@ -1035,12 +1035,12 @@ pub fn decrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
                                     tracing::error!("MCP API key decrypted to invalid UTF-8");
                                 }
                             }
-                            Err(e) => {
-                                tracing::error!("Failed to decrypt MCP API key: {}", e);
+                            Err(_) => {
+                                tracing::error!("Failed to decrypt MCP API key");
                             }
                         },
-                        Err(e) => {
-                            tracing::error!("Failed to decode encrypted MCP API key: {}", e);
+                        Err(_) => {
+                            tracing::error!("Failed to decode encrypted MCP API key");
                         }
                     }
                 }
