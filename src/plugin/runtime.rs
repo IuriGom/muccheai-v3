@@ -193,7 +193,13 @@ impl PluginRuntime {
                 match client.get(&url).send() {
                     Ok(resp) => {
                         let status = resp.status().as_u16();
-                        let body = resp.text().unwrap_or_default();
+                        let body = match resp.text() {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::warn!(target: "plugin", "HTTP response encoding error: {}", e);
+                                String::new()
+                            }
+                        };
                         let json = serde_json::json!({"status": status, "body": body});
                         let bytes = json.to_string().into_bytes();
                         let to_write = std::cmp::min(bytes.len(), out_len as usize);

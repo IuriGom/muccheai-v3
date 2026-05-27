@@ -124,6 +124,12 @@ impl PluginManager {
     }
 
     pub fn install_from_path(&mut self, source: &Path) -> anyhow::Result<String> {
+        // Reject symlink sources to prevent traversal attacks.
+        if let Ok(meta) = std::fs::symlink_metadata(source) {
+            if meta.file_type().is_symlink() {
+                return Err(anyhow::anyhow!("plugin source cannot be a symlink"));
+            }
+        }
         let manifest_path = source.join("plugin.toml");
         if !manifest_path.exists() {
             return Err(anyhow::anyhow!("plugin.toml not found in source directory"));

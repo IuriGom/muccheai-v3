@@ -551,7 +551,13 @@ fn run_demo() {
     println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     println!("Initializing hybrid PQC keypair...");
-    let issuer_keypair = generate_hybrid_keypair().expect("Failed to generate keypair");
+    let issuer_keypair = match generate_hybrid_keypair() {
+        Ok(kp) => kp,
+        Err(e) => {
+            eprintln!("Failed to generate keypair: {}", e);
+            return;
+        }
+    };
     println!("  ✓ Classical pubkey: {} bytes", issuer_keypair.pubkey.classical.len());
     println!("  ✓ PQC pubkey: {} bytes", issuer_keypair.pubkey.pq.len());
 
@@ -734,7 +740,13 @@ fn run_demo() {
     // Step 8: Vault / Shamir
     println!("\n[Vault] Shamir's Secret Sharing (3-of-5)...");
     let master_secret = [0xABu8; 32];
-    let _vault = SecretVault::new(&master_secret, 3).expect("vault creation failed");
+    let _vault = match SecretVault::new(&master_secret, 3) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Vault creation failed: {}", e);
+            return;
+        }
+    };
     println!("  ✓ Master secret split into 5 shares");
     println!("  ✓ Recovery threshold: 3 shares");
     println!("  ✓ Share 1: Local file");
@@ -882,10 +894,16 @@ async fn run_web_server(bind: &str) {
         std::process::exit(1);
     }
 
-    let mut user_db = crate::users::UserDb::load_or_create()
-        .expect("failed to load user database");
-    user_db.migrate_api_key(&config.api_key)
-        .expect("failed to migrate api key to admin user");
+    let mut user_db = match crate::users::UserDb::load_or_create() {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("Failed to load user database: {}", e);
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = user_db.migrate_api_key(&config.api_key) {
+        tracing::warn!("Failed to migrate API key to admin user: {}", e);
+    }
 
     let state = Arc::new(web::AppState {
         sandbox: Mutex::new(sandbox),

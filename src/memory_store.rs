@@ -54,7 +54,10 @@ fn compute_file_hmac(entries: &[MemoryEntry]) -> String {
     type HmacSha3 = Hmac<Sha3_256>;
 
     let key = load_machine_key().unwrap_or_default();
-    let mut mac = HmacSha3::new_from_slice(&key).expect("HMAC key size valid");
+    let mut mac = match HmacSha3::new_from_slice(&key) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
     for e in entries {
         mac.update(&e.content_hash);
     }

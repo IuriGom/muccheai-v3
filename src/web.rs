@@ -1123,6 +1123,15 @@ async fn build_chat_context(
     // Inject approved structured memories into the system prompt.
     let memories_count: usize = {
         let owner = get_session_owner(state, headers).await.unwrap_or_default();
+        if owner.is_empty() {
+            return Err(ChatResponse {
+                response: String::new(),
+                session_id: req.session_id.clone().unwrap_or_default(),
+                session_secret: String::new(),
+                needs_confirmation: None,
+                memories_used: None,
+            });
+        }
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all_by_owner(&owner);
         let count = memories.len();
@@ -1545,7 +1554,13 @@ async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<A
         if let Message::Text(text) = msg {
             // Re-validate the token on every message.
             let mut headers = HeaderMap::new();
-            headers.insert("authorization", format!("Bearer {}", token).parse().unwrap());
+            match format!("Bearer {}", token).parse() {
+                Ok(hv) => { headers.insert("authorization", hv); }
+                Err(_) => {
+                    let _ = socket.send(Message::Text(r#"{"error":"Invalid token format"}"#.to_string())).await;
+                    break;
+                }
+            }
             if get_session_owner(&state, &headers).await.is_none() {
                 let _ = socket.send(Message::Text(r#"{"error":"Session expired"}"#.to_string())).await;
                 break;
@@ -1789,7 +1804,13 @@ async fn call_provider(
                     let tags: serde_json::Value = if tags_body.len() > 1024 * 1024 {
                         serde_json::Value::Null
                     } else {
-                        serde_json::from_str(&tags_body).unwrap_or_default()
+                        match serde_json::from_str(&tags_body) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("Malformed Ollama tags response: {}", e);
+                                serde_json::Value::Null
+                            }
+                        }
                     };
                     let models: Vec<String> = tags["models"].as_array()
                         .map(|arr| arr.iter().filter_map(|m| m["name"].as_str().map(|s| s.to_string())).collect())
