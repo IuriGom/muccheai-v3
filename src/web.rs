@@ -4714,7 +4714,10 @@ async fn add_mcp_server(
     if cfg.mcp.is_none() {
         cfg.mcp = Some(muccheai_tool_gateway::config::McpConfig::default());
     }
-    let mcp = cfg.mcp.as_mut().expect("mcp was just initialized above");
+    let mcp = match cfg.mcp.as_mut() {
+        Some(m) => m,
+        None => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
     mcp.servers.insert(
         req.name,
         McpServerConfig {
