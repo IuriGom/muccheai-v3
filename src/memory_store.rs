@@ -209,7 +209,13 @@ impl MemoryStore {
 
     /// Return all entries, newest first.
     pub fn list(&self) -> Vec<MemoryEntry> {
-        let mut entries = self.read_entries().unwrap_or_default();
+        let mut entries = match self.read_entries() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!("Memory store corrupted ({}); returning empty list", e);
+                Vec::new()
+            }
+        };
         entries.reverse();
         entries
     }
@@ -221,7 +227,13 @@ impl MemoryStore {
 
     pub fn search_by_owner(&self, query: &str, owner: &str) -> Vec<MemoryEntry> {
         let query = query.to_lowercase();
-        let mut entries = self.read_entries().unwrap_or_default();
+        let mut entries = match self.read_entries() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!("Memory store corrupted ({}); returning empty search", e);
+                Vec::new()
+            }
+        };
         entries.retain(|e| {
             e.owner_hash == owner
                 && (e.key.to_lowercase().contains(&query)

@@ -2231,9 +2231,11 @@ fn extract_memory_proposals(text: &str) -> (String, Vec<(MemoryType, String, Str
         if !key.is_empty()
             && key.len() <= MAX_KEY_LEN
             && !value.is_empty()
-            && value.len() <= MAX_VALUE_LEN
         {
-            proposals.push((mem_type, key, value));
+            if value.len() > MAX_VALUE_LEN {
+                tracing::warn!("Memory value exceeds {} bytes; truncating", MAX_VALUE_LEN);
+            }
+            proposals.push((mem_type, key, value.chars().take(MAX_VALUE_LEN).collect()));
         }
 
         rest = &after_open[close_idx + 9..];
@@ -4185,10 +4187,14 @@ async fn backup_memories(
         let mut limiter = state.backup_rate_limiter.lock().await;
         let now = Instant::now();
         let key = format!("backup:{}", owner);
-        const BACKUP_WINDOW: Duration = Duration::from_secs(3600);
+        let backup_window_secs: u64 = std::env::var("MUCCHEAI_BACKUP_WINDOW_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+        let backup_window = Duration::from_secs(backup_window_secs);
         const BACKUP_MAX: u32 = 5;
         let entry = limiter.entry(key.clone()).or_insert((now, 0));
-        if now.saturating_duration_since(entry.0) > BACKUP_WINDOW {
+        if now.saturating_duration_since(entry.0) > backup_window {
             entry.0 = now;
             entry.1 = 0;
         }
@@ -4232,8 +4238,11 @@ async fn restore_memories(
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    const MAX_RESTORE_ENTRIES: usize = 1000;
-    if req.entries.len() > MAX_RESTORE_ENTRIES {
+    let max_restore_entries: usize = std::env::var("MUCCHEAI_MAX_RESTORE_ENTRIES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000);
+    if req.entries.len() > max_restore_entries {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let sm = state.structured_memory.lock().await;
