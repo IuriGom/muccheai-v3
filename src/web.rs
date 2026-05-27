@@ -1394,6 +1394,17 @@ async fn process_chat(
         }
         sessions[idx].session_secret.clone()
     } else {
+        let owner_hash = get_session_owner(state, headers).await.unwrap_or_default();
+        if owner_hash.is_empty() {
+            drop(sessions);
+            return ChatResponse {
+                response: text.trim().to_string(),
+                session_id,
+                session_secret: String::new(),
+                needs_confirmation: None,
+                memories_used: Some(ctx.memories_count),
+            };
+        }
         while sessions.len() >= MAX_SESSIONS {
             let dropped = sessions.remove(0);
             tracing::warn!(
@@ -1415,7 +1426,7 @@ async fn process_chat(
             id: session_id.clone(),
             title,
             created_at: timestamp,
-            owner_hash: get_session_owner(state, headers).await.unwrap_or_default(),
+            owner_hash,
             session_secret: secret.clone(),
             parent_id: None,
             branch_point: None,
@@ -2469,6 +2480,7 @@ async fn process_mcp_tool_calls(
 /// Parse and execute custom HTTP tool calls from the LLM response.
 /// Single-pass template substitution that does NOT re-scan substituted values,
 /// preventing recursive injection when a value contains placeholder-like braces.
+/// Supports {{ and }} as literal escapes for { and }.
 fn substitute_template(template: &str, args: &serde_json::Map<String, serde_json::Value>) -> String {
     let mut result = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();
@@ -2503,6 +2515,14 @@ fn substitute_template(template: &str, args: &serde_json::Map<String, serde_json
                 result.push('{');
                 result.push_str(&key);
             }
+        } else if c == '}' {
+            // Literal brace escape: }} produces a single }
+            if chars.peek() == Some(&'}') {
+                chars.next();
+                result.push('}');
+                continue;
+            }
+            result.push('}');
         } else {
             result.push(c);
         }
@@ -3633,10 +3653,13 @@ async fn set_model(
 async fn list_chat_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Json<ChatSessionsResponse> {
+) -> Result<Json<ChatSessionsResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
-        return Json(ChatSessionsResponse { sessions: vec![] });
+        return Err(StatusCode::UNAUTHORIZED);
     }
     let sessions = state.chat_sessions.lock().await;
     let filtered: Vec<ChatSessionSummary> = sessions
@@ -3650,7 +3673,7 @@ async fn list_chat_sessions(
             tags: s.tags.clone(),
         })
         .collect();
-    Json(ChatSessionsResponse { sessions: filtered })
+    Ok(Json(ChatSessionsResponse { sessions: filtered }))
 }
 
 async fn get_chat_session(
@@ -4263,22 +4286,27 @@ async fn chat_stream(
                 sessions[idx].session_secret.clone()
             } else { String::new() }
         } else {
-            while sessions.len() >= MAX_SESSIONS { sessions.remove(0); }
-            let title = if req.message.chars().count() > 40 { format!("{}...", req.message.chars().take(40).collect::<String>()) } else { req.message.clone() };
-            let mut sec = [0u8; 16];
-            state.rng.fill(&mut sec).expect("CSPRNG failure");
-            let s = hex::encode(sec);
-            sessions.push(ChatSession {
-                id: session_id.clone(), title, created_at: timestamp,
-                owner_hash: get_session_owner(&state, &headers).await.unwrap_or_default(),
-                session_secret: s.clone(), parent_id: None, branch_point: None,
-                folder: String::new(), tags: Vec::new(),
-                messages: vec![
-                    ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp },
-                    ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
-                ],
-            });
-            s
+            let owner_hash = get_session_owner(&state, &headers).await.unwrap_or_default();
+            if owner_hash.is_empty() {
+                String::new()
+            } else {
+                while sessions.len() >= MAX_SESSIONS { sessions.remove(0); }
+                let title = if req.message.chars().count() > 40 { format!("{}...", req.message.chars().take(40).collect::<String>()) } else { req.message.clone() };
+                let mut sec = [0u8; 16];
+                state.rng.fill(&mut sec).expect("CSPRNG failure");
+                let s = hex::encode(sec);
+                sessions.push(ChatSession {
+                    id: session_id.clone(), title, created_at: timestamp,
+                    owner_hash,
+                    session_secret: s.clone(), parent_id: None, branch_point: None,
+                    folder: String::new(), tags: Vec::new(),
+                    messages: vec![
+                        ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp },
+                        ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
+                    ],
+                });
+                s
+            }
         };
     });
 
@@ -4969,7 +4997,7 @@ async fn get_knowledge_graph(
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
-        return Ok(Json(GraphResponse { nodes: vec![], edges: vec![] }));
+        return Err(StatusCode::UNAUTHORIZED);
     }
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -5113,14 +5141,7 @@ async fn get_analytics(
     }
     let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     if owner.is_empty() {
-        return Ok(Json(AnalyticsResponse {
-            total_sessions: 0,
-            total_messages: 0,
-            total_memories: 0,
-            queue_pending: 0,
-            top_model: String::new(),
-            active_plugins: 0,
-        }));
+        return Err(StatusCode::UNAUTHORIZED);
     }
     let sessions = state.chat_sessions.lock().await;
     let total_sessions = sessions.iter().filter(|s| muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())).count();
@@ -5496,8 +5517,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         let trimmed = s.trim();
         if trimmed.is_empty() { return None; }
         let url = url::Url::parse(trimmed).ok()?;
-        // Reject origins with paths, userinfo, or fragments
+        // Reject origins with paths, query strings, userinfo, or fragments
         if url.path() != "/" && !url.path().is_empty() { return None; }
+        if url.query().is_some() { return None; }
         if url.username() != "" { return None; }
         if url.fragment().is_some() { return None; }
         Some(format!("{}://{}{}", url.scheme(), url.host_str()?, url.port().map(|p| format!(":{}", p)).unwrap_or_default()))
