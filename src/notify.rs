@@ -94,6 +94,13 @@ pub fn notify_error(title: &str, message: &str) {
 /// injection or argument-parsing issues.
 fn run_osascript(script: &str) {
     use std::io::Write;
+    // Reject if /usr/bin/osascript is a symlink (path traversal / replacement attack).
+    if let Ok(meta) = std::fs::symlink_metadata("/usr/bin/osascript") {
+        if meta.file_type().is_symlink() {
+            tracing::warn!("osascript is a symlink; skipping notification");
+            return;
+        }
+    }
     let osascript = match std::fs::canonicalize("/usr/bin/osascript") {
         Ok(p) => p,
         Err(_) => {

@@ -59,7 +59,7 @@ impl Default for StoredKeypair {
 pub fn decrypt_mcp_api_key(api_key: &str) -> Option<String> {
     if let Some(hex_ct) = api_key.strip_prefix("enc:") {
         let ciphertext = hex::decode(hex_ct).ok()?;
-        let key = MuccheConfig::load_or_create_machine_key();
+        let key = MuccheConfig::load_or_create_machine_key().ok()?;
         let plaintext = decrypt_aes_256_gcm(&ciphertext, &key).ok()?;
         String::from_utf8(plaintext).ok()
     } else {
@@ -438,19 +438,19 @@ impl MuccheConfig {
     /// Load or create a random 32-byte machine key for encrypting local secrets.
     /// If `MUCCHEAI_KEY_PASSWORD` is set, the returned key is Argon2id-derived
     /// from the password + the raw material; otherwise the raw material is used.
-    pub fn load_or_create_machine_key() -> [u8; 32] {
+    pub fn load_or_create_machine_key() -> anyhow::Result<[u8; 32]> {
         let path = Self::machine_key_path();
         let mut material = [0u8; 32];
-        let salt = Self::load_or_create_salt();
+        let salt = Self::load_or_create_salt()?;
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() == 32 {
                 material.copy_from_slice(&bytes);
-                return Self::derive_machine_key(&material, &salt);
+                return Ok(Self::derive_machine_key(&material, &salt));
             }
         }
         ring::rand::SystemRandom::new()
             .fill(&mut material)
-            .expect("CSPRNG failure");
+            .map_err(|e| anyhow::anyhow!("CSPRNG failure: {}", e))?;
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -468,19 +468,19 @@ impl MuccheConfig {
                     }
                 }
                 let _ = file.write_all(&material);
-                Self::derive_machine_key(&material, &salt)
+                Ok(Self::derive_machine_key(&material, &salt))
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 if let Ok(bytes) = std::fs::read(&path) {
                     if bytes.len() == 32 {
                         let mut existing = [0u8; 32];
                         existing.copy_from_slice(&bytes);
-                        return Self::derive_machine_key(&existing, &salt);
+                        return Ok(Self::derive_machine_key(&existing, &salt));
                     }
                 }
-                Self::derive_machine_key(&material, &salt)
+                Ok(Self::derive_machine_key(&material, &salt))
             }
-            _ => Self::derive_machine_key(&material, &salt),
+            _ => Ok(Self::derive_machine_key(&material, &salt)),
         }
     }
 
@@ -488,19 +488,19 @@ impl MuccheConfig {
         Self::machine_key_path().with_extension("salt")
     }
 
-    pub fn load_or_create_salt() -> [u8; 16] {
+    pub fn load_or_create_salt() -> anyhow::Result<[u8; 16]> {
         let path = Self::salt_path();
         if let Ok(bytes) = std::fs::read(&path) {
             if bytes.len() == 16 {
                 let mut salt = [0u8; 16];
                 salt.copy_from_slice(&bytes);
-                return salt;
+                return Ok(salt);
             }
         }
         let mut salt = [0u8; 16];
         ring::rand::SystemRandom::new()
             .fill(&mut salt)
-            .expect("CSPRNG failure");
+            .map_err(|e| anyhow::anyhow!("CSPRNG failure: {}", e))?;
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -517,7 +517,7 @@ impl MuccheConfig {
             }
             let _ = std::fs::rename(&tmp, &path);
         }
-        salt
+        Ok(salt)
     }
 
     pub fn derive_machine_key(material: &[u8; 32], salt: &[u8; 16]) -> [u8; 32] {
@@ -548,7 +548,7 @@ impl MuccheConfig {
         if let Some(parent) = path.parent() {
             Self::ensure_private_dir(parent)?;
         }
-        let machine_key = Self::load_or_create_machine_key();
+        let machine_key = Self::load_or_create_machine_key()?;
         let ciphertext = encrypt_aes_256_gcm(self.api_key.as_bytes(), &machine_key)?;
         let tmp_path = path.with_extension("tmp");
         std::fs::write(&tmp_path, &ciphertext)?;
@@ -587,7 +587,7 @@ impl MuccheConfig {
             return Ok(());
         }
         let ciphertext = std::fs::read(&path)?;
-        let machine_key = Self::load_or_create_machine_key();
+        let machine_key = Self::load_or_create_machine_key()?;
         let plaintext = decrypt_aes_256_gcm(&ciphertext, &machine_key)?;
         self.api_key = String::from_utf8(plaintext)
             .map_err(|e| anyhow::anyhow!("invalid UTF-8 in decrypted API key: {}", e))?;
@@ -845,6 +845,25 @@ impl MuccheConfig {
             Self::ensure_private_dir(parent)?;
         }
 
+        #[cfg(unix)]
+        let _lock = {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::io::AsRawFd;
+            let lock_path = path.with_extension("lock");
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&lock_path)?;
+            let fd = file.as_raw_fd();
+            let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            if ret != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            file
+        };
+
         // Save the encrypted keypair separately
         self.save_keypair()?;
 
@@ -969,7 +988,11 @@ pub fn decrypt_aes_256_gcm(ciphertext: &[u8], key: &[u8; 32]) -> anyhow::Result<
 /// Values that already start with `enc:` are left untouched.
 pub fn encrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
     let key = match MuccheConfig::load_or_create_machine_key() {
-        k => k,
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!("Failed to load machine key for MCP encryption: {}", e);
+            return;
+        }
     };
     if let Some(ref mut mcp) = cfg.mcp {
         for server in mcp.servers.values_mut() {
@@ -992,7 +1015,13 @@ pub fn encrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
 
 /// Decrypt `enc:`-prefixed MCP API keys inside a `ToolConfig` after loading.
 pub fn decrypt_mcp_keys(cfg: &mut muccheai_tool_gateway::config::ToolConfig) {
-    let key = MuccheConfig::load_or_create_machine_key();
+    let key = match MuccheConfig::load_or_create_machine_key() {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!("Failed to load machine key for MCP decryption: {}", e);
+            return;
+        }
+    };
     if let Some(ref mut mcp) = cfg.mcp {
         for server in mcp.servers.values_mut() {
             if let Some(ref api_key) = server.api_key {

@@ -16,7 +16,7 @@ fn load_machine_key() -> Option<[u8; 32]> {
     if bytes.len() == 32 {
         let mut material = [0u8; 32];
         material.copy_from_slice(&bytes);
-        let salt = MuccheConfig::load_or_create_salt();
+        let salt = MuccheConfig::load_or_create_salt().ok()?;
         Some(MuccheConfig::derive_machine_key(&material, &salt))
     } else {
         None

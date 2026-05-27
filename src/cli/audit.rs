@@ -100,11 +100,11 @@ fn save_audit_key(key: &ForwardSecureKey) -> anyhow::Result<()> {
 /// Derive the next forward-secure key and destroy the current one.
 /// Uses a random 32-byte nonce so that the chain is non-deterministic
 /// even if an attacker learns one key.
-fn evolve_key(current: &mut ForwardSecureKey) -> ForwardSecureKey {
+fn evolve_key(current: &mut ForwardSecureKey) -> anyhow::Result<ForwardSecureKey> {
     let mut nonce = [0u8; 32];
     ring::rand::SystemRandom::new()
         .fill(&mut nonce)
-        .expect("CSPRNG failure");
+        .map_err(|e| anyhow::anyhow!("CSPRNG failure: {}", e))?;
     let mut hasher = sha3::Sha3_512::new();
     hasher.update(b"muccheai-audit-key-v1");
     hasher.update(&current.key);
@@ -115,10 +115,10 @@ fn evolve_key(current: &mut ForwardSecureKey) -> ForwardSecureKey {
     next_key.copy_from_slice(&hash[..32]);
     // Destroy old key material
     current.key.zeroize();
-    ForwardSecureKey {
+    Ok(ForwardSecureKey {
         key: next_key,
         key_id: current.key_id + 1,
-    }
+    })
 }
 
 /// Append a security event to the audit log.
@@ -168,7 +168,7 @@ pub fn append_audit_event(event: SecurityEvent) -> anyhow::Result<()> {
     }
 
     // Evolve the forward-secure key (destroys the old key)
-    let next_key = evolve_key(&mut log.current_key);
+    let next_key = evolve_key(&mut log.current_key)?;
     save_audit_key(&next_key)?;
 
     Ok(())

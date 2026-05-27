@@ -86,7 +86,13 @@ pub fn load_revoked_tokens() -> std::collections::HashSet<String> {
         .join(".muccheai")
         .join("revoked_tokens.json");
     if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
+        match serde_json::from_str(&data) {
+            Ok(set) => set,
+            Err(e) => {
+                tracing::error!("Corrupted revoked_tokens.json ({}); starting with empty set", e);
+                std::collections::HashSet::new()
+            }
+        }
     } else {
         std::collections::HashSet::new()
     }
@@ -1336,13 +1342,21 @@ async fn process_chat(
     const MAX_MESSAGES_PER_SESSION: usize = 500;
 
     let mut sessions = state.chat_sessions.lock().await;
-    let session_id = req.session_id.clone().unwrap_or_else(|| {
+    let session_id = if let Some(ref sid) = req.session_id {
+        sid.clone()
+    } else {
         let mut buf = [0u8; 16];
-        state.rng
-            .fill(&mut buf)
-            .expect("CSPRNG failure");
+        if state.rng.fill(&mut buf).is_err() {
+            return ChatResponse {
+                response: String::new(),
+                session_id: String::new(),
+                session_secret: String::new(),
+                needs_confirmation: None,
+                memories_used: None,
+            };
+        }
         format!("session-{}", hex::encode(buf))
-    });
+    };
 
     // Ephemeral chats (e.g. scheduled tasks) should not persist to session storage.
     let ephemeral = headers
@@ -1420,7 +1434,15 @@ async fn process_chat(
             req.message.clone()
         };
         let mut sec = [0u8; 16];
-        state.rng.fill(&mut sec).expect("CSPRNG failure");
+        if state.rng.fill(&mut sec).is_err() {
+            return ChatResponse {
+                response: String::new(),
+                session_id: String::new(),
+                session_secret: String::new(),
+                needs_confirmation: None,
+                memories_used: None,
+            };
+        }
         let secret = hex::encode(sec);
         sessions.push(ChatSession {
             id: session_id.clone(),
@@ -1494,7 +1516,20 @@ async fn handle_ws_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<A
     const WS_MAX_MSG_PER_MIN: u32 = 60;
     const WS_WINDOW: Duration = Duration::from_secs(60);
 
+    const WS_MAX_MSG_SIZE: usize = 64 * 1024; // 64 KiB
+
     while let Some(Ok(msg)) = socket.recv().await {
+        // Reject oversized messages before any processing.
+        let msg_size = match &msg {
+            Message::Text(t) => t.len(),
+            Message::Binary(b) => b.len(),
+            _ => 0,
+        };
+        if msg_size > WS_MAX_MSG_SIZE {
+            let _ = socket.send(Message::Text(r#"{"error":"Message too large"}"#.to_string())).await;
+            continue;
+        }
+
         // Per-connection rate limiting
         let now = Instant::now();
         if now.duration_since(window_start) > WS_WINDOW {
@@ -2411,9 +2446,11 @@ async fn process_mcp_tool_calls(
                             timestamp: Timestamp::now(),
                             nonce: {
                                 let mut n = [0u8; 16];
-                                state.rng
-                                    .fill(&mut n)
-                                    .expect("CSPRNG failure");
+                                if state.rng.fill(&mut n).is_err() {
+                                    results.push(format!("{}: ERROR Internal error", tool_name));
+                                    cleaned.push_str(&format!("\n[Tool '{}' rejected: internal error]\n", tool_name));
+                                    continue;
+                                }
                                 n.to_vec()
                             },
                         };
@@ -3386,7 +3423,7 @@ async fn register(
             return Err(StatusCode::CONFLICT);
         }
         let mut salt = [0u8; 16];
-        state.rng.fill(&mut salt).expect("CSPRNG failure");
+        state.rng.fill(&mut salt).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         users.create_user(&req.username, &req.password, &salt, req.duress_pin.as_deref())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let user = users.get(&req.username)
@@ -3395,9 +3432,7 @@ async fn register(
     };
 
     let mut buf = [0u8; 32];
-    state.rng
-        .fill(&mut buf)
-        .expect("CSPRNG failure");
+    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let token = hex::encode(buf);
     let mut sessions = state.sessions.lock().await;
     sessions.insert(
@@ -3459,7 +3494,7 @@ async fn login(
         tracing::warn!(target: "security", "Duress PIN used for user {}", req.username);
 
         let mut buf = [0u8; 32];
-        state.rng.fill(&mut buf).expect("CSPRNG failure");
+        state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let token = hex::encode(buf);
         let mut sessions = state.sessions.lock().await;
         sessions.insert(
@@ -3484,9 +3519,7 @@ async fn login(
     match user {
         Some(u) => {
             let mut buf = [0u8; 32];
-            state.rng
-                .fill(&mut buf)
-                .expect("CSPRNG failure");
+            state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let token = hex::encode(buf);
             let mut sessions = state.sessions.lock().await;
             sessions.insert(
@@ -4434,11 +4467,17 @@ async fn chat_stream(
         const MAX_SESSIONS: usize = 100;
         const MAX_MESSAGES_PER_SESSION: usize = 500;
         let mut sessions = state.chat_sessions.lock().await;
-        session_id = req.session_id.clone().unwrap_or_else(|| {
+        session_id = if let Some(ref sid) = req.session_id {
+            sid.clone()
+        } else {
             let mut buf = [0u8; 16];
-            state.rng.fill(&mut buf).expect("CSPRNG failure");
+            if state.rng.fill(&mut buf).is_err() {
+                let _ = tx.send(Ok(Event::default().data("[ERROR]"))).await;
+                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                return;
+            }
             format!("session-{}", hex::encode(buf))
-        });
+        };
         let existing = sessions.iter().position(|s| s.id == session_id);
         let timestamp = Timestamp::now().0;
         let secret = headers.get("x-session-secret").and_then(|h| h.to_str().ok()).unwrap_or("");
@@ -4457,7 +4496,11 @@ async fn chat_stream(
                 while sessions.len() >= MAX_SESSIONS { sessions.remove(0); }
                 let title = if req.message.chars().count() > 40 { format!("{}...", req.message.chars().take(40).collect::<String>()) } else { req.message.clone() };
                 let mut sec = [0u8; 16];
-                state.rng.fill(&mut sec).expect("CSPRNG failure");
+                if state.rng.fill(&mut sec).is_err() {
+                    let _ = tx.send(Ok(Event::default().data("[ERROR]"))).await;
+                    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                    return;
+                }
                 let s = hex::encode(sec);
                 sessions.push(ChatSession {
                     id: session_id.clone(), title, created_at: timestamp,
@@ -4634,7 +4677,7 @@ async fn add_mcp_server(
 
     // Encrypt MCP API key before it ever touches disk.
     let encrypted_key = if let Some(ref k) = req.api_key {
-        let key = MuccheConfig::load_or_create_machine_key();
+        let key = MuccheConfig::load_or_create_machine_key().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         match crate::config::encrypt_aes_256_gcm(k.as_bytes(), &key) {
             Ok(ct) => Some(format!("enc:{}", hex::encode(ct))),
             Err(e) => {
@@ -5045,10 +5088,10 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
 
 /// ─── New feature handlers ────────────────────────────────────────────
 
-fn make_random_id(state: &AppState, bytes: usize) -> String {
+fn make_random_id(state: &AppState, bytes: usize) -> Result<String, StatusCode> {
     let mut buf = vec![0u8; bytes];
-    state.rng.fill(&mut buf).expect("CSPRNG failure");
-    hex::encode(buf)
+    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(hex::encode(buf))
 }
 
 async fn post_collaborative_message(
@@ -5387,7 +5430,7 @@ async fn create_scheduled_task(
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let task = ScheduledTask {
-        id: make_random_id(&state, 12),
+        id: make_random_id(&state, 12)?,
         cron: payload.cron,
         prompt: payload.prompt,
         enabled: true,
@@ -5459,7 +5502,7 @@ async fn chat_with_image(
             let mut sec = [0u8; 16];
             state.rng.fill(&mut sec).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let new_secret = hex::encode(sec);
-            let id = make_random_id(&state, 16);
+            let id = make_random_id(&state, 16)?;
             let ts = Timestamp::now().0;
             sessions.push(ChatSession {
                 id: id.clone(),
@@ -5667,7 +5710,7 @@ async fn create_encrypted_share(
         return Err(StatusCode::FORBIDDEN);
     }
     drop(sessions);
-    let token = make_random_id(&state, 32);
+    let token = make_random_id(&state, 32)?;
     let mut shares = state.shared_sessions.lock().await;
     shares.retain(|_, (_, created)| created.elapsed() < Duration::from_secs(7 * 86400));
     shares.insert(token.clone(), (id, Instant::now()));

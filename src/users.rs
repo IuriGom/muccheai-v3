@@ -44,7 +44,7 @@ impl UserDb {
             // Decrypt if the file has the enc: prefix; otherwise read plaintext (legacy compat).
             let plaintext = if let Some(hex_ct) = text.strip_prefix("enc:") {
                 let ciphertext = hex::decode(hex_ct).map_err(|e| anyhow::anyhow!("invalid hex: {}", e))?;
-                let key = crate::config::MuccheConfig::load_or_create_machine_key();
+                let key = crate::config::MuccheConfig::load_or_create_machine_key()?;
                 crate::config::decrypt_aes_256_gcm(&ciphertext, &key)
                     .map_err(|e| anyhow::anyhow!("decrypt failed: {}", e))
                     .and_then(|v| String::from_utf8(v).map_err(|e| anyhow::anyhow!("utf8: {}", e)))?
@@ -68,7 +68,7 @@ impl UserDb {
     pub fn save(&self) -> anyhow::Result<()> {
         let users: Vec<&User> = self.users.values().collect();
         let json = serde_json::to_string_pretty(&users)?;
-        let key = crate::config::MuccheConfig::load_or_create_machine_key();
+        let key = crate::config::MuccheConfig::load_or_create_machine_key()?;
         let ciphertext = crate::config::encrypt_aes_256_gcm(json.as_bytes(), &key)?;
         let payload = format!("enc:{}", hex::encode(ciphertext));
         let tmp = self.path.with_extension("tmp");
@@ -99,7 +99,7 @@ impl UserDb {
             let mut d_salt = [0u8; 16];
             ring::rand::SystemRandom::new()
                 .fill(&mut d_salt)
-                .expect("CSPRNG failure");
+                .map_err(|e| anyhow::anyhow!("CSPRNG failure: {}", e))?;
             let d_hash = hash_password(pin, &d_salt)?;
             (Some(d_hash), d_salt)
         } else {
@@ -157,7 +157,7 @@ impl UserDb {
         let mut salt = [0u8; 16];
         ring::rand::SystemRandom::new()
             .fill(&mut salt)
-            .expect("CSPRNG failure");
+            .map_err(|e| anyhow::anyhow!("CSPRNG failure: {}", e))?;
         self.create_user("admin", api_key, &salt, None)
     }
 }

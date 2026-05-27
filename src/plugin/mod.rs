@@ -137,7 +137,12 @@ impl PluginManager {
             return Err(anyhow::anyhow!("wasm_path contains path traversal components"));
         }
 
-        let dest = self.plugins_dir.join(&manifest.plugin.name);
+        // Prevent path traversal via plugin name
+        let safe_name = manifest.plugin.name
+            .replace('/', "_")
+            .replace("\\", "_")
+            .replace("..", "_");
+        let dest = self.plugins_dir.join(&safe_name);
         if dest.exists() {
             std::fs::remove_dir_all(&dest)?;
         }
