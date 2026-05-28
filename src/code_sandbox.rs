@@ -60,26 +60,25 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
             return run_firejail("python3", &["-c", &block.code], &lang).await;
         }
         if has_docker() {
-            return run_docker("python:3-alpine", "python3", &["-c", &block.code], &lang).await;
+            return run_docker("python:3.12-alpine", "python3", &["-c", &block.code], &lang).await;
         }
-        return run_subprocess("python3", &["-c", &block.code]).await;
+        return Err(anyhow::anyhow!("No sandbox available for Python execution"));
     }
     if lang == "bash" || lang == "sh" || lang == "shell" {
         if has_firejail() {
             return run_firejail("bash", &["-c", &block.code], &lang).await;
         }
         if has_docker() {
-            return run_docker("alpine:latest", "sh", &["-c", &block.code], &lang).await;
+            return run_docker("alpine:3.19", "sh", &["-c", &block.code], &lang).await;
         }
-        return run_subprocess("bash", &["-c", &block.code]).await;
+        return Err(anyhow::anyhow!("No sandbox available for shell execution"));
     }
     if lang == "rust" || lang == "rs" {
-        // For rust we need a file; use docker if possible, else bare rustc
         if has_docker() {
             return run_docker(
-                "rust:slim",
+                "rust:1.78-slim",
                 "bash",
-                &["-c", &format!("echo '{}' > /tmp/main.rs && rustc /tmp/main.rs -o /tmp/main && /tmp/main", escape_single_quotes(&block.code))],
+                &["-c", &format!("printf '%s' '{}' > /tmp/main.rs && rustc /tmp/main.rs -o /tmp/main && /tmp/main", escape_single_quotes(&block.code))],
                 &lang,
             )
             .await;
@@ -88,9 +87,9 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
     }
     if lang == "javascript" || lang == "js" || lang == "node" {
         if has_docker() {
-            return run_docker("node:alpine", "node", &["-e", &block.code], &lang).await;
+            return run_docker("node:20-alpine", "node", &["-e", &block.code], &lang).await;
         }
-        return run_subprocess("node", &["-e", &block.code]).await;
+        return Err(anyhow::anyhow!("No sandbox available for JavaScript execution"));
     }
 
     Err(anyhow::anyhow!("Unsupported language for sandbox execution: {}", block.language))
@@ -109,10 +108,14 @@ async fn run_firejail(cmd: &str, args: &[&str], _lang: &str) -> anyhow::Result<E
     command
         .arg("--noprofile")
         .arg("--private")
+        .arg("--private-tmp")
         .arg("--net=none")
+        .arg("--blacklist=/proc")
+        .arg("--blacklist=/sys")
         .arg("--rlimit-cpu=30")
         .arg("--rlimit-fsize=10485760")
         .arg("--rlimit-nofile=64")
+        .arg("--rlimit-nproc=32")
         .arg(cmd)
         .args(args)
         .stdout(Stdio::piped())
@@ -120,12 +123,12 @@ async fn run_firejail(cmd: &str, args: &[&str], _lang: &str) -> anyhow::Result<E
         .kill_on_drop(true);
 
     let child = command.spawn()?;
-    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
+    let output = tokio::time::timeout(Duration::from_secs(30), capped_output(child, 1024 * 1024)).await??;
 
     Ok(ExecutionResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.exit_code,
         sandboxed: true,
     })
 }
@@ -143,6 +146,7 @@ async fn run_docker(
         .arg("--network=none")
         .arg("--memory=256m")
         .arg("--cpus=1.0")
+        .arg("--pids-limit=32")
         .arg("--read-only")
         .arg("-i")
         .arg(image)
@@ -153,61 +157,68 @@ async fn run_docker(
         .kill_on_drop(true);
 
     let child = command.spawn()?;
-    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
+    let output = tokio::time::timeout(Duration::from_secs(30), capped_output(child, 1024 * 1024)).await??;
 
     Ok(ExecutionResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: output.exit_code,
         sandboxed: true,
     })
 }
 
-async fn run_subprocess(cmd: &str, args: &[&str]) -> anyhow::Result<ExecutionResult> {
-    let mut command = tokio::process::Command::new(cmd);
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+/// Capped output from a child process — reads stdout/stderr up to max_bytes each.
+struct CappedOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+}
 
-    // Best-effort rlimits on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            command.pre_exec(|| {
-                #[cfg(target_os = "linux")]
-                {
-                    let mem_limit = libc::rlimit {
-                        rlim_cur: 256 * 1024 * 1024,
-                        rlim_max: 256 * 1024 * 1024,
-                    };
-                    let _ = libc::setrlimit(libc::RLIMIT_AS, &mem_limit);
+async fn capped_output(
+    mut child: tokio::process::Child,
+    max_bytes: usize,
+) -> anyhow::Result<CappedOutput> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+
+    let mut out_buf = Vec::new();
+    let mut err_buf = Vec::new();
+
+    let stdout_fut = async {
+        if let Some(ref mut s) = stdout {
+            let mut buf = [0u8; 4096];
+            while out_buf.len() < max_bytes {
+                match s.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => out_buf.extend_from_slice(&buf[..n.min(max_bytes.saturating_sub(out_buf.len()))]),
+                    Err(_) => break,
                 }
-                let cpu_limit = libc::rlimit {
-                    rlim_cur: 30,
-                    rlim_max: 30,
-                };
-                let _ = libc::setrlimit(libc::RLIMIT_CPU, &cpu_limit);
-                let core_limit = libc::rlimit {
-                    rlim_cur: 0,
-                    rlim_max: 0,
-                };
-                let _ = libc::setrlimit(libc::RLIMIT_CORE, &core_limit);
-                Ok(())
-            });
+            }
         }
-    }
+    };
 
-    let child = command.spawn()?;
-    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
+    let stderr_fut = async {
+        if let Some(ref mut s) = stderr {
+            let mut buf = [0u8; 4096];
+            while err_buf.len() < max_bytes {
+                match s.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => err_buf.extend_from_slice(&buf[..n.min(max_bytes.saturating_sub(err_buf.len()))]),
+                    Err(_) => break,
+                }
+            }
+        }
+    };
 
-    Ok(ExecutionResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code(),
-        sandboxed: false,
+    tokio::join!(stdout_fut, stderr_fut);
+
+    let status = child.wait().await?;
+    Ok(CappedOutput {
+        stdout: String::from_utf8_lossy(&out_buf).to_string(),
+        stderr: String::from_utf8_lossy(&err_buf).to_string(),
+        exit_code: status.code(),
     })
 }
 

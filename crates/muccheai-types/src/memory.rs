@@ -72,9 +72,16 @@ impl MemoryEntry {
 
     /// Apply exponential decay to confidence based on time since last access.
     /// Half-life is 30 days (2_592_000_000 milliseconds).
+    /// For legacy entries where last_accessed was defaulted to epoch 0,
+    /// we treat created_at as the last access time so they don't vanish.
     pub fn decay_confidence(&mut self, now: Timestamp) {
         const HALF_LIFE_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
-        let delta_ms = (now.0.saturating_sub(self.last_accessed.0)) as f64;
+        let effective_last = if self.last_accessed.0 == 0 {
+            self.created_at.0
+        } else {
+            self.last_accessed.0
+        };
+        let delta_ms = (now.0.saturating_sub(effective_last)) as f64;
         let lambda = f64::ln(2.0) / HALF_LIFE_MS;
         self.confidence = (self.confidence as f64 * f64::exp(-lambda * delta_ms)) as f32;
         self.confidence = self.confidence.clamp(0.0, 1.0);
