@@ -325,6 +325,51 @@ pub struct ProposeMemoryResponse {
     pub status: String,
 }
 
+/// Detect code blocks request.
+#[derive(Debug, Deserialize)]
+pub struct DetectCodeBlocksRequest {
+    /// Text to scan for fenced code blocks.
+    pub text: String,
+}
+
+/// Detect code blocks response.
+#[derive(Debug, Serialize)]
+pub struct DetectCodeBlocksResponse {
+    /// Extracted code blocks.
+    pub blocks: Vec<CodeBlockApi>,
+}
+
+/// A code block exposed by the REST API.
+#[derive(Debug, Serialize)]
+pub struct CodeBlockApi {
+    /// Language tag.
+    pub language: String,
+    /// Raw code content.
+    pub code: String,
+}
+
+/// Execute code block request.
+#[derive(Debug, Deserialize)]
+pub struct ExecuteCodeBlockRequest {
+    /// Language tag.
+    pub language: String,
+    /// Code to execute.
+    pub code: String,
+}
+
+/// Execute code block response.
+#[derive(Debug, Serialize)]
+pub struct ExecuteCodeBlockResponse {
+    /// stdout.
+    pub stdout: String,
+    /// stderr.
+    pub stderr: String,
+    /// Exit code if available.
+    pub exit_code: Option<i32>,
+    /// Whether execution ran inside a sandbox.
+    pub sandboxed: bool,
+}
+
 /// Memory proposal as exposed by the REST API.
 #[derive(Debug, Serialize)]
 pub struct MemoryProposalApi {
@@ -5970,6 +6015,67 @@ async fn plugin_audit(
     Ok(Json(PluginAuditResponse { counters: entries }))
 }
 
+/// Detect fenced code blocks in provided text.
+async fn detect_code_blocks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<DetectCodeBlocksRequest>,
+) -> Result<Json<DetectCodeBlocksResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(DetectCodeBlocksResponse { blocks: vec![] }));
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let blocks = crate::code_sandbox::extract_code_blocks(&req.text)
+        .into_iter()
+        .map(|b| CodeBlockApi {
+            language: b.language,
+            code: b.code,
+        })
+        .collect();
+    Ok(Json(DetectCodeBlocksResponse { blocks }))
+}
+
+/// Execute a single code block inside a sandbox.
+async fn execute_code_block(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<ExecuteCodeBlockRequest>,
+) -> Result<Json<ExecuteCodeBlockResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(ExecuteCodeBlockResponse {
+            stdout: String::new(),
+            stderr: "duress mode: execution disabled".to_string(),
+            exit_code: Some(1),
+            sandboxed: false,
+        }));
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let block = crate::code_sandbox::CodeBlock {
+        language: req.language,
+        code: req.code,
+    };
+    match crate::code_sandbox::execute_code_block(&block).await {
+        Ok(res) => Ok(Json(ExecuteCodeBlockResponse {
+            stdout: res.stdout,
+            stderr: res.stderr,
+            exit_code: res.exit_code,
+            sandboxed: res.sandboxed,
+        })),
+        Err(e) => Ok(Json(ExecuteCodeBlockResponse {
+            stdout: String::new(),
+            stderr: e.to_string(),
+            exit_code: Some(1),
+            sandboxed: false,
+        })),
+    }
+}
+
 /// ─── Router ─────────────────────────────────────────────────────────
 pub fn router(state: Arc<AppState>) -> Router {
     // CORS: default to localhost dev origins, override via MUCCHEAI_CORS_ORIGINS env var.
@@ -6140,6 +6246,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/mcp/servers", post(add_mcp_server))
         .route("/mcp/servers/:name", delete(delete_mcp_server))
         .route("/mcp/servers/:name/test", post(test_mcp_server))
+        .route("/sandbox/detect", post(detect_code_blocks))
+        .route("/sandbox/execute", post(execute_code_block))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

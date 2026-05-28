@@ -23,6 +23,7 @@ use muccheai_vault::*;
 use chrono;
 
 mod cli;
+mod code_sandbox;
 mod config;
 mod memory_store;
 mod notify;
