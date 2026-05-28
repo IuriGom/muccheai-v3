@@ -267,6 +267,8 @@ pub struct MemoryApiEntry {
     pub memory_type: MemoryType,
     /// Creation timestamp (unix millis).
     pub created_at: u64,
+    /// Confidence score [0.0, 1.0].
+    pub confidence: f32,
 }
 
 /// List memories response.
@@ -1334,6 +1336,8 @@ async fn process_chat(
                 user_signature: vec![],
                 content_hash: vec![],
                 owner_hash: owner.clone(),
+                confidence: 1.0,
+                last_accessed: Timestamp::now(),
             };
             if let Err(e) = sm.propose(entry, &format!("Suggested memory: {}", key)) {
                 tracing::warn!("Failed to propose memory: {}", e);
@@ -3065,6 +3069,7 @@ async fn list_memories(
             value: memory_value_to_json(entry.value),
             memory_type: entry.memory_type,
             created_at: entry.created_at.0,
+            confidence: entry.confidence,
         });
     }
 
@@ -3099,6 +3104,8 @@ async fn store_memory(
         user_signature: vec![],
         content_hash: vec![],
         owner_hash: owner.clone(),
+        confidence: 1.0,
+        last_accessed: Timestamp::now(),
     };
 
     match sm.propose(entry, "User-initiated memory save") {
@@ -3199,6 +3206,8 @@ async fn propose_memory(
         user_signature: vec![],
         content_hash: vec![],
         owner_hash: owner.clone(),
+        confidence: 1.0,
+        last_accessed: Timestamp::now(),
     };
 
     match sm.propose(entry, &req.justification) {
@@ -4258,6 +4267,7 @@ async fn backup_memories(
             value: memory_value_to_json(e.value),
             memory_type: e.memory_type,
             created_at: e.created_at.0,
+            confidence: e.confidence,
         })
         .collect();
     drop(sm);
@@ -4310,6 +4320,8 @@ async fn restore_memories(
             user_signature: vec![],
             content_hash: vec![],
             owner_hash: owner.clone(),
+            confidence: 1.0,
+            last_accessed: Timestamp(entry.created_at),
         };
         if sm.store(&mem_entry).is_ok() {
             restored += 1;
@@ -4501,6 +4513,8 @@ async fn chat_stream(
                     user_signature: vec![],
                     content_hash: vec![],
                     owner_hash: owner.clone(),
+                    confidence: 1.0,
+                    last_accessed: Timestamp::now(),
                 };
                 let _ = sm.propose(entry, &format!("Suggested memory: {}", key));
             }

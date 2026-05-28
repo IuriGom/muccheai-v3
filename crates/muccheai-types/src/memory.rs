@@ -40,6 +40,16 @@ pub struct MemoryEntry {
     /// Owner hash for multi-user isolation
     #[serde(default)]
     pub owner_hash: String,
+    /// Confidence score (0.0-1.0). Decays over time unless reinforced.
+    #[serde(default = "default_confidence")]
+    pub confidence: f32,
+    /// Last time this memory was accessed or reinforced.
+    #[serde(default)]
+    pub last_accessed: Timestamp,
+}
+
+fn default_confidence() -> f32 {
+    1.0
 }
 
 impl MemoryEntry {
@@ -58,6 +68,22 @@ impl MemoryEntry {
     /// Verify integrity of this entry
     pub fn verify_integrity(&self) -> bool {
         self.compute_hash() == self.content_hash
+    }
+
+    /// Apply exponential decay to confidence based on time since last access.
+    /// Half-life is 30 days (2_592_000_000 milliseconds).
+    pub fn decay_confidence(&mut self, now: Timestamp) {
+        const HALF_LIFE_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
+        let delta_ms = (now.0.saturating_sub(self.last_accessed.0)) as f64;
+        let lambda = f64::ln(2.0) / HALF_LIFE_MS;
+        self.confidence = (self.confidence as f64 * f64::exp(-lambda * delta_ms)) as f32;
+        self.confidence = self.confidence.clamp(0.0, 1.0);
+    }
+
+    /// Reinforce this memory (increase confidence, update last_accessed).
+    pub fn reinforce(&mut self, now: Timestamp) {
+        self.confidence = ((self.confidence + 0.1) * 1.05).min(1.0);
+        self.last_accessed = now;
     }
 }
 

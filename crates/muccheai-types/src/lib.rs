@@ -18,6 +18,7 @@ pub struct AgentId(pub String);
 
 /// A validated timestamp with millisecond precision
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Zeroize)]
+#[derive(Default)]
 pub struct Timestamp(pub u64);
 
 impl Timestamp {

@@ -256,15 +256,36 @@ impl StructuredMemoryManager {
     }
 
     pub fn list_all_by_owner(&self, owner: &str) -> Vec<MemoryEntry> {
-        self.store
+        let now = Timestamp::now();
+        let mut entries: Vec<MemoryEntry> = self
+            .store
             .list()
             .into_iter()
             .filter(|e| e.owner_hash == owner)
-            .collect()
+            .map(|mut e| {
+                e.decay_confidence(now);
+                e
+            })
+            .filter(|e| e.confidence >= 0.05)
+            .collect();
+        entries.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        entries
     }
 
     pub fn search_by_owner(&self, query: &str, owner: &str) -> Vec<MemoryEntry> {
-        self.store.search_by_owner(query, owner)
+        let now = Timestamp::now();
+        let mut entries: Vec<MemoryEntry> = self
+            .store
+            .search_by_owner(query, owner)
+            .into_iter()
+            .map(|mut e| {
+                e.decay_confidence(now);
+                e
+            })
+            .filter(|e| e.confidence >= 0.05)
+            .collect();
+        entries.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+        entries
     }
 
     /// Get a memory by key.
@@ -304,6 +325,8 @@ impl StructuredMemoryManager {
             user_signature: vec![],
             content_hash: vec![],
             owner_hash: String::new(),
+            confidence: 1.0,
+            last_accessed: Timestamp::now(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)?;
@@ -328,6 +351,8 @@ impl StructuredMemoryManager {
             user_signature: vec![],
             content_hash: vec![],
             owner_hash: owner.to_string(),
+            confidence: 1.0,
+            last_accessed: Timestamp::now(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -350,6 +375,8 @@ impl StructuredMemoryManager {
             user_signature: vec![],
             content_hash: vec![],
             owner_hash: owner.to_string(),
+            confidence: 1.0,
+            last_accessed: Timestamp::now(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -852,6 +879,8 @@ mod tests {
             user_signature: vec![],
             content_hash: vec![],
             owner_hash: String::new(),
+            confidence: 1.0,
+            last_accessed: Timestamp::now(),
         };
 
         let id = mgr.propose(entry, "User mentioned their birthday").unwrap();
