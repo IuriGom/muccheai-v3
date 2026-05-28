@@ -5,6 +5,7 @@ pub mod runtime;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use manifest::PluginManifest;
@@ -32,6 +33,22 @@ impl PluginManager {
             runtime: PluginRuntime::new(),
             entries: HashMap::new(),
         }
+    }
+
+    pub fn with_counters(counters: Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>) -> anyhow::Result<Self> {
+        let plugins_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".muccheai")
+            .join("plugins");
+        std::fs::create_dir_all(&plugins_dir)?;
+
+        let mut manager = Self {
+            plugins_dir,
+            runtime: PluginRuntime::with_counters(counters),
+            entries: HashMap::new(),
+        };
+        manager.load_all()?;
+        Ok(manager)
     }
 
     pub fn new() -> anyhow::Result<Self> {

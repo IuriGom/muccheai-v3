@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use wasmtime::{Engine, Linker, Module, Store, TypedFunc};
 
@@ -10,6 +11,8 @@ use super::manifest::PluginManifest;
 pub struct PluginRuntime {
     engine: Engine,
     module_cache: std::sync::Mutex<HashMap<PathBuf, Module>>,
+    /// Plugin name -> (request_count, bytes_transferred)
+    http_counters: Option<Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>>,
 }
 
 impl PluginRuntime {
@@ -17,6 +20,15 @@ impl PluginRuntime {
         Self {
             engine: Engine::default(),
             module_cache: std::sync::Mutex::new(HashMap::new()),
+            http_counters: None,
+        }
+    }
+
+    pub fn with_counters(counters: Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>) -> Self {
+        Self {
+            engine: Engine::default(),
+            module_cache: std::sync::Mutex::new(HashMap::new()),
+            http_counters: Some(counters),
         }
     }
 
@@ -78,6 +90,8 @@ impl PluginRuntime {
                 .build()
                 .ok(),
             log_buffer: Vec::new(),
+            http_counters: self.http_counters.clone(),
+            plugin_name: manifest.plugin.name.clone(),
         };
 
         let mut store = Store::new(&self.engine, state);
@@ -200,6 +214,15 @@ impl PluginRuntime {
                                 String::new()
                             }
                         };
+                        // Update audit counters
+                        if let Some(ref counters) = caller.data().http_counters {
+                            if let Ok(mut map) = counters.lock() {
+                                let name = caller.data().plugin_name.clone();
+                                let entry = map.entry(name).or_insert((0, 0));
+                                entry.0 += 1;
+                                entry.1 += body.len() as u64;
+                            }
+                        }
                         let json = serde_json::json!({"status": status, "body": body});
                         let bytes = json.to_string().into_bytes();
                         let to_write = std::cmp::min(bytes.len(), out_len as usize);
@@ -241,4 +264,6 @@ struct PluginState {
     http_hosts: Vec<String>,
     http_client: Option<reqwest::blocking::Client>,
     log_buffer: Vec<String>,
+    http_counters: Option<Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>>,
+    plugin_name: String,
 }

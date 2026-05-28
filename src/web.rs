@@ -149,6 +149,10 @@ pub struct AppState {
     pub plugin_manager: Mutex<crate::plugin::PluginManager>,
     /// Dedicated rate limiter for backup/restore to avoid consuming HTTP budget
     pub backup_rate_limiter: Mutex<HashMap<String, (Instant, u32)>>,
+    /// Vault for Shamir secret sharing
+    pub vault: Mutex<Option<muccheai_vault::SecretVault>>,
+    /// Plugin HTTP audit counters: plugin_name -> (request_count, bytes_transferred)
+    pub plugin_http_counters: Mutex<HashMap<String, (u64, u64)>>,
 }
 
 #[derive(Clone)]
@@ -348,6 +352,48 @@ pub struct MemoryQueueResponse {
 pub struct DeleteMemoryResponse {
     /// Whether an entry was removed.
     pub deleted: bool,
+}
+
+/// Vault share representation for API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultShareApi {
+    pub index: u8,
+    pub value: String,
+    pub mac: String,
+}
+
+/// Vault status response.
+#[derive(Debug, Serialize)]
+pub struct VaultStatusResponse {
+    pub initialized: bool,
+    pub share_count: usize,
+    pub threshold: u8,
+}
+
+/// Vault split request.
+#[derive(Debug, Deserialize)]
+pub struct VaultSplitRequest {
+    pub master_secret: String,
+    pub n: u8,
+    pub k: u8,
+}
+
+/// Vault split response.
+#[derive(Debug, Serialize)]
+pub struct VaultSplitResponse {
+    pub shares: Vec<VaultShareApi>,
+}
+
+/// Vault reconstruct request.
+#[derive(Debug, Deserialize)]
+pub struct VaultReconstructRequest {
+    pub shares: Vec<VaultShareApi>,
+}
+
+/// Vault reconstruct response.
+#[derive(Debug, Serialize)]
+pub struct VaultReconstructResponse {
+    pub master_secret: String,
 }
 
 /// Personas response.
@@ -5780,6 +5826,136 @@ async fn get_encrypted_share(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
+// ─── Vault handlers ─────────────────────────────────────────────────
+
+async fn vault_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<VaultStatusResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(VaultStatusResponse {
+            initialized: false,
+            share_count: 0,
+            threshold: 0,
+        }));
+    }
+    let vault = state.vault.lock().await;
+    match vault.as_ref() {
+        Some(v) => Ok(Json(VaultStatusResponse {
+            initialized: true,
+            share_count: v.share_count(),
+            threshold: 3,
+        })),
+        None => Ok(Json(VaultStatusResponse {
+            initialized: false,
+            share_count: 0,
+            threshold: 0,
+        })),
+    }
+}
+
+async fn vault_split(
+    State(_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<VaultSplitRequest>,
+) -> Result<Json<VaultSplitResponse>, StatusCode> {
+    if is_duress_session(&_state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&_state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let secret_bytes = match hex::decode(&req.master_secret) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let shares = match muccheai_vault::shamir::split_secret(&secret_bytes, req.n, req.k) {
+        Ok(s) => s,
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    Ok(Json(VaultSplitResponse {
+        shares: shares.into_iter().map(|s| VaultShareApi {
+            index: s.index,
+            value: hex::encode(s.value),
+            mac: hex::encode(&s.mac),
+        }).collect(),
+    }))
+}
+
+async fn vault_reconstruct(
+    State(_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<VaultReconstructRequest>,
+) -> Result<Json<VaultReconstructResponse>, StatusCode> {
+    if is_duress_session(&_state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let owner = get_session_owner(&_state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let shares: Vec<muccheai_vault::shamir::Share> = req.shares.into_iter().filter_map(|s| {
+        let value = hex::decode(&s.value).ok()?;
+        if value.len() != 32 { return None; }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&value);
+        Some(muccheai_vault::shamir::Share {
+            index: s.index,
+            value: arr,
+            mac: hex::decode(&s.mac).ok()?,
+        })
+    }).collect();
+    let threshold = shares.first().map(|_| 1).unwrap_or(0) as usize; // placeholder; reconstruct_secret validates
+    let secret = match muccheai_vault::shamir::reconstruct_secret(&shares, threshold) {
+        Ok(s) => s,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+    Ok(Json(VaultReconstructResponse {
+        master_secret: hex::encode(&secret),
+    }))
+}
+
+/// Plugin audit response.
+#[derive(Debug, Serialize)]
+pub struct PluginAuditResponse {
+    pub counters: Vec<PluginAuditEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PluginAuditEntry {
+    pub plugin_name: String,
+    pub request_count: u64,
+    pub bytes_transferred: u64,
+}
+
+async fn plugin_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<PluginAuditResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Ok(Json(PluginAuditResponse { counters: vec![] }));
+    }
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let counters = state.plugin_http_counters.lock().await;
+    let entries: Vec<PluginAuditEntry> = counters
+        .iter()
+        .map(|(name, (reqs, bytes))| PluginAuditEntry {
+            plugin_name: name.clone(),
+            request_count: *reqs,
+            bytes_transferred: *bytes,
+        })
+        .collect();
+    Ok(Json(PluginAuditResponse { counters: entries }))
+}
+
 /// ─── Router ─────────────────────────────────────────────────────────
 pub fn router(state: Arc<AppState>) -> Router {
     // CORS: default to localhost dev origins, override via MUCCHEAI_CORS_ORIGINS env var.
@@ -5935,6 +6111,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/scheduled-tasks", get(list_scheduled_tasks))
         .route("/scheduled-tasks", post(create_scheduled_task))
         .route("/scheduled-tasks/:id", delete(delete_scheduled_task))
+        .route("/vault/status", get(vault_status))
+        .route("/vault/split", post(vault_split))
+        .route("/vault/reconstruct", post(vault_reconstruct))
+        .route("/plugin-audit", get(plugin_audit))
         .route("/chat/image", post(chat_with_image))
         .route("/sessions/:id/folder", post(update_session_folder))
         .route("/sessions/:id/tags", post(update_session_tags))

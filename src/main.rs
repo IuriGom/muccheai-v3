@@ -905,6 +905,27 @@ async fn run_web_server(bind: &str) {
         tracing::warn!("Failed to migrate API key to admin user: {}", e);
     }
 
+    // Initialize vault with machine key as master secret (3-of-5 default).
+    let vault = match crate::config::MuccheConfig::load_or_create_machine_key() {
+        Ok(key) => match muccheai_vault::SecretVault::new(&key, 3) {
+            Ok(v) => {
+                println!("🔐 Vault initialized ({}-of-{} shares)", v.share_count(), 5);
+                Some(v)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize vault: {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Failed to load machine key for vault: {}", e);
+            None
+        }
+    };
+
+    let plugin_http_counters: Arc<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
     let state = Arc::new(web::AppState {
         sandbox: Mutex::new(sandbox),
         policy: Mutex::new(policy),
@@ -927,11 +948,13 @@ async fn run_web_server(bind: &str) {
         shared_sessions: Mutex::new(std::collections::HashMap::new()),
         custom_tools: Mutex::new(Vec::new()),
         scheduled_tasks: Mutex::new(Vec::new()),
-        plugin_manager: Mutex::new(crate::plugin::PluginManager::new().unwrap_or_else(|e| {
+        vault: Mutex::new(vault),
+        plugin_manager: Mutex::new(crate::plugin::PluginManager::with_counters(Arc::clone(&plugin_http_counters)).unwrap_or_else(|e| {
             eprintln!("Warning: plugin manager init failed: {}", e);
             crate::plugin::PluginManager::new_disabled()
         })),
         backup_rate_limiter: Mutex::new(std::collections::HashMap::new()),
+        plugin_http_counters: Mutex::new(std::collections::HashMap::new()),
     });
 
     println!("🔐 Login with username 'admin' and your existing API key.");
