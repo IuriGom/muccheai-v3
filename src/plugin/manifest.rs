@@ -56,6 +56,8 @@ pub struct PluginManifest {
     pub triggers: PluginTriggers,
     #[serde(default)]
     pub output: PluginOutput,
+    #[serde(default)]
+    pub dependencies: PluginDependencies,
 }
 
 fn default_manifest_version() -> String { "1.0".to_string() }
@@ -74,10 +76,27 @@ pub struct PluginCapabilities {
     pub llm_callback: bool,
     #[serde(default = "default_storage")]
     pub storage_dir: String,
+    /// Max HTTP requests per minute (default 60).
+    #[serde(default = "default_rate_limit")]
+    pub max_requests_per_minute: u32,
+    /// Allowed HTTP methods. Empty = all methods.
+    #[serde(default)]
+    pub http_methods: Vec<String>,
+    /// Max HTTP request/response body size in bytes (default 1MB).
+    #[serde(default = "default_max_body_size")]
+    pub max_body_size: u64,
+    /// Max memory usage in MB (enforced via rlimit where possible).
+    #[serde(default)]
+    pub max_memory_mb: Option<u64>,
+    /// Max CPU percent (0-100). 0 = no limit.
+    #[serde(default)]
+    pub max_cpu_percent: Option<u8>,
 }
 
 fn default_none() -> String { "none".to_string() }
 fn default_storage() -> String { "data".to_string() }
+fn default_rate_limit() -> u32 { 60 }
+fn default_max_body_size() -> u64 { 1024 * 1024 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginTriggers {
@@ -85,6 +104,12 @@ pub struct PluginTriggers {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub require_mention: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginDependencies {
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -162,6 +187,7 @@ impl PluginManifest {
             capabilities: self.capabilities.clone(),
             triggers: self.triggers.clone(),
             output: self.output.clone(),
+            dependencies: self.dependencies.clone(),
         };
         // Use a deterministic representation (TOML is stable enough for this purpose).
         match toml::to_string(&stripped) {

@@ -60,6 +60,21 @@ impl PluginRuntime {
         let mut wasi_builder = wasmtime_wasi::WasiCtxBuilder::new();
         wasi_builder.inherit_stdout().inherit_stderr();
 
+        // Enforce env capability.
+        match manifest.capabilities.env.as_str() {
+            "none" => {
+                // Default WasiCtxBuilder has no env vars.
+            }
+            "readonly" => {
+                // Inherit current env but don't let the plugin modify it.
+                // WASI preview1 doesn't support mutable env anyway.
+                wasi_builder.inherit_env();
+            }
+            "all" | _ => {
+                wasi_builder.inherit_env();
+            }
+        }
+
         // Restrict filesystem access to a plugin-specific sandbox directory.
         if manifest.capabilities.filesystem != "none" {
             let sandbox_dir = dirs::home_dir()
@@ -152,6 +167,16 @@ impl PluginRuntime {
 
     fn add_host_functions(linker: &mut Linker<PluginState>, manifest: &PluginManifest) -> anyhow::Result<()> {
         let allowed_hosts: std::sync::Arc<Vec<String>> = std::sync::Arc::new(manifest.capabilities.http_hosts.clone());
+        let max_body_size = manifest.capabilities.max_body_size;
+        let allowed_methods: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
+            manifest.capabilities.http_methods.iter().map(|m| m.to_uppercase()).collect()
+        );
+        let rate_limit = manifest.capabilities.max_requests_per_minute;
+        let plugin_name = manifest.plugin.name.clone();
+
+        // Simple per-plugin rate limiter: token bucket refilled every 60s.
+        let rate_bucket: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
         // host_http_get(url_ptr, url_len, out_ptr, out_len) -> i32
         linker.func_wrap(
@@ -210,10 +235,35 @@ impl PluginRuntime {
                     tracing::warn!(target: "plugin", "HTTP blocked: plugin '{}' role '{:?}' has no network access", state.plugin_name, state.role);
                     return -1;
                 }
+
+                // Rate limit check
+                {
+                    let mut bucket = rate_bucket.lock().unwrap_or_else(|e| e.into_inner());
+                    let (last, tokens) = bucket.entry(plugin_name.clone()).or_insert((std::time::Instant::now(), rate_limit));
+                    let elapsed = last.elapsed().as_secs() as u32;
+                    let refill = elapsed.saturating_mul(rate_limit) / 60;
+                    if refill > 0 {
+                        *tokens = (*tokens + refill).min(rate_limit);
+                        *last = std::time::Instant::now();
+                    }
+                    if *tokens == 0 {
+                        tracing::warn!(target: "plugin", "HTTP rate limit exceeded for plugin '{}'", plugin_name);
+                        return -1;
+                    }
+                    *tokens -= 1;
+                }
+
                 let client = match &state.http_client {
                     Some(c) => c.clone(),
                     None => return -1,
                 };
+
+                // Parse method from URL (default GET). For now host_http_get only supports GET.
+                let method = "GET";
+                if !allowed_methods.is_empty() && !allowed_methods.iter().any(|m| m == method) {
+                    tracing::warn!(target: "plugin", "HTTP method '{}' not allowed for plugin '{}'", method, plugin_name);
+                    return -1;
+                }
 
                 match client.get(&url).send() {
                     Ok(resp) => {
@@ -225,6 +275,11 @@ impl PluginRuntime {
                                 String::new()
                             }
                         };
+                        // Body size cap
+                        if body.len() > max_body_size as usize {
+                            tracing::warn!(target: "plugin", "HTTP response body too large for plugin '{}' ({} > {})", plugin_name, body.len(), max_body_size);
+                            return -1;
+                        }
                         // Update audit counters
                         if let Some(ref counters) = caller.data().http_counters {
                             if let Ok(mut map) = counters.lock() {

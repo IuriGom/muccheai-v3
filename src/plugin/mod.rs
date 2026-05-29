@@ -77,8 +77,87 @@ impl PluginManager {
         Ok(manager)
     }
 
+    fn load_revoked_list(&self) -> std::collections::HashSet<String> {
+        let path = self.plugins_dir.parent().unwrap_or(&self.plugins_dir).join("revoked-plugins.json");
+        if let Ok(data) = std::fs::read_to_string(&path) {
+            match serde_json::from_str::<Vec<RevokedEntry>>(&data) {
+                Ok(list) => list.into_iter().map(|e| e.wasm_hash).collect(),
+                Err(e) => {
+                    tracing::warn!("Corrupted revoked-plugins.json: {}", e);
+                    std::collections::HashSet::new()
+                }
+            }
+        } else {
+            std::collections::HashSet::new()
+        }
+    }
+
+    fn load_trusted_keys(&self) -> Vec<[u8; 32]> {
+        let keys_dir = self.plugins_dir.parent().unwrap_or(&self.plugins_dir).join("trusted-keys");
+        let mut keys = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&keys_dir) {
+            for entry in entries.flatten() {
+                if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                    let trimmed = text.trim();
+                    if trimmed.len() == 64 {
+                        if let Ok(bytes) = hex::decode(trimmed) {
+                            if bytes.len() == 32 {
+                                let mut arr = [0u8; 32];
+                                arr.copy_from_slice(&bytes);
+                                keys.push(arr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        keys
+    }
+
+    fn verify_plugin_signature(&self, manifest: &PluginManifest, trusted: &[[u8; 32]]) -> bool {
+        use ed25519_dalek::Verifier;
+        let Some(ref pk_hex) = manifest.plugin.author_pubkey else {
+            return false; // unsigned plugins are rejected when trust anchor exists
+        };
+        let Some(ref sig_hex) = manifest.plugin.signature else {
+            return false;
+        };
+        let pk_bytes = match hex::decode(pk_hex) {
+            Ok(b) if b.len() == 32 => b,
+            _ => return false,
+        };
+        // If trust anchor exists, author must be in the trusted set.
+        if !trusted.is_empty() {
+            let mut pk_arr = [0u8; 32];
+            pk_arr.copy_from_slice(&pk_bytes);
+            if !trusted.contains(&pk_arr) {
+                tracing::warn!("Plugin '{}' author pubkey not in trusted-keys", manifest.plugin.name);
+                return false;
+            }
+        }
+        let sig_bytes = match hex::decode(sig_hex) {
+            Ok(b) if b.len() == 64 => b,
+            _ => return false,
+        };
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+        let mut pk_arr = [0u8; 32];
+        pk_arr.copy_from_slice(&pk_bytes);
+        let vk = match ed25519_dalek::VerifyingKey::from_bytes(&pk_arr) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        let msg = manifest.canonical_signing_bytes();
+        vk.verify(&msg, &sig).is_ok()
+    }
+
     pub fn load_all(&mut self) -> anyhow::Result<()> {
         self.entries.clear();
+        let revoked = self.load_revoked_list();
+        let trusted = self.load_trusted_keys();
+        // First pass: load all valid plugins into a temporary map.
+        let mut loaded: HashMap<String, PluginEntry> = HashMap::new();
         for entry in std::fs::read_dir(&self.plugins_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -109,7 +188,27 @@ impl PluginManager {
                     continue;
                 }
             };
-            let name = manifest.plugin.name.clone();
+            // Revocation check
+            if revoked.contains(&wasm_hash) {
+                tracing::warn!("Plugin '{}' WASM hash is revoked — skipping", manifest.plugin.name);
+                continue;
+            }
+            // Expected hash check
+            if let Some(ref expected) = manifest.plugin.expected_wasm_hash {
+                if expected != &wasm_hash {
+                    tracing::warn!("Plugin '{}' WASM hash mismatch: expected {} got {}", manifest.plugin.name, expected, wasm_hash);
+                    continue;
+                }
+            }
+            // Signature verification (mandatory if trusted-keys exist; advisory otherwise)
+            let sig_ok = self.verify_plugin_signature(&manifest, &trusted);
+            if !trusted.is_empty() && !sig_ok {
+                tracing::warn!("Plugin '{}' signature verification failed — skipping", manifest.plugin.name);
+                continue;
+            }
+            if trusted.is_empty() && manifest.plugin.signature.is_some() && !sig_ok {
+                tracing::warn!("Plugin '{}' signature invalid but no trusted-keys configured — loading anyway", manifest.plugin.name);
+            }
             // Load persisted role or default to the requested role.
             let role_path = path.join(".installed_role");
             let installed_role = if let Ok(role_text) = std::fs::read_to_string(&role_path) {
@@ -120,6 +219,7 @@ impl PluginManager {
             } else {
                 manifest.plugin.requested_role
             };
+            let name = manifest.plugin.name.clone();
             let plugin_entry = PluginEntry {
                 name: name.clone(),
                 manifest,
@@ -131,7 +231,21 @@ impl PluginManager {
                     .as_secs(),
                 installed_role,
             };
-            self.entries.insert(name, plugin_entry);
+            loaded.insert(name, plugin_entry);
+        }
+        // Second pass: dependency validation.
+        for (name, entry) in &loaded {
+            let mut deps_ok = true;
+            for dep in &entry.manifest.dependencies.requires {
+                if !loaded.contains_key(dep) {
+                    tracing::warn!("Plugin '{}' requires missing dependency '{}' — skipping", name, dep);
+                    deps_ok = false;
+                    break;
+                }
+            }
+            if deps_ok {
+                self.entries.insert(name.clone(), entry.clone());
+            }
         }
         Ok(())
     }
