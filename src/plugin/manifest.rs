@@ -4,15 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginManifest {
-    pub plugin: PluginMeta,
-    pub capabilities: PluginCapabilities,
-    #[serde(default)]
-    pub triggers: PluginTriggers,
-    #[serde(default)]
-    pub output: PluginOutput,
-}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMeta {
@@ -24,6 +16,16 @@ pub struct PluginMeta {
     pub wasm_path: String,
     #[serde(default)]
     pub requested_role: PluginRole,
+    /// Expected SHA3-256 hash of the WASM binary (hex).
+    /// If present, the runtime verifies the loaded WASM matches.
+    #[serde(default)]
+    pub expected_wasm_hash: Option<String>,
+    /// Ed25519 public key of the plugin author (hex, 64 chars).
+    #[serde(default)]
+    pub author_pubkey: Option<String>,
+    /// Ed25519 signature of the manifest + expected_wasm_hash (hex).
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// Predefined security roles for plugins.
@@ -43,6 +45,20 @@ pub enum PluginRole {
     /// Everything but each sensitive action requires manual approval.
     Privileged,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginManifest {
+    #[serde(default = "default_manifest_version")]
+    pub manifest_version: String,
+    pub plugin: PluginMeta,
+    pub capabilities: PluginCapabilities,
+    #[serde(default)]
+    pub triggers: PluginTriggers,
+    #[serde(default)]
+    pub output: PluginOutput,
+}
+
+fn default_manifest_version() -> String { "1.0".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCapabilities {
@@ -89,11 +105,29 @@ impl PluginManifest {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.manifest_version != "1.0" {
+            return Err(anyhow::anyhow!("Unsupported manifest version: {}", self.manifest_version));
+        }
         if self.plugin.name.is_empty() {
             return Err(anyhow::anyhow!("Plugin name is required"));
         }
         if self.plugin.wasm_path.is_empty() {
             return Err(anyhow::anyhow!("Plugin wasm_path is required"));
+        }
+        if let Some(ref hash) = self.plugin.expected_wasm_hash {
+            if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow::anyhow!("expected_wasm_hash must be 64 hex chars"));
+            }
+        }
+        if let Some(ref pk) = self.plugin.author_pubkey {
+            if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow::anyhow!("author_pubkey must be 64 hex chars (Ed25519)"));
+            }
+        }
+        if let Some(ref sig) = self.plugin.signature {
+            if sig.len() != 128 || !sig.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow::anyhow!("signature must be 128 hex chars (Ed25519)"));
+            }
         }
         for host in &self.capabilities.http_hosts {
             if host.is_empty() {
@@ -114,6 +148,26 @@ impl PluginManifest {
             }
         }
         Ok(())
+    }
+
+    /// Compute the canonical bytes that the author should sign.
+    /// Includes manifest_version, plugin metadata (without signature), capabilities, triggers, output.
+    pub fn canonical_signing_bytes(&self) -> Vec<u8> {
+        let stripped = PluginManifest {
+            manifest_version: self.manifest_version.clone(),
+            plugin: PluginMeta {
+                signature: None,
+                ..self.plugin.clone()
+            },
+            capabilities: self.capabilities.clone(),
+            triggers: self.triggers.clone(),
+            output: self.output.clone(),
+        };
+        // Use a deterministic representation (TOML is stable enough for this purpose).
+        match toml::to_string(&stripped) {
+            Ok(s) => s.into_bytes(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 

@@ -11,6 +11,14 @@ use serde::{Deserialize, Serialize};
 use manifest::{PluginManifest, PluginRole};
 use runtime::PluginRuntime;
 
+/// Revoked plugin entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RevokedEntry {
+    pub wasm_hash: String,
+    pub reason: String,
+    pub revoked_at: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginEntry {
     pub name: String,
