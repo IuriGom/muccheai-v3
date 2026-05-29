@@ -52,7 +52,7 @@ pub fn extract_code_blocks(text: &str) -> Vec<CodeBlock> {
 }
 
 /// Execute a code block inside a sandbox.
-/// Priority: firejail → docker → bare subprocess with rlimits.
+/// Priority: firejail → docker.  Bare subprocess fallback removed.
 pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionResult> {
     let lang = block.language.to_lowercase();
     if lang == "python" || lang == "py" {
@@ -60,7 +60,7 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
             return run_firejail("python3", &["-c", &block.code], &lang).await;
         }
         if has_docker() {
-            return run_docker("python:3.12-alpine", "python3", &["-c", &block.code], &lang).await;
+            return run_docker("python:3.12-alpine", "python3", &["-c", &block.code], &lang, &[]).await;
         }
         return Err(anyhow::anyhow!("No sandbox available for Python execution"));
     }
@@ -69,7 +69,7 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
             return run_firejail("bash", &["-c", &block.code], &lang).await;
         }
         if has_docker() {
-            return run_docker("alpine:3.19", "sh", &["-c", &block.code], &lang).await;
+            return run_docker("alpine:3.19", "sh", &["-c", &block.code], &lang, &[]).await;
         }
         return Err(anyhow::anyhow!("No sandbox available for shell execution"));
     }
@@ -80,6 +80,7 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
                 "bash",
                 &["-c", &format!("printf '%s' '{}' > /tmp/main.rs && rustc /tmp/main.rs -o /tmp/main && /tmp/main", escape_single_quotes(&block.code))],
                 &lang,
+                &["--tmpfs", "/tmp:rw,noexec,nosuid,size=100m"],
             )
             .await;
         }
@@ -87,7 +88,7 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
     }
     if lang == "javascript" || lang == "js" || lang == "node" {
         if has_docker() {
-            return run_docker("node:20-alpine", "node", &["-e", &block.code], &lang).await;
+            return run_docker("node:20-alpine", "node", &["-e", &block.code], &lang, &[]).await;
         }
         return Err(anyhow::anyhow!("No sandbox available for JavaScript execution"));
     }
@@ -138,6 +139,7 @@ async fn run_docker(
     cmd: &str,
     args: &[&str],
     _lang: &str,
+    extra_args: &[&str],
 ) -> anyhow::Result<ExecutionResult> {
     let mut command = tokio::process::Command::new("docker");
     command
@@ -148,6 +150,7 @@ async fn run_docker(
         .arg("--cpus=1.0")
         .arg("--pids-limit=32")
         .arg("--read-only")
+        .args(extra_args)
         .arg("-i")
         .arg(image)
         .arg(cmd)
@@ -213,6 +216,12 @@ async fn capped_output(
     };
 
     tokio::join!(stdout_fut, stderr_fut);
+
+    // If either buffer hit the cap, the child is likely blocked on its next
+    // write.  Kill it proactively instead of waiting for the outer timeout.
+    if out_buf.len() >= max_bytes || err_buf.len() >= max_bytes {
+        let _ = child.kill().await;
+    }
 
     let status = child.wait().await?;
     Ok(CappedOutput {
