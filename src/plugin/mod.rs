@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
-use manifest::PluginManifest;
+use manifest::{PluginManifest, PluginRole};
 use runtime::PluginRuntime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +18,8 @@ pub struct PluginEntry {
     pub wasm_hash: String,
     pub enabled: bool,
     pub installed_at: u64,
+    /// Role assigned by the user at install time. Never upgraded automatically.
+    pub installed_role: PluginRole,
 }
 
 pub struct PluginManager {
@@ -100,6 +102,16 @@ impl PluginManager {
                 }
             };
             let name = manifest.plugin.name.clone();
+            // Load persisted role or default to the requested role.
+            let role_path = path.join(".installed_role");
+            let installed_role = if let Ok(role_text) = std::fs::read_to_string(&role_path) {
+                match serde_json::from_str(&role_text) {
+                    Ok(r) => r,
+                    Err(_) => manifest.plugin.requested_role,
+                }
+            } else {
+                manifest.plugin.requested_role
+            };
             let plugin_entry = PluginEntry {
                 name: name.clone(),
                 manifest,
@@ -109,6 +121,7 @@ impl PluginManager {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
+                installed_role,
             };
             self.entries.insert(name, plugin_entry);
         }
@@ -140,7 +153,18 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn install_from_path(&mut self, source: &Path) -> anyhow::Result<String> {
+    /// Install a plugin from a local path, assigning the given security role.
+    /// If `role` is None, uses the plugin's requested_role.
+    pub fn install_from_path_with_role(&mut self, source: &Path, role: Option<PluginRole>) -> anyhow::Result<String> {
+        let manifest = PluginManifest::load(&source.join("plugin.toml"))?;
+        manifest.validate()?;
+        let chosen_role = role.unwrap_or(manifest.plugin.requested_role);
+        let name = self.install_from_path_internal(source, chosen_role)?;
+        self.load_all()?;
+        Ok(name)
+    }
+
+    fn install_from_path_internal(&mut self, source: &Path, chosen_role: PluginRole) -> anyhow::Result<String> {
         // Reject symlink sources to prevent traversal attacks.
         if let Ok(meta) = std::fs::symlink_metadata(source) {
             if meta.file_type().is_symlink() {
@@ -174,6 +198,10 @@ impl PluginManager {
         // Copy manifest
         std::fs::copy(&manifest_path, dest.join("plugin.toml"))?;
 
+        // Persist chosen role
+        let role_path = dest.join(".installed_role");
+        std::fs::write(&role_path, serde_json::to_string(&chosen_role)?)?;
+
         // Copy WASM (into plugin dir root, ignoring any directory components in wasm_name)
         let wasm_src = source.join(wasm_name);
         if !wasm_src.exists() {
@@ -191,6 +219,10 @@ impl PluginManager {
 
         self.load_all()?;
         Ok(manifest.plugin.name)
+    }
+
+    pub fn install_from_path(&mut self, source: &Path) -> anyhow::Result<String> {
+        self.install_from_path_with_role(source, None)
     }
 
     /// Find plugins that should trigger for the given message.
@@ -213,7 +245,7 @@ impl PluginManager {
     /// Execute a plugin and return its output.
     pub fn execute(&self, entry: &PluginEntry, input_json: &str) -> anyhow::Result<String> {
         let wasm_path = self.plugins_dir.join(&entry.name).join(&entry.manifest.plugin.wasm_path);
-        self.runtime.execute(&wasm_path, &entry.manifest, &entry.wasm_hash, input_json)
+        self.runtime.execute(&wasm_path, &entry.manifest, &entry.wasm_hash, entry.installed_role, input_json)
     }
 }
 

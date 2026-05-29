@@ -22,6 +22,26 @@ pub struct PluginMeta {
     pub description: String,
     pub license: String,
     pub wasm_path: String,
+    #[serde(default)]
+    pub requested_role: PluginRole,
+}
+
+/// Predefined security roles for plugins.
+/// The user can downgrade but never upgrade automatically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginRole {
+    /// Read-only: memories, /data, logs. No network, no exec.
+    #[default]
+    Observer,
+    /// HTTP allowlist + /data + logs. No exec, no env, no memories.
+    Messenger,
+    /// HTTP allowlist + /data + sandboxed exec + filtered env.
+    Worker,
+    /// Worker + read memories + propose memories + llm_callback.
+    Assistant,
+    /// Everything but each sensitive action requires manual approval.
+    Privileged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +107,39 @@ impl PluginManifest {
                 return Err(anyhow::anyhow!("IP addresses not allowed in http_hosts (use hostnames): {}", host));
             }
         }
+        // Validate that Privileged plugins declare *why* they need it.
+        if self.plugin.requested_role == PluginRole::Privileged {
+            if self.capabilities.http_hosts.len() > 10 {
+                return Err(anyhow::anyhow!("Privileged plugins may not request more than 10 HTTP hosts"));
+            }
+        }
         Ok(())
+    }
+}
+
+impl PluginRole {
+    /// Whether this role may access the network at all.
+    pub fn may_network(&self) -> bool {
+        matches!(self, Self::Messenger | Self::Worker | Self::Assistant | Self::Privileged)
+    }
+
+    /// Whether this role may execute commands (even sandboxed).
+    pub fn may_exec(&self) -> bool {
+        matches!(self, Self::Worker | Self::Assistant | Self::Privileged)
+    }
+
+    /// Whether this role may access structured memories.
+    pub fn may_read_memories(&self) -> bool {
+        matches!(self, Self::Observer | Self::Assistant | Self::Privileged)
+    }
+
+    /// Whether this role may propose new memories.
+    pub fn may_propose_memory(&self) -> bool {
+        matches!(self, Self::Assistant | Self::Privileged)
+    }
+
+    /// Whether this role may trigger LLM callbacks.
+    pub fn may_llm_callback(&self) -> bool {
+        matches!(self, Self::Assistant | Self::Privileged)
     }
 }

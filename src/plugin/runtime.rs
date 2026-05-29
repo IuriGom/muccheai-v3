@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use wasmtime::{Engine, Linker, Module, Store, TypedFunc};
 
-use super::manifest::PluginManifest;
+use super::manifest::{PluginManifest, PluginRole};
 
 pub struct PluginRuntime {
     engine: Engine,
@@ -42,6 +42,7 @@ impl PluginRuntime {
         wasm_path: &Path,
         manifest: &PluginManifest,
         wasm_hash: &str,
+        role: PluginRole,
         input_json: &str,
     ) -> anyhow::Result<String> {
         let module = {
@@ -85,13 +86,18 @@ impl PluginRuntime {
         let mut state = PluginState {
             wasi,
             http_hosts: manifest.capabilities.http_hosts.clone(),
-            http_client: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .ok(),
+            http_client: if role.may_network() {
+                reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .ok()
+            } else {
+                None
+            },
             log_buffer: Vec::new(),
             http_counters: self.http_counters.clone(),
             plugin_name: manifest.plugin.name.clone(),
+            role,
         };
 
         let mut store = Store::new(&self.engine, state);
@@ -199,7 +205,12 @@ impl PluginRuntime {
                     }
                 }
 
-                let client = match &caller.data().http_client {
+                let state = caller.data();
+                if !state.role.may_network() {
+                    tracing::warn!(target: "plugin", "HTTP blocked: plugin '{}' role '{:?}' has no network access", state.plugin_name, state.role);
+                    return -1;
+                }
+                let client = match &state.http_client {
                     Some(c) => c.clone(),
                     None => return -1,
                 };
@@ -266,4 +277,5 @@ struct PluginState {
     log_buffer: Vec<String>,
     http_counters: Option<Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>>,
     plugin_name: String,
+    role: PluginRole,
 }
