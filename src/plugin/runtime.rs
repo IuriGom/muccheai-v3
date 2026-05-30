@@ -66,9 +66,13 @@ impl PluginRuntime {
                 // Default WasiCtxBuilder has no env vars.
             }
             "readonly" => {
-                // Inherit current env but don't let the plugin modify it.
-                // WASI preview1 doesn't support mutable env anyway.
-                wasi_builder.inherit_env();
+                // Only expose a curated allowlist of safe env vars.
+                let allowed = ["LANG", "LC_ALL", "TZ", "PATH"];
+                let vars: Vec<(String, String)> = allowed
+                    .iter()
+                    .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+                    .collect();
+                wasi_builder.envs(&vars);
             }
             "all" | _ => {
                 wasi_builder.inherit_env();
@@ -83,11 +87,19 @@ impl PluginRuntime {
                 .join("plugin-data")
                 .join(format!("{}-{}", &manifest.plugin.name, &wasm_hash[..8.min(wasm_hash.len())]));
             let _ = std::fs::create_dir_all(&sandbox_dir);
+            let (dir_perms, file_perms) = if manifest.capabilities.filesystem == "readonly" {
+                (wasmtime_wasi::DirPerms::READ, wasmtime_wasi::FilePerms::READ)
+            } else {
+                (
+                    wasmtime_wasi::DirPerms::READ | wasmtime_wasi::DirPerms::MUTATE,
+                    wasmtime_wasi::FilePerms::READ | wasmtime_wasi::FilePerms::WRITE,
+                )
+            };
             let _ = wasi_builder.preopened_dir(
                 &sandbox_dir,
                 "/data",
-                wasmtime_wasi::DirPerms::READ | wasmtime_wasi::DirPerms::MUTATE,
-                wasmtime_wasi::FilePerms::READ | wasmtime_wasi::FilePerms::WRITE,
+                dir_perms,
+                file_perms,
             );
         }
 
@@ -96,7 +108,7 @@ impl PluginRuntime {
         wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |state| &mut state.wasi)?;
 
         // Add capability-gated host functions
-        Self::add_host_functions(&mut linker, manifest)?;
+        Self::add_host_functions(&mut linker, manifest, wasm_hash)?;
 
         let mut state = PluginState {
             wasi,
@@ -151,7 +163,11 @@ impl PluginRuntime {
             return Err(anyhow::anyhow!("Plugin execution failed with code {}", ret));
         }
 
+        const MAX_PLUGIN_OUTPUT: usize = 1024 * 1024; // 1 MiB
         let len = ret as usize;
+        if len > MAX_PLUGIN_OUTPUT {
+            return Err(anyhow::anyhow!("Plugin returned output length {} exceeding maximum {}", len, MAX_PLUGIN_OUTPUT));
+        }
         let mut buf = vec![0u8; len];
         memory.read(&store, output_ptr, &mut buf)?;
         let output = String::from_utf8_lossy(&buf).to_string();
@@ -165,13 +181,14 @@ impl PluginRuntime {
         Ok(output)
     }
 
-    fn add_host_functions(linker: &mut Linker<PluginState>, manifest: &PluginManifest) -> anyhow::Result<()> {
+    fn add_host_functions(linker: &mut Linker<PluginState>, manifest: &PluginManifest, wasm_hash: &str) -> anyhow::Result<()> {
         let allowed_hosts: std::sync::Arc<Vec<String>> = std::sync::Arc::new(manifest.capabilities.http_hosts.clone());
         let max_body_size = manifest.capabilities.max_body_size;
         let allowed_methods: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
             manifest.capabilities.http_methods.iter().map(|m| m.to_uppercase()).collect()
         );
         let rate_limit = manifest.capabilities.max_requests_per_minute;
+        let plugin_hash = wasm_hash.to_string();
         let plugin_name = manifest.plugin.name.clone();
 
         // Simple per-plugin rate limiter: token bucket refilled every 60s.
@@ -201,6 +218,11 @@ impl PluginRuntime {
                     Ok(u) => u,
                     Err(_) => return -1,
                 };
+                // Enforce HTTPS only
+                if parsed.scheme() != "https" {
+                    tracing::warn!(target: "plugin", "HTTP request blocked: non-HTTPS URL {}", url);
+                    return -1;
+                }
                 let host = parsed.host_str().unwrap_or("").to_string();
                 if !allowed_hosts.iter().any(|h| h == &host) {
                     tracing::warn!(target: "plugin", "HTTP request to {} blocked by capability manifest", host);
@@ -236,10 +258,10 @@ impl PluginRuntime {
                     return -1;
                 }
 
-                // Rate limit check
+                // Rate limit check (keyed by wasm_hash so renamed plugins don't steal quota)
                 {
                     let mut bucket = rate_bucket.lock().unwrap_or_else(|e| e.into_inner());
-                    let (last, tokens) = bucket.entry(plugin_name.clone()).or_insert((std::time::Instant::now(), rate_limit));
+                    let (last, tokens) = bucket.entry(plugin_hash.clone()).or_insert((std::time::Instant::now(), rate_limit));
                     let elapsed = last.elapsed().as_secs() as u32;
                     let refill = elapsed.saturating_mul(rate_limit) / 60;
                     if refill > 0 {

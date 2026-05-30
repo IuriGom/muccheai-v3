@@ -97,7 +97,15 @@ impl PluginManager {
         let mut keys = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&keys_dir) {
             for entry in entries.flatten() {
-                if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                let path = entry.path();
+                // Reject symlinks in trust anchor to prevent traversal attacks.
+                if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                    if meta.file_type().is_symlink() {
+                        tracing::warn!("Skipping symlink in trusted-keys: {:?}", path);
+                        continue;
+                    }
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
                     let trimmed = text.trim();
                     if trimmed.len() == 64 {
                         if let Ok(bytes) = hex::decode(trimmed) {
@@ -149,6 +157,10 @@ impl PluginManager {
         };
         let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
         let msg = manifest.canonical_signing_bytes();
+        if msg.is_empty() {
+            tracing::warn!("Plugin '{}' canonical signing bytes are empty — toml serialization failed", manifest.plugin.name);
+            return false;
+        }
         vk.verify(&msg, &sig).is_ok()
     }
 
@@ -175,7 +187,7 @@ impl PluginManager {
                 tracing::warn!("Invalid plugin manifest at {:?}: {}", manifest_path, e);
                 continue;
             }
-            let wasm_path = path.join(std::path::Path::new(&manifest.plugin.wasm_path).file_name().unwrap_or_else(|| std::ffi::OsStr::new("plugin.wasm")));
+            let wasm_path = path.join(std::path::Path::new(&manifest.plugin.wasm_path).file_name().unwrap_or(std::ffi::OsStr::new("plugin.wasm")));
             let wasm_hash = match std::fs::read(&wasm_path) {
                 Ok(bytes) => {
                     use sha3::{Sha3_256, Digest};
@@ -233,17 +245,24 @@ impl PluginManager {
             };
             loaded.insert(name, plugin_entry);
         }
-        // Second pass: dependency validation.
+        // Second pass: dependency validation + circular detection.
+        let mut admitted = std::collections::HashSet::new();
         for (name, entry) in &loaded {
             let mut deps_ok = true;
             for dep in &entry.manifest.dependencies.requires {
                 if !loaded.contains_key(dep) {
-                    tracing::warn!("Plugin '{}' requires missing dependency '{}' — skipping", name, dep);
-                    deps_ok = false;
-                    break;
+                    return Err(anyhow::anyhow!("Plugin '{}' requires missing dependency '{}'", name, dep));
+                }
+                // Circular dependency check: A depends on B, B depends on A.
+                if let Some(other) = loaded.get(dep) {
+                    if other.manifest.dependencies.requires.contains(name) {
+                        return Err(anyhow::anyhow!("Circular dependency detected between '{}' and '{}'", name, dep));
+                    }
                 }
             }
+            deps_ok = true;
             if deps_ok {
+                admitted.insert(name.clone());
                 self.entries.insert(name.clone(), entry.clone());
             }
         }
@@ -366,7 +385,11 @@ impl PluginManager {
 
     /// Execute a plugin and return its output.
     pub fn execute(&self, entry: &PluginEntry, input_json: &str) -> anyhow::Result<String> {
-        let wasm_path = self.plugins_dir.join(&entry.name).join(&entry.manifest.plugin.wasm_path);
+        // Resolve wasm_path the same way load_all does: only the file_name component.
+        let wasm_name = std::path::Path::new(&entry.manifest.plugin.wasm_path)
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new("plugin.wasm"));
+        let wasm_path = self.plugins_dir.join(&entry.name).join(wasm_name);
         self.runtime.execute(&wasm_path, &entry.manifest, &entry.wasm_hash, entry.installed_role, input_json)
     }
 }
