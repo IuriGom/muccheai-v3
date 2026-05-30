@@ -81,11 +81,15 @@ impl PluginRuntime {
 
         // Restrict filesystem access to a plugin-specific sandbox directory.
         if manifest.capabilities.filesystem != "none" {
+            let safe_name = manifest.plugin.name
+                .replace('/', "_")
+                .replace("\\", "_")
+                .replace("..", "_");
             let sandbox_dir = dirs::home_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join(".muccheai")
                 .join("plugin-data")
-                .join(format!("{}-{}", &manifest.plugin.name, &wasm_hash[..8.min(wasm_hash.len())]));
+                .join(format!("{}-{}", safe_name, &wasm_hash[..8.min(wasm_hash.len())]));
             let _ = std::fs::create_dir_all(&sandbox_dir);
             let (dir_perms, file_perms) = if manifest.capabilities.filesystem == "readonly" {
                 (wasmtime_wasi::DirPerms::READ, wasmtime_wasi::FilePerms::READ)
@@ -110,6 +114,13 @@ impl PluginRuntime {
         // Add capability-gated host functions
         Self::add_host_functions(&mut linker, manifest, wasm_hash)?;
 
+        // Build resource limits before creating the store.
+        let mut limits_builder = wasmtime::StoreLimitsBuilder::new();
+        if let Some(mem_mb) = manifest.capabilities.max_memory_mb {
+            limits_builder = limits_builder.memory_size(mem_mb.saturating_mul(1024 * 1024) as usize);
+        }
+        let limits = limits_builder.build();
+
         let mut state = PluginState {
             wasi,
             http_hosts: manifest.capabilities.http_hosts.clone(),
@@ -125,9 +136,15 @@ impl PluginRuntime {
             http_counters: self.http_counters.clone(),
             plugin_name: manifest.plugin.name.clone(),
             role,
+            limits,
         };
 
         let mut store = Store::new(&self.engine, state);
+        store.limiter(|state| &mut state.limits);
+
+        // CPU limit enforcement via fuel requires Config::consume_fuel(true) at Engine creation.
+        // Since we don't control Engine config here, max_cpu_percent is best-effort via store limits.
+        // Note: actual CPU throttling would need OS-level cgroup or scheduler tweaks.
 
         let instance = linker.instantiate(&mut store, &module)?;
 
@@ -222,6 +239,18 @@ impl PluginRuntime {
                 if parsed.scheme() != "https" {
                     tracing::warn!(target: "plugin", "HTTP request blocked: non-HTTPS URL {}", url);
                     return -1;
+                }
+                // DNS rebinding guard: resolve hostname and block internal IPs.
+                if let Some(host_str) = parsed.host_str() {
+                    use std::net::ToSocketAddrs;
+                    if let Ok(addrs) = (host_str, 0u16).to_socket_addrs() {
+                        for addr in addrs {
+                            if is_internal_ip(addr.ip()) {
+                                tracing::warn!(target: "plugin", "HTTP request blocked: DNS rebinding to internal IP {} for {}", addr.ip(), url);
+                                return -1;
+                            }
+                        }
+                    }
                 }
                 let host = parsed.host_str().unwrap_or("").to_string();
                 if !allowed_hosts.iter().any(|h| h == &host) {
@@ -355,4 +384,19 @@ struct PluginState {
     http_counters: Option<Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>>,
     plugin_name: String,
     role: PluginRole,
+    limits: wasmtime::StoreLimits,
+}
+
+fn is_internal_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                || v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast()
+                || v4.is_documentation()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+                || v6.is_unicast_link_local() || v6.is_multicast()
+        }
+    }
 }

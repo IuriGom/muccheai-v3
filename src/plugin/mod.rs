@@ -396,6 +396,7 @@ impl PluginManager {
 
 fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dst)?;
+    let dst_canon = std::fs::canonicalize(dst).unwrap_or_else(|_| dst.to_path_buf());
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
@@ -405,6 +406,13 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         if meta.file_type().is_symlink() {
             tracing::warn!(target: "plugin", "Skipping symlink during plugin install: {:?}", path);
             continue;
+        }
+        // Path traversal guard: ensure the destination stays within the target directory.
+        if let Ok(dest_canon) = std::fs::canonicalize(&dest) {
+            if !dest_canon.starts_with(&dst_canon) {
+                tracing::warn!(target: "plugin", "Skipping path traversal attempt during plugin install: {:?}", path);
+                continue;
+            }
         }
         if path.is_dir() {
             copy_dir_all(&path, &dest)?;
