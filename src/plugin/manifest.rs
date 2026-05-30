@@ -40,7 +40,7 @@ pub enum PluginRole {
     Messenger,
     /// HTTP allowlist + /data + sandboxed exec + filtered env.
     Worker,
-    /// Worker + read memories + propose memories + llm_callback.
+    /// Worker + read memories + propose memories.
     Assistant,
     /// Everything but each sensitive action requires manual approval.
     Privileged,
@@ -70,10 +70,6 @@ pub struct PluginCapabilities {
     pub filesystem: String,
     #[serde(default = "default_none")]
     pub env: String,
-    #[serde(default = "default_none")]
-    pub exec: String,
-    #[serde(default)]
-    pub llm_callback: bool,
     #[serde(default = "default_storage")]
     pub storage_dir: String,
     /// Max HTTP requests per minute (default 60).
@@ -85,10 +81,12 @@ pub struct PluginCapabilities {
     /// Max HTTP request/response body size in bytes (default 1MB).
     #[serde(default = "default_max_body_size")]
     pub max_body_size: u64,
-    /// Max memory usage in MB (enforced via rlimit where possible).
+    /// Max memory usage in MB (enforced via wasmtime StoreLimits).
     #[serde(default)]
     pub max_memory_mb: Option<u64>,
     /// Max CPU percent (0-100). 0 = no limit.
+    /// Note: WASI preview1 does not expose process spawning, so this is
+    /// best-effort via instruction counting when fuel is enabled.
     #[serde(default)]
     pub max_cpu_percent: Option<u8>,
 }
@@ -203,11 +201,6 @@ impl PluginRole {
         matches!(self, Self::Messenger | Self::Worker | Self::Assistant | Self::Privileged)
     }
 
-    /// Whether this role may execute commands (even sandboxed).
-    pub fn may_exec(&self) -> bool {
-        matches!(self, Self::Worker | Self::Assistant | Self::Privileged)
-    }
-
     /// Whether this role may access structured memories.
     pub fn may_read_memories(&self) -> bool {
         matches!(self, Self::Observer | Self::Assistant | Self::Privileged)
@@ -215,11 +208,6 @@ impl PluginRole {
 
     /// Whether this role may propose new memories.
     pub fn may_propose_memory(&self) -> bool {
-        matches!(self, Self::Assistant | Self::Privileged)
-    }
-
-    /// Whether this role may trigger LLM callbacks.
-    pub fn may_llm_callback(&self) -> bool {
         matches!(self, Self::Assistant | Self::Privileged)
     }
 }
