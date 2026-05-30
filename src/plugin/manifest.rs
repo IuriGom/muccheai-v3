@@ -75,9 +75,6 @@ pub struct PluginCapabilities {
     /// Max HTTP requests per minute (default 60).
     #[serde(default = "default_rate_limit")]
     pub max_requests_per_minute: u32,
-    /// Allowed HTTP methods. Empty = all methods.
-    #[serde(default)]
-    pub http_methods: Vec<String>,
     /// Max HTTP request/response body size in bytes (default 1MB).
     #[serde(default = "default_max_body_size")]
     pub max_body_size: u64,

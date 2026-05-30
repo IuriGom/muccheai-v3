@@ -400,19 +400,31 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
-        let dest = dst.join(entry.file_name());
+        let file_name = entry.file_name();
+        // Reject suspicious file names that could escape the target directory.
+        let name = file_name.to_string_lossy();
+        if name.contains("..") || name.contains('/') || name.contains('\\') {
+            tracing::warn!(target: "plugin", "Skipping suspicious file name during plugin install: {}", name);
+            continue;
+        }
+        let dest = dst.join(&file_name);
         // Reject symlinks to prevent directory traversal / data exfiltration.
         let meta = std::fs::symlink_metadata(&path)?;
         if meta.file_type().is_symlink() {
             tracing::warn!(target: "plugin", "Skipping symlink during plugin install: {:?}", path);
             continue;
         }
-        // Path traversal guard: ensure the destination stays within the target directory.
-        if let Ok(dest_canon) = std::fs::canonicalize(&dest) {
-            if !dest_canon.starts_with(&dst_canon) {
-                tracing::warn!(target: "plugin", "Skipping path traversal attempt during plugin install: {:?}", path);
-                continue;
-            }
+        // Path traversal guard: canonicalize existing paths, or build expected path for new ones.
+        let dest_canon = if dest.exists() {
+            std::fs::canonicalize(&dest).unwrap_or_else(|_| dest.clone())
+        } else {
+            // For paths that don't exist yet, canonicalize the parent and append the file name.
+            let parent_canon = std::fs::canonicalize(dst).unwrap_or_else(|_| dst.to_path_buf());
+            parent_canon.join(&file_name)
+        };
+        if !dest_canon.starts_with(&dst_canon) {
+            tracing::warn!(target: "plugin", "Skipping path traversal attempt during plugin install: {:?}", path);
+            continue;
         }
         if path.is_dir() {
             copy_dir_all(&path, &dest)?;

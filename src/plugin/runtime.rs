@@ -17,16 +17,20 @@ pub struct PluginRuntime {
 
 impl PluginRuntime {
     pub fn new() -> Self {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
         Self {
-            engine: Engine::default(),
+            engine: Engine::new(&config).unwrap_or_else(|_| Engine::default()),
             module_cache: std::sync::Mutex::new(HashMap::new()),
             http_counters: None,
         }
     }
 
     pub fn with_counters(counters: Arc<std::sync::Mutex<HashMap<String, (u64, u64)>>>) -> Self {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
         Self {
-            engine: Engine::default(),
+            engine: Engine::new(&config).unwrap_or_else(|_| Engine::default()),
             module_cache: std::sync::Mutex::new(HashMap::new()),
             http_counters: Some(counters),
         }
@@ -142,9 +146,13 @@ impl PluginRuntime {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
 
-        // CPU limit enforcement via fuel requires Config::consume_fuel(true) at Engine creation.
-        // Since we don't control Engine config here, max_cpu_percent is best-effort via store limits.
-        // Note: actual CPU throttling would need OS-level cgroup or scheduler tweaks.
+        // Enforce CPU limits via fuel (each WASM instruction consumes 1 fuel).
+        if let Some(cpu_pct) = manifest.capabilities.max_cpu_percent {
+            if cpu_pct > 0 && cpu_pct <= 100 {
+                let budget = (10_000_000u64).saturating_mul(cpu_pct as u64);
+                store.set_fuel(budget).ok();
+            }
+        }
 
         let instance = linker.instantiate(&mut store, &module)?;
 
@@ -201,9 +209,6 @@ impl PluginRuntime {
     fn add_host_functions(linker: &mut Linker<PluginState>, manifest: &PluginManifest, wasm_hash: &str) -> anyhow::Result<()> {
         let allowed_hosts: std::sync::Arc<Vec<String>> = std::sync::Arc::new(manifest.capabilities.http_hosts.clone());
         let max_body_size = manifest.capabilities.max_body_size;
-        let allowed_methods: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
-            manifest.capabilities.http_methods.iter().map(|m| m.to_uppercase()).collect()
-        );
         let rate_limit = manifest.capabilities.max_requests_per_minute;
         let plugin_hash = wasm_hash.to_string();
         let plugin_name = manifest.plugin.name.clone();
@@ -308,13 +313,6 @@ impl PluginRuntime {
                     Some(c) => c.clone(),
                     None => return -1,
                 };
-
-                // Parse method from URL (default GET). For now host_http_get only supports GET.
-                let method = "GET";
-                if !allowed_methods.is_empty() && !allowed_methods.iter().any(|m| m == method) {
-                    tracing::warn!(target: "plugin", "HTTP method '{}' not allowed for plugin '{}'", method, plugin_name);
-                    return -1;
-                }
 
                 match client.get(&url).send() {
                     Ok(resp) => {
