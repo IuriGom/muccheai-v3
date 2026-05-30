@@ -354,8 +354,16 @@ impl PluginManager {
         // Copy source for audit trail
         let src_dest = dest.join("src");
         let src_source = source.join("src");
-        if src_source.exists() && src_source.is_dir() {
-            copy_dir_all(&src_source, &src_dest)?;
+        if src_source.exists() {
+            // Reject symlinked src directories to prevent host file exfiltration.
+            if let Ok(meta) = std::fs::symlink_metadata(&src_source) {
+                if meta.file_type().is_symlink() {
+                    return Err(anyhow::anyhow!("plugin source directory cannot be a symlink"));
+                }
+            }
+            if src_source.is_dir() {
+                copy_dir_all(&src_source, &src_dest)?;
+            }
         }
 
         self.load_all()?;
