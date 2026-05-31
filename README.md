@@ -530,6 +530,7 @@ muccheai plugin reinstall <path>
 
 and approve the new hash.
 
+---
 
 ## License
 
