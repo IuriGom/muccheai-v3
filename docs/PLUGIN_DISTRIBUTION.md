@@ -147,7 +147,7 @@ notes = "Clean, well-structured. HTTP host allowlist is exact."
 
 ### Reproducible builds
 
-The CI pipeline (GitHub Actions, Gitea CI, or your own) builds every tagged release in a **deterministic container**:
+The CI pipeline (GitHub Actions, or your own) builds every tagged release in a **deterministic container**:
 
 ```dockerfile
 FROM rust:1.80-slim
