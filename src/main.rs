@@ -26,12 +26,18 @@ mod cli;
 mod code_sandbox;
 mod config;
 mod memory_store;
+mod memory_summarizer;
+mod memory_tiers;
 mod notify;
+mod ollama_tools;
+mod pipeline;
 mod plugin;
 mod structured_memory;
 mod style;
 mod users;
 mod web;
+mod web_search;
+mod stt;
 
 use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCommands, PolicyCommands, VaultCommands};
 
@@ -735,6 +741,7 @@ fn run_demo() {
         owner_hash: String::new(),
         confidence: 1.0,
         last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
     };
     println!("  ✓ Fact stored: {} = {:?}", fact.key, fact.value);
     println!("  ✓ Merkle tree: integrity verifiable");

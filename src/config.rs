@@ -306,6 +306,30 @@ pub struct MuccheConfig {
     /// If empty (default), X-Forwarded-For is never trusted.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Enable web search integration.
+    #[serde(default)]
+    pub web_search_enabled: bool,
+    /// Web search approval mode: "disabled", "approval_required", "always_allow".
+    #[serde(default = "default_web_search_approval")]
+    pub web_search_approval: String,
+    /// Enable the speech-to-text API endpoint.
+    #[serde(default)]
+    pub stt_enabled: bool,
+    /// Path or name of the whisper model / binary to use for STT.
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+    /// Automatically summarize chat sessions when they grow long.
+    #[serde(default = "default_true")]
+    pub auto_summarize_sessions: bool,
+    /// Number of messages after which auto-summarization triggers.
+    #[serde(default = "default_summarize_after_messages")]
+    pub summarize_after_messages: usize,
+    /// Enable Ollama native tool calling (OpenAI-compatible tools format).
+    #[serde(default = "default_true")]
+    pub native_tool_calling: bool,
+    /// Enable modular processing pipelines for chat.
+    #[serde(default = "default_true")]
+    pub modular_pipelines: bool,
 }
 
 impl std::fmt::Debug for MuccheConfig {
@@ -332,6 +356,14 @@ impl std::fmt::Debug for MuccheConfig {
             .field("dual_verification", &self.dual_verification)
             .field("auto_approve_low_risk", &self.auto_approve_low_risk)
             .field("show_reasoning", &self.show_reasoning)
+            .field("web_search_enabled", &self.web_search_enabled)
+            .field("web_search_approval", &self.web_search_approval)
+            .field("stt_enabled", &self.stt_enabled)
+            .field("stt_model", &self.stt_model)
+            .field("auto_summarize_sessions", &self.auto_summarize_sessions)
+            .field("summarize_after_messages", &self.summarize_after_messages)
+            .field("native_tool_calling", &self.native_tool_calling)
+            .field("modular_pipelines", &self.modular_pipelines)
             .finish()
     }
 }
@@ -354,6 +386,18 @@ fn default_true() -> bool {
 
 fn default_web_bind_address() -> String {
     "127.0.0.1:3000".to_string()
+}
+
+fn default_summarize_after_messages() -> usize {
+    50
+}
+
+fn default_stt_model() -> String {
+    "whisper".to_string()
+}
+
+fn default_web_search_approval() -> String {
+    "approval_required".to_string()
 }
 
 impl Default for MuccheConfig {
@@ -384,6 +428,14 @@ impl Default for MuccheConfig {
             auto_approve_low_risk: false,
             show_reasoning: true,
             trusted_proxies: Vec::new(),
+            web_search_enabled: false,
+            web_search_approval: default_web_search_approval(),
+            stt_enabled: false,
+            stt_model: default_stt_model(),
+            auto_summarize_sessions: true,
+            summarize_after_messages: 50,
+            native_tool_calling: true,
+            modular_pipelines: true,
         }
     }
 }

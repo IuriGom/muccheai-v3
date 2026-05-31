@@ -11,7 +11,7 @@ use anyhow::Result;
 use ring::rand::SecureRandom;
 use serde::{Deserialize, Serialize};
 
-use muccheai_types::memory::{MemoryEntry, MemoryType, MemoryValue};
+use muccheai_types::memory::{MemoryEntry, MemoryTier, MemoryType, MemoryValue};
 use muccheai_types::Timestamp;
 
 use crate::memory_store::MemoryStore;
@@ -327,6 +327,7 @@ impl StructuredMemoryManager {
             owner_hash: String::new(),
             confidence: 1.0,
             last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)?;
@@ -353,6 +354,7 @@ impl StructuredMemoryManager {
             owner_hash: owner.to_string(),
             confidence: 1.0,
             last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -377,6 +379,7 @@ impl StructuredMemoryManager {
             owner_hash: owner.to_string(),
             confidence: 1.0,
             last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
         };
         entry.content_hash = entry.compute_hash();
         self.store.store(&entry)
@@ -881,6 +884,7 @@ mod tests {
             owner_hash: String::new(),
             confidence: 1.0,
             last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
         };
 
         let id = mgr.propose(entry, "User mentioned their birthday").unwrap();

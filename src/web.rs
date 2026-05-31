@@ -33,12 +33,13 @@ use muccheai_mcp::{McpClient, McpTransport};
 use muccheai_mcp::types::McpTool;
 use muccheai_types::audit::{AuditQuery, AuditResult, SecurityEvent};
 use muccheai_types::ActionProposal;
-use muccheai_types::memory::{MemoryEntry, MemoryType, MemoryValue};
+use muccheai_types::memory::{MemoryEntry, MemoryTier, MemoryType, MemoryValue};
 use muccheai_types::Timestamp;
 
 use crate::structured_memory::StructuredMemoryManager;
 
 use crate::config::{AgentConfig, MuccheConfig, Persona};
+use crate::web_search::SearchResult as WebSearchResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -1343,13 +1344,19 @@ async fn process_chat(
     let mut last_err = String::new();
     {
         let config = state.config.lock().await;
+        let native_tool_calling = config.native_tool_calling;
         let agents_to_try: Vec<_> = std::iter::once(ctx.agent.clone())
             .chain(config.agents.iter().filter(|a| a.name != ctx.agent.name).cloned())
             .collect();
         drop(config);
         for fallback_agent in &agents_to_try {
             let provider = fallback_agent.provider.as_str();
-            match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref()).await {
+            let tool_defs = if native_tool_calling {
+                crate::ollama_tools::build_tool_definitions(&[], &[])
+            } else {
+                Vec::new()
+            };
+            match call_provider(fallback_agent, provider, &ctx.system_prompt, &req.message, ctx.temperature, ctx.max_tokens, &ctx.history, req.image_b64.as_deref(), tool_defs).await {
                 Ok(t) => {
                     text = t;
                     break;
@@ -1383,6 +1390,7 @@ async fn process_chat(
                 owner_hash: owner.clone(),
                 confidence: 1.0,
                 last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
             };
             if let Err(e) = sm.propose(entry, &format!("Suggested memory: {}", key)) {
                 tracing::warn!("Failed to propose memory: {}", e);
@@ -1510,6 +1518,35 @@ async fn process_chat(
         while sessions[idx].messages.len() > MAX_MESSAGES_PER_SESSION {
             sessions[idx].messages.remove(0);
         }
+
+        // Auto-summarize long sessions
+        let auto_summarize = {
+            let cfg = state.config.lock().await;
+            cfg.auto_summarize_sessions
+                && sessions[idx].messages.len() >= cfg.summarize_after_messages
+                && sessions[idx].messages.len() % cfg.summarize_after_messages == 0
+        };
+        if auto_summarize {
+            let summary = crate::memory_summarizer::summarize(&sessions[idx]);
+            let sm = state.structured_memory.lock().await;
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "session_id".to_string(),
+                serde_json::Value::String(session_id.clone()),
+            );
+            meta.insert(
+                "summary".to_string(),
+                serde_json::Value::String(summary.clone()),
+            );
+            let _ = sm.log_task("Session auto-summarized", meta);
+            drop(sm);
+            sessions[idx].messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: format!("[Auto-Summary] {}", summary),
+                timestamp: Timestamp::now().0,
+            });
+        }
+
         sessions[idx].session_secret.clone()
     } else {
         let owner_hash = get_session_owner(state, headers).await.unwrap_or_default();
@@ -1682,6 +1719,7 @@ async fn call_provider(
     max_tokens: u32,
     history: &[ChatMessage],
     image_b64: Option<&str>,
+    tools: Vec<crate::ollama_tools::ToolDefinition>,
 ) -> Result<String, String> {
     match provider {
         "openai" => {
@@ -1879,7 +1917,7 @@ async fn call_provider(
             } else {
                 messages.push(serde_json::json!({"role": "user", "content": user_message}));
             }
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "model": agent.model,
                 "messages": messages,
                 "stream": false,
@@ -1889,6 +1927,9 @@ async fn call_provider(
                     "num_predict": max_tokens
                 }
             });
+            if !tools.is_empty() {
+                body["tools"] = serde_json::json!(tools);
+            }
 
             // First, quickly check if Ollama is responsive and model exists
             let tags_url = format!("{}/api/tags", base_url.trim_end_matches('/'));
@@ -3151,6 +3192,7 @@ async fn store_memory(
         owner_hash: owner.clone(),
         confidence: 1.0,
         last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
     };
 
     match sm.propose(entry, "User-initiated memory save") {
@@ -3253,6 +3295,7 @@ async fn propose_memory(
         owner_hash: owner.clone(),
         confidence: 1.0,
         last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
     };
 
     match sm.propose(entry, &req.justification) {
@@ -3813,6 +3856,78 @@ async fn upload_file(
     Ok(Json(serde_json::json!({ "success": true, "filename": safe_filename })))
 }
 
+/// Speech-to-Text endpoint.
+/// Accepts a multipart form with an `audio` file, transcribes it, and returns the text.
+async fn stt(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if is_duress_session(&state, &headers).await {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Duress session"})),
+        ));
+    }
+
+    let config = state.config.lock().await;
+    if !config.stt_enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "STT is disabled"})),
+        ));
+    }
+    drop(config);
+
+    let mut audio_bytes: Option<Vec<u8>> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        tracing::warn!("STT multipart error: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid multipart form"})),
+        )
+    })? {
+        if field.name() == Some("audio") {
+            let data = field.bytes().await.map_err(|e| {
+                tracing::warn!("STT field read error: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Failed to read audio field"})),
+                )
+            })?;
+            if data.len() > 10 * 1024 * 1024 {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(serde_json::json!({"error": "Audio file too large (max 10 MB)"})),
+                ));
+            }
+            audio_bytes = Some(data.to_vec());
+            break;
+        }
+    }
+
+    let bytes = match audio_bytes {
+        Some(b) => b,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing 'audio' field"})),
+            ));
+        }
+    };
+
+    match crate::stt::transcribe(bytes).await {
+        Ok(text) => Ok(Json(serde_json::json!({ "transcription": text }))),
+        Err(e) => {
+            tracing::warn!("STT transcription error: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Transcription failed: {}", e)})),
+            ))
+        }
+    }
+}
+
 /// Get CSRF token for web form protection.
 async fn get_csrf(
     State(state): State<Arc<AppState>>,
@@ -3935,6 +4050,31 @@ async fn get_version() -> Json<VersionResponse> {
     Json(VersionResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
+}
+
+/// Web search request.
+#[derive(Debug, Deserialize)]
+struct WebSearchRequest {
+    query: String,
+    max_results: Option<usize>,
+}
+
+/// Web search handler.
+async fn web_search(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WebSearchRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let config = state.config.lock().await;
+    if !config.web_search_enabled {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    drop(config);
+
+    let results = crate::web_search::search_duckduckgo(&req.query, req.max_results.unwrap_or(5))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({ "results": results })))
 }
 
 /// Get current model.
@@ -4130,6 +4270,35 @@ async fn update_session_title(
         StatusCode::OK
     } else {
         StatusCode::NOT_FOUND
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SummarizeResponse {
+    summary: String,
+}
+
+async fn summarize_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<SummarizeResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let secret = headers
+        .get("x-session-secret")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let sessions = state.chat_sessions.lock().await;
+    if let Some(session) = sessions.iter().find(|s| {
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+    }) {
+        let summary = crate::memory_summarizer::summarize(session);
+        Ok(Json(SummarizeResponse { summary }))
+    } else {
+        Err(StatusCode::NOT_FOUND)
     }
 }
 
@@ -4367,6 +4536,7 @@ async fn restore_memories(
             owner_hash: owner.clone(),
             confidence: 1.0,
             last_accessed: Timestamp(entry.created_at),
+            tier: MemoryTier::default(),
         };
         if sm.store(&mem_entry).is_ok() {
             restored += 1;
@@ -4560,6 +4730,7 @@ async fn chat_stream(
                     owner_hash: owner.clone(),
                     confidence: 1.0,
                     last_accessed: Timestamp::now(),
+            tier: MemoryTier::default(),
                 };
                 let _ = sm.propose(entry, &format!("Suggested memory: {}", key));
             }
@@ -4627,6 +4798,35 @@ async fn chat_stream(
                 sessions[idx].messages.push(ChatMessage { role: "user".to_string(), content: req.message.clone(), timestamp });
                 sessions[idx].messages.push(ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 });
                 while sessions[idx].messages.len() > MAX_MESSAGES_PER_SESSION { sessions[idx].messages.remove(0); }
+
+                // Auto-summarize long sessions
+                let auto_summarize = {
+                    let cfg = state.config.lock().await;
+                    cfg.auto_summarize_sessions
+                        && sessions[idx].messages.len() >= cfg.summarize_after_messages
+                        && sessions[idx].messages.len() % cfg.summarize_after_messages == 0
+                };
+                if auto_summarize {
+                    let summary = crate::memory_summarizer::summarize(&sessions[idx]);
+                    let sm = state.structured_memory.lock().await;
+                    let mut meta = serde_json::Map::new();
+                    meta.insert(
+                        "session_id".to_string(),
+                        serde_json::Value::String(session_id.clone()),
+                    );
+                    meta.insert(
+                        "summary".to_string(),
+                        serde_json::Value::String(summary.clone()),
+                    );
+                    let _ = sm.log_task("Session auto-summarized", meta);
+                    drop(sm);
+                    sessions[idx].messages.push(ChatMessage {
+                        role: "system".to_string(),
+                        content: format!("[Auto-Summary] {}", summary),
+                        timestamp: Timestamp::now().0,
+                    });
+                }
+
                 sessions[idx].session_secret.clone()
             } else { String::new() }
         } else {
@@ -6076,6 +6276,72 @@ async fn execute_code_block(
     }
 }
 
+#[derive(Debug, Serialize)]
+struct RecomputeTiersResponse {
+    changed: usize,
+}
+
+async fn recompute_memory_tiers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<RecomputeTiersResponse>, StatusCode> {
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    if owner.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let mut mem = state.structured_memory.lock().await;
+    let now = muccheai_types::Timestamp::now();
+    let mut entries = mem.list_all_by_owner(&owner);
+    let changed = crate::memory_tiers::recompute_tiers(&mut entries, now);
+    for entry in entries {
+        let _ = mem.store(&entry);
+    }
+    Ok(Json(RecomputeTiersResponse { changed }))
+}
+
+#[derive(Debug, Deserialize)]
+struct RunPipelineRequest {
+    system_prompt: String,
+    user_message: String,
+    memories: Vec<String>,
+    tools: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunPipelineResponse {
+    system_prompt: String,
+    user_message: String,
+    memories: Vec<String>,
+    tools: Vec<String>,
+    audit_log: Vec<crate::pipeline::AuditLogEntry>,
+}
+
+async fn run_pipeline(
+    State(_state): State<Arc<AppState>>,
+    Json(req): Json<RunPipelineRequest>,
+) -> Json<RunPipelineResponse> {
+    let mut pipeline = crate::pipeline::Pipeline::new();
+    pipeline.add(Box::new(crate::pipeline::InjectSystemPrompt { prompt: req.system_prompt.clone() }));
+    pipeline.add(Box::new(crate::pipeline::InjectMemories { memories: req.memories.clone() }));
+    pipeline.add(Box::new(crate::pipeline::DiscoverTools { tools: req.tools.clone() }));
+    pipeline.add(Box::new(crate::pipeline::FormatResponse));
+    let mut ctx = crate::pipeline::PipelineContext {
+        system_prompt: req.system_prompt.clone(),
+        user_message: req.user_message.clone(),
+        memories: req.memories.clone(),
+        tools: req.tools.clone(),
+        ..Default::default()
+    };
+    let _ = pipeline.run(&mut ctx);
+    Json(RunPipelineResponse {
+        system_prompt: ctx.system_prompt,
+        user_message: ctx.user_message,
+        memories: ctx.memories,
+        tools: ctx.tools,
+        audit_log: pipeline.audit_log,
+    })
+}
+
 /// ─── Router ─────────────────────────────────────────────────────────
 pub fn router(state: Arc<AppState>) -> Router {
     // CORS: default to localhost dev origins, override via MUCCHEAI_CORS_ORIGINS env var.
@@ -6215,6 +6481,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sessions/:id", get(get_chat_session))
         .route("/sessions/:id/export", get(export_chat_session))
         .route("/sessions/:id/title", post(update_session_title))
+        .route("/sessions/:id/summarize", post(summarize_session))
         .route("/sessions/:id/branch", post(branch_session))
         .route("/sessions/:id/share", post(share_session))
         .route("/sessions/:id", delete(delete_chat_session))
@@ -6242,12 +6509,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sessions/:id/digest", get(get_session_digest))
         .route("/sessions/:id/encrypt-share", post(create_encrypted_share))
         .route("/upload", post(upload_file))
+        .route("/stt", post(stt))
         .route("/mcp/servers", get(list_mcp_servers))
         .route("/mcp/servers", post(add_mcp_server))
         .route("/mcp/servers/:name", delete(delete_mcp_server))
         .route("/mcp/servers/:name/test", post(test_mcp_server))
         .route("/sandbox/detect", post(detect_code_blocks))
         .route("/sandbox/execute", post(execute_code_block))
+        .route("/web-search", post(web_search))
+        .route("/memory/recompute-tiers", post(recompute_memory_tiers))
+        .route("/pipeline/run", post(run_pipeline))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
