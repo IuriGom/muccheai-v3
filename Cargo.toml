@@ -79,6 +79,9 @@ zeroize = { workspace = true }
 sha3 = { workspace = true }
 hmac = { workspace = true }
 which = "6"
+regex = "1.10"
+urlencoding = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
