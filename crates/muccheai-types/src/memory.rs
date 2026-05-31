@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::Timestamp;
 
+/// Memory tier — STM / MTM / LTM hierarchy
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum MemoryTier {
+    /// Short-Term Memory: active session context, ephemeral
+    #[default]
+    ShortTerm,
+    /// Medium-Term Memory: recent sessions, summaries, lasts days-weeks
+    MediumTerm,
+    /// Long-Term Memory: durable facts, preferences, knowledge graph
+    LongTerm,
+}
+
 /// Types of structured memory
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MemoryType {
@@ -46,6 +58,9 @@ pub struct MemoryEntry {
     /// Last time this memory was accessed or reinforced.
     #[serde(default)]
     pub last_accessed: Timestamp,
+    /// Memory tier — STM / MTM / LTM
+    #[serde(default)]
+    pub tier: MemoryTier,
 }
 
 fn default_confidence() -> f32 {
