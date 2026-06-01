@@ -1,0 +1,62 @@
+# Weather Plugin for MuccheAI
+# This is a real example. Build it, install it, and it works.
+
+[plugin]
+name = "weather"
+version = "0.1.0"
+author = "Your Name <you@example.com>"
+description = "Get real-time weather for any city using wttr.in"
+license = "MIT"
+
+# The runtime loads this WASM file relative to the plugin directory
+wasm_path = "target/wasm32-wasi/release/weather_plugin.wasm"
+
+# Each plugin gets its own isolated directory under ~/.muccheai/plugins/{name}/
+# The runtime pre-creates this before calling any plugin function.
+storage_dir = "data"
+
+[capabilities]
+# --- HTTP ---
+# Only these exact hosts are reachable. No wildcards. Every request is logged.
+# The runtime blocks any request to a host not listed here.
+http_hosts = ["wttr.in"]
+
+# --- Filesystem ---
+# NONE means the plugin cannot read or write any host path.
+# Only the plugin's own storage_dir (above) is writable.
+filesystem = "none"
+
+# --- Environment ---
+# NONE means no access to host env vars.
+env = "none"
+
+# --- Execution ---
+# NONE means no spawning subprocesses.
+exec = "none"
+
+# --- LLM ---
+# If true, the plugin may call back into the host LLM with a prompt.
+# The host controls rate limits and may deny the call.
+llm_callback = false
+
+[triggers]
+# The plugin is activated when the user's message contains any of these keywords.
+# Multiple plugins can match; they are called in parallel, results merged.
+keywords = ["weather", "temp", "temperature", "forecast"]
+
+# Optional: only activate when the user explicitly @-mentions the plugin.
+# If true, keywords are ignored and only @weather triggers it.
+require_mention = false
+
+[output]
+# How the plugin result is injected into the conversation.
+# "prefix"  = insert before the user's message (system context)
+# "append"  = append after the LLM response (citation style)
+# "replace" = use the plugin output as the LLM response directly
+mode = "prefix"
+
+# Optional template for formatting the injected content.
+# {{output}} is replaced with the plugin's JSON result.
+template = """The following weather data was retrieved for the user:
+{{output}}
+Use it to answer their question."""
