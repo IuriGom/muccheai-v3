@@ -42,7 +42,8 @@ mod stt;
 use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCommands, PolicyCommands, VaultCommands};
 
 #[tokio::main]
-async fn main() {
+async // entry point
+fn main() {
     let password_flag = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".muccheai")
