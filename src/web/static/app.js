@@ -138,6 +138,13 @@ function addMessage(text, isUser) {
   div.dataset.rawText = text;
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+  const reactions = !isUser
+    ? `<div class="msg-reactions">
+        <button class="msg-reaction-btn" data-reaction="up" title="Helpful">👍</button>
+        <button class="msg-reaction-btn" data-reaction="down" title="Not helpful">👎</button>
+       </div>`
+    : '';
+
   const actions = isUser
     ? `<div class="msg-actions">
         <button class="msg-action-btn" data-action="edit" title="Edit">✏️</button>
@@ -1078,6 +1085,19 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast('No user message to regenerate from', 'error');
       }
     }
+  });
+
+  // Message reaction buttons (delegated)
+  document.getElementById('messages').addEventListener('click', e => {
+    const btn = e.target.closest('.msg-reaction-btn');
+    if (!btn) return;
+    const reaction = btn.dataset.reaction;
+    const msgEl = btn.closest('.message');
+    if (!msgEl) return;
+    // Toggle: only one reaction active at a time per message
+    msgEl.querySelectorAll('.msg-reaction-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    showToast(reaction === 'up' ? 'Thanks for the feedback!' : 'Thanks, we\'ll improve.', 'info');
   });
 
   // Restore title and favicon when tab becomes visible
