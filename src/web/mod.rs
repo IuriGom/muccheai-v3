@@ -17,6 +17,23 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use base64::Engine;
+
+/// Sanitize a string for safe use in a filename or Content-Disposition header.
+/// Removes all control chars, path separators, and non-printable characters.
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_start_matches('.')
+        .trim_end_matches('.')
+        .to_string()
+}
 use chrono::{Timelike, Datelike};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
@@ -606,6 +623,10 @@ struct AgentPreset {
     description: String,
     system_prompt: String,
 }
+
+const MAX_FOLDER_LEN: usize = 100;
+const MAX_TAG_LEN: usize = 50;
+const MAX_TAGS: usize = 20;
 
 #[derive(Debug, Deserialize)]
 struct UpdateFolderRequest {
@@ -2447,7 +2468,16 @@ async fn process_mcp_tool_calls(
 
             match cached {
                 Some(ct) => {
-                    let args = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
+                    let args = match serde_json::from_str(args_json) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("MCP tool '{}' JSON parse failed: {}", tool_name, e);
+                            results.push(format!("{}: Invalid JSON args — {}", tool_name, e));
+                            cleaned.push_str(&format!("\n[Tool '{}' rejected: invalid JSON args]\n", tool_name));
+                            rest = &after_open[close_idx + 14..];
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = validate_mcp_schema(&ct.tool.input_schema, &args) {
                         let mut policy = state.policy.lock().await;
@@ -2633,7 +2663,16 @@ async fn process_custom_tool_calls(
                     // Parse LLM-provided args and substitute into templates.
                     // SECURITY: single-pass substitution to prevent recursive template injection
                     // (e.g. a substituted value containing another placeholder).
-                    let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
+                    let args: serde_json::Value = match serde_json::from_str(args_json) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("Custom tool '{}' JSON parse failed: {}", tool_name, e);
+                            results.push(format!("{}: Invalid JSON args — {}", tool_name, e));
+                            cleaned.push_str(&format!("\n[Custom tool '{}' blocked: invalid JSON args]\n", tool_name));
+                            rest = &after_open[close_idx + 14..];
+                            continue;
+                        }
+                    };
                     let map = match &args {
                         serde_json::Value::Object(m) => m.clone(),
                         _ => serde_json::Map::new(),
@@ -4061,7 +4100,7 @@ async fn export_chat_session(
     let response = axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/markdown; charset=utf-8")
-        .header("Content-Disposition", format!("attachment; filename=\"{}-chat.md\"", id.replace('"', "_").replace('\n', "_").replace('\r', "_")))
+        .header("Content-Disposition", format!("attachment; filename=\"{}-chat.md\"", sanitize_filename(&id)))
         .body(axum::body::Body::from(markdown))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response)
@@ -5307,14 +5346,16 @@ async fn post_collaborative_message(
             memories_used: None,
         });
     }
-    let _owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let found = sessions.iter().any(|s| {
-        s.id == id && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        s.id == id
+            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
     });
     if !found {
         return Json(ChatResponse {
@@ -5781,7 +5822,14 @@ async fn update_session_folder(
             && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     match found {
-        Some(s) => { s.folder = payload.folder; Ok(StatusCode::OK) }
+        Some(s) => {
+            let folder = payload.folder.trim();
+            if folder.len() > MAX_FOLDER_LEN {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            s.folder = folder.to_string();
+            Ok(StatusCode::OK)
+        }
         None => Err(StatusCode::FORBIDDEN),
     }
 }
@@ -5803,6 +5851,17 @@ async fn update_session_tags(
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
+
+    // Validate tags before acquiring lock
+    if payload.tags.len() > MAX_TAGS {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    for tag in &payload.tags {
+        if tag.len() > MAX_TAG_LEN {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
     let mut sessions = state.chat_sessions.lock().await;
     let found = sessions.iter_mut().find(|s| {
         s.id == id

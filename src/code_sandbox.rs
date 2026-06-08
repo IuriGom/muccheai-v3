@@ -78,7 +78,10 @@ pub async fn execute_code_block(block: &CodeBlock) -> anyhow::Result<ExecutionRe
             return run_docker(
                 "rust:1.78-slim",
                 "bash",
-                &["-c", &format!("printf '%s' '{}' > /tmp/main.rs && rustc /tmp/main.rs -o /tmp/main && /tmp/main", escape_single_quotes(&block.code))],
+                &["-c", &format!(
+                    "echo '{}' | base64 -d > /tmp/main.rs && rustc /tmp/main.rs -o /tmp/main && /tmp/main",
+                    encode_code_base64(&block.code)
+                )],
                 &lang,
                 &["--tmpfs", "/tmp:rw,noexec,nosuid,size=100m"],
             )
@@ -231,8 +234,11 @@ async fn capped_output(
     })
 }
 
-fn escape_single_quotes(s: &str) -> String {
-    s.replace('\'', "'\"'\"'")
+/// Encode user code as base64 and decode inside the container.
+/// Replaces shell-escaping to prevent injection via backslashes, null bytes, etc.
+fn encode_code_base64(code: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(code.as_bytes())
 }
 
 #[cfg(test)]
