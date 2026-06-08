@@ -114,6 +114,11 @@ function switchTab(tabId) {
 let currentStreamEl = null;
 let streamInterval = null;
 
+function shouldAutoScroll(container) {
+  const threshold = 100; // pixels from bottom
+  return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+}
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -121,10 +126,11 @@ function addMessage(text, isUser) {
 
   const div = document.createElement('div');
   div.className = 'message ' + (isUser ? 'user' : 'ai');
-  // Simple markdown-ish formatting
   div.innerHTML = formatMarkdown(text);
   container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+  if (shouldAutoScroll(container)) {
+    container.scrollTop = container.scrollHeight;
+  }
   return div;
 }
 
