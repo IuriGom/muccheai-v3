@@ -1408,6 +1408,18 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('Generation stopped', 'info');
   });
 
+  // Prompt suggestions
+  document.getElementById('messages').addEventListener('click', e => {
+    const chip = e.target.closest('.prompt-chip');
+    if (!chip) return;
+    const input = document.getElementById('input');
+    if (input) {
+      input.value = chip.dataset.prompt;
+      input.focus();
+      input.dispatchEvent(new Event('input'));
+    }
+  });
+
   // Hide splash screen after a brief delay so fonts/styles settle
   setTimeout(() => {
     const splash = document.getElementById('splashScreen');
