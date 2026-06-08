@@ -276,6 +276,30 @@ const MOCK_MEMORIES = [
   { type: 'Preference', key: 'language', value: 'English' },
   { type: 'Fact', key: 'timezone', value: 'UTC-3' },
 ];
+const MOCK_CHAT_HISTORY = [
+  { id: '1', title: 'Rust workspace setup', date: '2h ago' },
+  { id: '2', title: 'Theme system design', date: '5h ago' },
+  { id: '3', title: 'Argon2 params review', date: '1d ago' },
+  { id: '4', title: 'MCP server integration', date: '2d ago' },
+];
+
+function renderChatHistory() {
+  const list = document.getElementById('chatHistoryList');
+  if (!list) return;
+  list.innerHTML = MOCK_CHAT_HISTORY.map(h => `
+    <a href="#" class="nav-item chat-history-item" data-session="${h.id}" style="font-size:0.8rem;padding:6px 10px;">
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${h.title}</span>
+      <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;white-space:nowrap;">${h.date}</span>
+    </a>
+  `).join('');
+  list.querySelectorAll('.chat-history-item').forEach(item => {
+    item.addEventListener('click', e => {
+      e.preventDefault();
+      localStorage.setItem('session_id', item.dataset.session);
+      document.getElementById('messages').innerHTML = `<div class="message ai">Loaded session: <strong>${item.querySelector('span').textContent}</strong></div>`;
+    });
+  });
+}
 
 function renderPersonas() {
   const grid = document.getElementById('personaGrid');
@@ -343,6 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderMcp();
   renderStatus();
   renderMemories();
+  renderChatHistory();
 
   // Update version badge
   fetch(`${API}/api/status`).then(r => r.ok ? r.json() : null).then(data => {
