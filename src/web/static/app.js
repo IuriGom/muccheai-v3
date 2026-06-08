@@ -119,6 +119,13 @@ function shouldAutoScroll(container) {
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
 }
 
+function updateScrollButton() {
+  const container = document.getElementById('messages');
+  const btn = document.getElementById('scrollBottomBtn');
+  if (!container || !btn) return;
+  btn.classList.toggle('visible', !shouldAutoScroll(container));
+}
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -583,17 +590,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // Chat
   const sendBtn = document.getElementById('send');
   const chatInput = document.getElementById('input');
+  const messagesContainer = document.getElementById('messages');
+  const scrollBottomBtn = document.getElementById('scrollBottomBtn');
   if (sendBtn) sendBtn.addEventListener('click', sendChatStream);
   if (chatInput) {
-    // Restore draft
     const draft = localStorage.getItem('chat_draft');
     if (draft) chatInput.value = draft;
-    // Auto-save draft
     chatInput.addEventListener('input', () => {
       localStorage.setItem('chat_draft', chatInput.value);
     });
     chatInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }
+    });
+  }
+  if (messagesContainer) {
+    messagesContainer.addEventListener('scroll', updateScrollButton);
+  }
+  if (scrollBottomBtn) {
+    scrollBottomBtn.addEventListener('click', () => {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      updateScrollButton();
     });
   }
 

@@ -174,3 +174,31 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 #researchResult { background: var(--bg-elevated); border: 1px solid var(--border); padding: 12px; }
 @media (max-width: 768px) { .sidebar { width: 40px; } .page-container { display: none; } }
+
+.scroll-bottom-btn {
+  position: absolute;
+  bottom: 80px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 1.2rem;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+.scroll-bottom-btn.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.scroll-bottom-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
