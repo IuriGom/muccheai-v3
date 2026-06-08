@@ -91,7 +91,7 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 8px;
 }
-.chat-input input[type="text"] {
+.chat-input textarea {
   flex: 1;
   background: transparent;
   border: none;

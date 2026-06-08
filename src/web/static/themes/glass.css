@@ -116,7 +116,7 @@ body {
   border-radius: 24px;
   padding: 12px 20px;
 }
-.chat-input input[type="text"] {
+.chat-input textarea {
   flex: 1;
   background: transparent;
   border: none;
@@ -124,7 +124,7 @@ body {
   font-size: 0.95rem;
   outline: none;
 }
-.chat-input input::placeholder { color: rgba(255,255,255,0.5); }
+.chat-input textarea::placeholder { color: rgba(255,255,255,0.5); }
 .chat-input button {
   width: 44px;
   height: 44px;

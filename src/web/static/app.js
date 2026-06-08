@@ -605,6 +605,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (draft) chatInput.value = draft;
     chatInput.addEventListener('input', () => {
       localStorage.setItem('chat_draft', chatInput.value);
+      // Auto-resize textarea
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
     });
     chatInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }

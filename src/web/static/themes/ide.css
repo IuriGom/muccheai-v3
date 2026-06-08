@@ -112,7 +112,7 @@ body {
   gap: 8px;
   align-items: center;
 }
-.chat-input input[type="text"] {
+.chat-input textarea {
   flex: 1;
   background: var(--bg-input);
   border: 1px solid var(--border);

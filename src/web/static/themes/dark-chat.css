@@ -294,7 +294,7 @@ body {
 
 .chat-input:focus-within { border-color: var(--accent); }
 
-.chat-input input[type="text"] {
+.chat-input textarea {
   flex: 1;
   background: transparent;
   border: none;
@@ -302,9 +302,13 @@ body {
   font-size: 0.95rem;
   outline: none;
   font-family: inherit;
+  resize: none;
+  max-height: 120px;
+  line-height: 1.4;
+  padding: 4px 0;
 }
 
-.chat-input input::placeholder { color: var(--text-dim); }
+.chat-input textarea::placeholder { color: var(--text-dim); }
 
 .chat-input button {
   width: 36px;
