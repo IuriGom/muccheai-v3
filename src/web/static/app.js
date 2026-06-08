@@ -202,18 +202,102 @@ function updateFaviconBadge(count) {
 }
 
 function formatMarkdown(text) {
-  return escapeHtml(text)
+  // Process code blocks first so inline rules don't touch them
+  const codeBlocks = [];
+  text = text.replace(/```([\s\S]*?)```/g, (match, code) => {
+    const placeholder = '\x00CODEBLOCK' + codeBlocks.length + '\x00';
+    const id = 'cb-' + (++codeBlockId);
+    codeBlockMap.set(id, code.trim());
+    codeBlocks.push(`<div style="position:relative;margin:8px 0;">
+      <button class="btn btn-secondary copy-code-btn" data-id="${id}" style="position:absolute;top:6px;right:6px;padding:4px 10px;font-size:0.75rem;opacity:0;transition:opacity 0.2s;">Copy</button>
+      <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code>${escapeHtml(code.trim())}</code></pre>
+    </div>`);
+    return placeholder;
+  });
+
+  // Escape remaining HTML
+  let html = escapeHtml(text);
+
+  // Inline formatting
+  html = html
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.85em;">$1</code>')
-    .replace(/```([\s\S]*?)```/g, (match, code) => {
-      const id = 'cb-' + (++codeBlockId);
-      codeBlockMap.set(id, code.trim());
-      return `<div style="position:relative;margin:8px 0;">
-        <button class="btn btn-secondary copy-code-btn" data-id="${id}" style="position:absolute;top:6px;right:6px;padding:4px 10px;font-size:0.75rem;opacity:0;transition:opacity 0.2s;">Copy</button>
-        <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code>${escapeHtml(code.trim())}</code></pre>
-      </div>`;
-    });
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.85em;">$1</code>');
+
+  // Block-level formatting (process line by line)
+  const lines = html.split('\n');
+  const out = [];
+  let inList = false;
+  let listType = null;
+
+  function closeList() {
+    if (!inList) return;
+    out.push(listType === 'ol' ? '</ol>' : '</ul>');
+    inList = false;
+    listType = null;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Code block placeholders pass through untouched
+    if (line.includes('\x00CODEBLOCK')) {
+      closeList();
+      out.push(line);
+      continue;
+    }
+
+    // Headers
+    if (line.startsWith('### ')) { closeList(); out.push('<h3 style="font-size:1.05rem;font-weight:600;margin:12px 0 6px;">' + line.slice(4) + '</h3>'); continue; }
+    if (line.startsWith('## ')) { closeList(); out.push('<h2 style="font-size:1.15rem;font-weight:600;margin:14px 0 8px;">' + line.slice(3) + '</h2>'); continue; }
+    if (line.startsWith('# ')) { closeList(); out.push('<h1 style="font-size:1.3rem;font-weight:700;margin:16px 0 10px;">' + line.slice(2) + '</h1>'); continue; }
+
+    // Horizontal rule
+    if (/^---+\s*$/.test(line)) { closeList(); out.push('<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;opacity:0.4;">'); continue; }
+
+    // Blockquote
+    if (line.startsWith('> ')) { closeList(); out.push('<blockquote style="border-left:3px solid var(--accent);padding-left:10px;margin:8px 0;color:var(--text-dim);font-style:italic;">' + line.slice(2) + '</blockquote>'); continue; }
+
+    // Unordered list
+    const ulMatch = line.match(/^(\s*)[-\*]\s+(.*)$/);
+    if (ulMatch) {
+      if (!inList || listType !== 'ul') { closeList(); out.push('<ul style="margin:6px 0 6px 18px;">'); inList = true; listType = 'ul'; }
+      out.push('<li>' + ulMatch[2] + '</li>');
+      continue;
+    }
+
+    // Ordered list
+    const olMatch = line.match(/^(\s*)\d+\.\s+(.*)$/);
+    if (olMatch) {
+      if (!inList || listType !== 'ol') { closeList(); out.push('<ol style="margin:6px 0 6px 18px;">'); inList = true; listType = 'ol'; }
+      out.push('<li>' + olMatch[2] + '</li>');
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      closeList();
+      out.push('<br>');
+      continue;
+    }
+
+    // Regular paragraph
+    closeList();
+    out.push('<p style="margin:4px 0;">' + line + '</p>');
+  }
+  closeList();
+
+  html = out.join('\n');
+
+  // Restore code blocks
+  codeBlocks.forEach((block, i) => {
+    html = html.replace('\x00CODEBLOCK' + i + '\x00', block);
+  });
+
+  // Links (must be after HTML escape, but we need to be careful)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline;">$1</a>');
+
+  return html;
 }
 
 function escapeHtml(text) {
