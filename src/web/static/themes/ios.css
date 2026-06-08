@@ -362,3 +362,21 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
   text-align: center;
 }
 .shortcut-row span { color: var(--text-dim); font-size: 0.9rem; margin-left: auto; }
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  transition: background 0.3s ease;
+}
+.connection-status.online .status-dot { background: #22c55e; }
+.connection-status.offline .status-dot { background: #ef4444; }

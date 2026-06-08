@@ -1314,6 +1314,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Backend connection status indicator
+  async function checkConnection() {
+    const statusEl = document.getElementById('connectionStatus');
+    if (!statusEl) return;
+    try {
+      const res = await fetch(API + '/api/status', { method: 'GET', signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        statusEl.className = 'connection-status online';
+        statusEl.querySelector('.status-label').textContent = 'Online';
+        statusEl.title = 'Backend connected';
+      } else {
+        throw new Error('Status ' + res.status);
+      }
+    } catch (e) {
+      statusEl.className = 'connection-status offline';
+      statusEl.querySelector('.status-label').textContent = 'Offline';
+      statusEl.title = 'Backend unreachable — check if server is running';
+    }
+  }
+  checkConnection();
+  setInterval(checkConnection, 30000);
+
   // Hide splash screen after a brief delay so fonts/styles settle
   setTimeout(() => {
     const splash = document.getElementById('splashScreen');
