@@ -476,6 +476,20 @@ MuccheAI ships with 5 built-in UI themes. The theme system is entirely CSS-varia
 3. Add a card to the theme picker in `index.html`
 4. Register the theme name in `app.js` (no code change needed if the card uses `data-theme`)
 
+### Frontend Features
+
+| Feature | Description |
+|---------|-------------|
+| **5 Themes** | Dark Chat, Terminal, Glass, iOS, IDE — switch anytime |
+| **Live Theme Preview** | Hover over theme cards to preview before selecting |
+| **Real SSE Streaming** | AI responses stream in real-time via Server-Sent Events |
+| **Smart Auto-scroll** | Only scrolls if you're near the bottom; preserves reading position |
+| **Scroll-to-bottom** | Floating button appears when you scroll up |
+| **Copy Code** | Hover any code block to reveal a copy button |
+| **Keyboard Shortcuts** | `Ctrl/Cmd+K` search, `+N` new chat, `+,` settings, `+Shift+P` themes |
+| **Draft Auto-save** | Unsent messages survive page reloads |
+| **Offline Detection** | Banner appears when backend is unreachable |
+
 ### Frontend Dev Mode
 
 For rapid UI iteration without the Rust backend:
