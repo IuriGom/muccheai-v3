@@ -10,29 +10,70 @@ const GITHUB_RAW_TOML: &str =
 const GITHUB_REPO_URL: &str = "https://github.com/IuriGom/muccheai-v3.git";
 const VERSION_CHECK_CACHE_HOURS: u64 = 24;
 
+/// Parse a semver string like "3.2.0" into a comparable tuple.
+fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
+    let parts: Vec<&str> = v.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
+}
+
+/// Compare two semver tuples. Returns true if `remote` is strictly newer than `local`.
+fn is_newer(local: (u64, u64, u64), remote: (u64, u64, u64)) -> bool {
+    remote.0 > local.0
+        || (remote.0 == local.0 && remote.1 > local.1)
+        || (remote.0 == local.0 && remote.1 == local.1 && remote.2 > local.2)
+}
+
+/// Read the cached version check file.
+/// Returns (cached_version, cached_commit_hash) if valid and recent.
+fn read_version_cache(cache_path: &std::path::Path) -> Option<(String, String)> {
+    let meta = std::fs::metadata(cache_path).ok()?;
+    let modified = meta.modified().ok()?;
+    let elapsed = modified.elapsed().ok()?;
+    if elapsed.as_secs() >= VERSION_CHECK_CACHE_HOURS * 3600 {
+        return None;
+    }
+    let content = std::fs::read_to_string(cache_path).ok()?;
+    let mut parts = content.trim().splitn(2, '|');
+    let version = parts.next()?.to_string();
+    let commit = parts.next()?.to_string();
+    Some((version, commit))
+}
+
+/// Write the version check cache.
+fn write_version_cache(cache_path: &std::path::Path, version: &str, commit: &str) {
+    let _ = std::fs::write(cache_path, format!("{}|{}", version, commit));
+}
+
 /// Check whether a newer version is available on GitHub.
 ///
+/// Returns Some((latest_version, remote_commit_hash)) if an update is available.
 /// Result is cached in `~/.muccheai/.version_check` for 24 hours.
-pub async fn check_for_update() -> Option<String> {
+/// Cache is invalidated if the local git commit changes.
+pub async fn check_for_update() -> Option<(String, String)> {
     let cache_path = crate::config::MuccheConfig::config_path()
         .with_file_name(".version_check");
 
-    // Use cached result if recent.
-    if let Ok(meta) = std::fs::metadata(&cache_path) {
-        if let Ok(modified) = meta.modified() {
-            if let Ok(elapsed) = modified.elapsed() {
-                if elapsed.as_secs() < VERSION_CHECK_CACHE_HOURS * 3600 {
-                    if let Ok(cached) = std::fs::read_to_string(&cache_path) {
-                        let current = env!("CARGO_PKG_VERSION");
-                        let latest = cached.trim();
-                        if !latest.is_empty() && latest != current {
-                            return Some(latest.to_string());
-                        }
-                        return None;
-                    }
-                }
+    let local_version = env!("CARGO_PKG_VERSION");
+    let local_commit = env!("GIT_COMMIT_HASH");
+
+    // Try cache first, but invalidate if local commit changed.
+    if let Some((cached_version, cached_commit)) = read_version_cache(&cache_path) {
+        if cached_commit == local_commit {
+            let local_sem = parse_semver(local_version)?;
+            let remote_sem = parse_semver(&cached_version)?;
+            if is_newer(local_sem, remote_sem) {
+                return Some((cached_version, cached_commit));
             }
+            return None;
         }
+        // Local commit changed — invalidate cache and re-fetch.
     }
 
     // Fetch latest version from GitHub raw TOML.
@@ -58,7 +99,10 @@ pub async fn check_for_update() -> Option<String> {
             let trimmed = line.trim();
             if trimmed.starts_with("version") {
                 trimmed.split('=').nth(1).map(|s| {
-                    s.trim().trim_matches('"').trim_matches('"').to_string()
+                    s.trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_string()
                 })
             } else {
                 None
@@ -70,12 +114,15 @@ pub async fn check_for_update() -> Option<String> {
         return None;
     }
 
-    // Write cache.
-    let _ = std::fs::write(&cache_path, &latest);
+    // Fetch remote commit hash for cache invalidation.
+    let remote_commit = fetch_latest_commit_hash().unwrap_or_default();
 
-    let current = env!("CARGO_PKG_VERSION");
-    if latest != current {
-        Some(latest)
+    write_version_cache(&cache_path, &latest, &remote_commit);
+
+    let local_sem = parse_semver(local_version)?;
+    let remote_sem = parse_semver(&latest)?;
+    if is_newer(local_sem, remote_sem) {
+        Some((latest, remote_commit))
     } else {
         None
     }
@@ -83,11 +130,14 @@ pub async fn check_for_update() -> Option<String> {
 
 /// Print update banner if a newer version exists.
 pub async fn print_update_banner() {
-    if let Some(latest) = check_for_update().await {
-        eprintln!(
-            "\n  🔔 New version {} available — run 'muccheai update' to update\n",
-            latest
-        );
+    if std::env::var("MUCCHEAI_SKIP_UPDATE_CHECK").is_ok() {
+        return;
+    }
+    if let Some((latest, _remote_commit)) = check_for_update().await {
+        eprintln!();
+        eprintln!("  🔔 New update available: v{} → v{}", env!("CARGO_PKG_VERSION"), latest);
+        eprintln!("     Run 'muccheai update' (or 'muccheai upd') to update now.");
+        eprintln!();
     }
 }
 
@@ -113,7 +163,11 @@ fn fetch_latest_commit_hash() -> Option<String> {
         .build()
         .ok()?;
     let url = "https://api.github.com/repos/IuriGom/muccheai-v3/commits/main";
-    let resp = client.get(url).header("User-Agent", "muccheai-updater").send().ok()?;
+    let resp = client
+        .get(url)
+        .header("User-Agent", "muccheai-updater")
+        .send()
+        .ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -220,14 +274,12 @@ pub fn run_update() -> anyhow::Result<()> {
             }
         }
 
-        let status = Command::new("cargo")
-            .args([
-                "install",
-                "--git",
-                GITHUB_REPO_URL,
-                "--force",
-            ])
-            .status()?;
+        let status = Command::new("cargo").args([
+            "install",
+            "--git",
+            GITHUB_REPO_URL,
+            "--force",
+        ]).status()?;
 
         if !status.success() {
             anyhow::bail!("cargo install --git failed.");
