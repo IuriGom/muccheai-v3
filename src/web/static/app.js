@@ -1177,6 +1177,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Share / digest / encrypt buttons (mock)
   document.getElementById('shareSessionBtn')?.addEventListener('click', () => addMessage('🔗 Session link copied to clipboard.', false));
+  document.getElementById('copyChatBtn')?.addEventListener('click', () => {
+    const messages = Array.from(document.querySelectorAll('.message'));
+    let text = '';
+    messages.forEach(m => {
+      const role = m.classList.contains('user') ? 'User' : aiName;
+      const raw = m.dataset.rawText || '';
+      text += `${role}: ${raw}\n\n`;
+    });
+    navigator.clipboard.writeText(text.trim()).then(() => {
+      showToast('Entire chat copied to clipboard', 'success');
+    }).catch(() => showToast('Copy failed', 'error'));
+  });
   document.getElementById('digestSessionBtn')?.addEventListener('click', () => {
     const messages = Array.from(document.querySelectorAll('.message'));
     let md = '# Chat Export\n\n';
