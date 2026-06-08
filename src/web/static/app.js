@@ -52,6 +52,7 @@ async function login(user, pass) {
   closeModal('apiKeyModal');
   maybeShowNameAiModal();
   loadPersonasAndAgents();
+  showToast('Welcome back, ' + (data.username || user) + '!', 'success');
 }
 
 async function register(user, pass) {
@@ -68,6 +69,7 @@ async function register(user, pass) {
   closeModal('apiKeyModal');
   maybeShowNameAiModal();
   loadPersonasAndAgents();
+  showToast('Account created for ' + (data.username || user) + '!', 'success');
 }
 
 async function fetchCsrf() {
