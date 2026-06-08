@@ -346,3 +346,24 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
 }
 .msg-reaction-btn:hover { opacity: 1; background: rgba(255,255,255,0.08); transform: scale(1.1); }
 .msg-reaction-btn.active { opacity: 1; background: var(--accent); border-color: var(--accent); }
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.shortcut-row:last-child { border-bottom: none; }
+.shortcut-row kbd {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  min-width: 28px;
+  text-align: center;
+}
+.shortcut-row span { color: var(--text-dim); font-size: 0.9rem; margin-left: auto; }

@@ -530,6 +530,28 @@
         </main>
     </div>
 
+    <!-- Keyboard Shortcuts Help Modal -->
+    <div id="shortcutsModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <h3>⌨️ Keyboard Shortcuts</h3>
+                <button class="btn-icon" onclick="document.getElementById('shortcutsModal').style.display='none'">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>K</kbd><span>New chat</span></div>
+                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>,</kbd><span>Open Settings</span></div>
+                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd><span>Theme picker</span></div>
+                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>F</kbd><span>Find in page</span></div>
+                <div class="shortcut-row"><kbd>Shift</kbd> + <kbd>Enter</kbd><span>New line in input</span></div>
+                <div class="shortcut-row"><kbd>Enter</kbd><span>Send message</span></div>
+                <div class="shortcut-row"><kbd>N</kbd><span>New chat (when input not focused)</span></div>
+                <div class="shortcut-row"><kbd>F</kbd><span>Fullscreen toggle</span></div>
+                <div class="shortcut-row"><kbd>Esc</kbd><span>Close modals</span></div>
+                <div class="shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
+            </div>
+        </div>
+    </div>
+
     <script src="/app.js?v=15"></script>
 
     <!-- Toast Container -->

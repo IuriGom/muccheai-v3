@@ -1304,6 +1304,14 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       showThemePicker();
     }
+    // ? → keyboard shortcuts help (when not in input/textarea)
+    const tag = e.target.tagName;
+    const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+    if (e.key === '?' && !isTyping) {
+      e.preventDefault();
+      const modal = document.getElementById('shortcutsModal');
+      if (modal) modal.style.display = 'flex';
+    }
   });
 
   // Hide splash screen after a brief delay so fonts/styles settle
