@@ -959,6 +959,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('digestSessionBtn')?.addEventListener('click', () => addMessage('📋 Session digest generated.', false));
   document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
 
+  // Fullscreen toggle
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  if (fullscreenBtn) {
+    fullscreenBtn.addEventListener('click', () => {
+      document.body.classList.toggle('chat-fullscreen');
+      fullscreenBtn.textContent = document.body.classList.contains('chat-fullscreen') ? '⛶' : '⛶';
+      showToast(document.body.classList.contains('chat-fullscreen') ? 'Fullscreen mode' : 'Normal mode', 'info');
+    });
+  }
+
   // Copy code buttons (delegated)
   document.getElementById('messages').addEventListener('click', e => {
     const btn = e.target.closest('.copy-code-btn');

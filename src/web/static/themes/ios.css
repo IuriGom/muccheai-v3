@@ -273,3 +273,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
   cursor: pointer;
   font-size: 1rem;
 }
+
+body.chat-fullscreen .sidebar { display: none; }
+body.chat-fullscreen .main { width: 100vw; }
+body.chat-fullscreen .chat-messages,
+body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }

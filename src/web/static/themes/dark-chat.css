@@ -636,6 +636,12 @@ label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-botto
   font-size: 1rem;
 }
 
+/* ===== Fullscreen Chat ===== */
+body.chat-fullscreen .sidebar { display: none; }
+body.chat-fullscreen .main { width: 100vw; }
+body.chat-fullscreen .chat-messages,
+body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
+
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
   .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 50; transform: translateX(-100%); transition: transform 0.3s; }
