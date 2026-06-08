@@ -419,6 +419,11 @@ function appendStream(text) {
   body.innerHTML = formatMarkdown(raw) + '<span class="stream-cursor">▋</span>';
   const container = document.getElementById('messages');
   container.scrollTop = container.scrollHeight;
+  const progress = document.getElementById('streamProgress');
+  if (progress) {
+    progress.classList.remove('hidden');
+    progress.textContent = raw.length.toLocaleString() + ' chars generated';
+  }
 }
 
 function endStream() {
@@ -432,6 +437,8 @@ function endStream() {
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
   const stopBtn = document.getElementById('stopBtn');
   if (stopBtn) stopBtn.classList.add('hidden');
+  const progress = document.getElementById('streamProgress');
+  if (progress) progress.classList.add('hidden');
   saveChat();
 }
 

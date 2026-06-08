@@ -554,6 +554,15 @@ body {
   transform: translateY(-1px);
 }
 
+.stream-progress {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding: 2px 0;
+  opacity: 0.7;
+}
+.stream-progress.hidden { display: none; }
+
 /* ===== Modals ===== */
 .modal, .api-key-modal {
   display: none;

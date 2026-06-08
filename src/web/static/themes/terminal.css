@@ -494,3 +494,12 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
   border-color: var(--accent);
   transform: translateY(-1px);
 }
+
+.stream-progress {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding: 2px 0;
+  opacity: 0.7;
+}
+.stream-progress.hidden { display: none; }
