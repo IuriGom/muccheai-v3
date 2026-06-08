@@ -1336,6 +1336,28 @@ document.addEventListener('DOMContentLoaded', () => {
   checkConnection();
   setInterval(checkConnection, 30000);
 
+  // Drag & drop file upload
+  const dragOverlay = document.getElementById('dragOverlay');
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+    document.body.addEventListener(evt, e => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+  document.body.addEventListener('dragenter', () => dragOverlay?.classList.add('visible'));
+  document.body.addEventListener('dragleave', e => {
+    if (e.relatedTarget === null) dragOverlay?.classList.remove('visible');
+  });
+  document.body.addEventListener('drop', e => {
+    dragOverlay?.classList.remove('visible');
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      Array.from(files).forEach(file => {
+        addMessage(`📎 **${file.name}** (${(file.size / 1024).toFixed(1)} KB) — file upload not yet implemented.`, false);
+      });
+    }
+  });
+
   // Hide splash screen after a brief delay so fonts/styles settle
   setTimeout(() => {
     const splash = document.getElementById('splashScreen');

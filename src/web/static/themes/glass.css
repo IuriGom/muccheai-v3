@@ -385,3 +385,21 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
 }
 .connection-status.online .status-dot { background: #22c55e; }
 .connection-status.offline .status-dot { background: #ef4444; }
+
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 1.2rem;
+  color: var(--text);
+  pointer-events: none;
+}
+.drag-overlay.visible { display: flex; }
+.drag-overlay .drag-icon { font-size: 3rem; }
