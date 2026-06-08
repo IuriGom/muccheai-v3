@@ -451,15 +451,32 @@ document.addEventListener('DOMContentLoaded', () => {
   renderMemories();
   renderChatHistory();
 
-  // Update version badge
-  fetch(`${API}/api/status`).then(r => r.ok ? r.json() : null).then(data => {
-    if (data && data.version) {
-      const badge = document.getElementById('versionBadge');
-      if (badge) badge.textContent = 'v' + data.version;
-      const display = document.getElementById('versionDisplay');
-      if (display) display.textContent = 'v' + data.version;
-    }
-  }).catch(() => {});
+  // Update version badge and status sidebar
+  async function updateStatus() {
+    try {
+      const res = await fetch(`${API}/api/status`, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.version) {
+        const badge = document.getElementById('versionBadge');
+        if (badge) badge.textContent = 'v' + data.version;
+        const display = document.getElementById('versionDisplay');
+        if (display) display.textContent = 'v' + data.version;
+      }
+      if (data.ollama_connected !== undefined) {
+        const dot = document.getElementById('ollamaDot');
+        if (dot) dot.classList.toggle('green', data.ollama_connected);
+      }
+      if (data.policy_rule_count !== undefined) {
+        const el = document.getElementById('ruleCount');
+        if (el) el.textContent = data.policy_rule_count;
+      }
+    } catch (_) {}
+  }
+  updateStatus();
+  setInterval(updateStatus, 30000);
 
   // Login
   const loginForm = document.getElementById('loginForm');
