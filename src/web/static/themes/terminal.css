@@ -188,6 +188,8 @@ input:focus, select:focus { border-color: var(--accent); }
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); }
+.stream-cursor { display: inline-block; animation: blink 1s step-end infinite; margin-left: 2px; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 .theme-option { border: 1px solid var(--border); transition: all 0.2s; }
 .theme-option:hover { border-color: var(--accent); box-shadow: 0 0 8px rgba(0,255,65,0.2); }
 .badge { background: #ff3333; color: #000; font-weight: bold; padding: 0 6px; font-size: 0.7rem; }

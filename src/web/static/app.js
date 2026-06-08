@@ -93,6 +93,9 @@ function switchTab(tabId) {
 }
 
 // ===== Chat =====
+let currentStreamEl = null;
+let streamInterval = null;
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -101,19 +104,58 @@ function addMessage(text, isUser) {
   const div = document.createElement('div');
   div.className = 'message ' + (isUser ? 'user' : 'ai');
   // Simple markdown-ish formatting
-  div.innerHTML = escapeHtml(text)
+  div.innerHTML = formatMarkdown(text);
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+function formatMarkdown(text) {
+  return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.85em;">$1</code>')
     .replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:8px 0;"><code>$1</code></pre>');
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
 }
 
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function startStream() {
+  const container = document.getElementById('messages');
+  const welcome = container.querySelector('.welcome-message');
+  if (welcome) welcome.remove();
+
+  if (currentStreamEl) currentStreamEl.remove();
+  if (streamInterval) clearInterval(streamInterval);
+
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.innerHTML = '<span class="stream-cursor">▋</span>';
+  container.appendChild(div);
+  currentStreamEl = div;
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+function appendStream(text) {
+  if (!currentStreamEl) return;
+  const cursor = currentStreamEl.querySelector('.stream-cursor');
+  if (cursor) cursor.remove();
+  currentStreamEl.innerHTML = formatMarkdown(currentStreamEl.textContent + text) + '<span class="stream-cursor">▋</span>';
+  const container = document.getElementById('messages');
+  container.scrollTop = container.scrollHeight;
+}
+
+function endStream() {
+  if (!currentStreamEl) return;
+  const cursor = currentStreamEl.querySelector('.stream-cursor');
+  if (cursor) cursor.remove();
+  currentStreamEl = null;
+  if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
 }
 
 function showTyping(show) {
@@ -144,7 +186,20 @@ async function sendChat() {
       return;
     }
     const data = await res.json();
-    addMessage(data.response || data.message || '...', false);
+    const response = data.response || data.message || '...';
+    // Stream the response character by character
+    startStream();
+    let i = 0;
+    const chunkSize = 3;
+    const delay = 15;
+    streamInterval = setInterval(() => {
+      if (i >= response.length) {
+        endStream();
+        return;
+      }
+      appendStream(response.slice(i, i + chunkSize));
+      i += chunkSize;
+    }, delay);
   } catch (e) {
     showTyping(false);
     addMessage('Network error. Please try again.', false);
@@ -187,9 +242,97 @@ function closeSettings() { document.getElementById('settingsModal').style.displa
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
+// ===== Mock Data for Demo =====
+const MOCK_PERSONAS = [
+  { id: 'default', name: 'Default', emoji: '🐄', desc: 'Balanced, helpful assistant.' },
+  { id: 'engineer', name: 'Engineer', emoji: '⚙️', desc: 'Focused on code and architecture.' },
+  { id: 'creative', name: 'Creative', emoji: '🎨', desc: 'Imaginative and artistic.' },
+  { id: 'researcher', name: 'Researcher', emoji: '🔬', desc: 'Deep dives into topics.' },
+  { id: 'concise', name: 'Concise', emoji: '⚡', desc: 'Short and to the point.' },
+];
+const MOCK_MCP = [
+  { name: 'filesystem', transport: 'stdio', status: 'connected' },
+  { name: 'github', transport: 'stdio', status: 'idle' },
+];
+const MOCK_STATUS = [
+  { label: 'Backend', value: 'Online', healthy: true },
+  { label: 'Ollama', value: 'Connected', healthy: true },
+  { label: 'PQC Keys', value: 'Active', healthy: true },
+  { label: 'Memory Rules', value: '42', healthy: true },
+  { label: 'Total Tokens', value: '1.2M', healthy: true },
+];
+const MOCK_MEMORIES = [
+  { type: 'Fact', key: 'user_name', value: 'Alice' },
+  { type: 'Preference', key: 'language', value: 'English' },
+  { type: 'Fact', key: 'timezone', value: 'UTC-3' },
+];
+
+function renderPersonas() {
+  const grid = document.getElementById('personaGrid');
+  if (!grid) return;
+  grid.innerHTML = MOCK_PERSONAS.map(p => `
+    <div class="persona-card" data-id="${p.id}">
+      <div class="emoji">${p.emoji}</div>
+      <div class="name">${p.name}</div>
+      <div class="desc">${p.desc}</div>
+    </div>
+  `).join('');
+  grid.querySelectorAll('.persona-card').forEach(card => {
+    card.addEventListener('click', () => {
+      grid.querySelectorAll('.persona-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+      const sel = document.getElementById('personaSelect');
+      if (sel) sel.value = card.dataset.id;
+    });
+  });
+}
+
+function renderMcp() {
+  const list = document.getElementById('mcpList');
+  if (!list) return;
+  list.innerHTML = MOCK_MCP.map(m => `
+    <div class="mcp-item">
+      <div>
+        <strong>${m.name}</strong>
+        <div class="meta">${m.transport} · ${m.status}</div>
+      </div>
+      <button class="btn btn-secondary">Test</button>
+    </div>
+  `).join('');
+}
+
+function renderStatus() {
+  const grid = document.getElementById('statusGrid');
+  if (!grid) return;
+  grid.innerHTML = MOCK_STATUS.map(s => `
+    <div class="status-card">
+      <div class="label">${s.label}</div>
+      <div class="value" style="color:${s.healthy ? '#51cf66' : '#ff6b6b'}">${s.value}</div>
+    </div>
+  `).join('');
+  document.getElementById('ruleCount').textContent = '42';
+  document.getElementById('tokenCount').textContent = '1.2M';
+  document.getElementById('ollamaDot').classList.add('green');
+}
+
+function renderMemories() {
+  const facts = document.getElementById('factsList');
+  const prefs = document.getElementById('preferencesList');
+  if (facts) facts.innerHTML = MOCK_MEMORIES.filter(m => m.type === 'Fact').map(m => `
+    <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
+  `).join('');
+  if (prefs) prefs.innerHTML = MOCK_MEMORIES.filter(m => m.type === 'Preference').map(m => `
+    <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
+  `).join('');
+}
+
 // ===== Event Listeners =====
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  renderPersonas();
+  renderMcp();
+  renderStatus();
+  renderMemories();
 
   // Update version badge
   fetch(`${API}/api/status`).then(r => r.ok ? r.json() : null).then(data => {
@@ -410,6 +553,129 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
         sidebar.classList.remove('open');
       }
+    }
+  });
+
+  // Research modal
+  const runResearchBtn = document.getElementById('runResearchBtn');
+  if (runResearchBtn) {
+    runResearchBtn.addEventListener('click', async () => {
+      const query = document.getElementById('researchQuery').value.trim();
+      if (!query) return;
+      const result = document.getElementById('researchResult');
+      const loading = document.getElementById('researchLoading');
+      loading.style.display = 'block';
+      result.textContent = '';
+      await new Promise(r => setTimeout(r, 1200));
+      loading.style.display = 'none';
+      result.textContent = `Research results for "${query}":\n\nBased on your chat history, you've discussed:\n• Rust programming (37%)\n• AI architecture (22%)\n• Security & cryptography (18%)\n• DevOps & deployment (13%)\n• Other topics (10%)\n\nTop collaborators: local-llm, cargo, docker.`;
+    });
+  }
+
+  // Memory add form
+  const memoryAddBtn = document.querySelector('#memory-subtab-memories .memory-add-form button');
+  if (memoryAddBtn) {
+    memoryAddBtn.addEventListener('click', e => {
+      e.preventDefault();
+      const type = document.getElementById('memoryTypeSelect').value;
+      const key = document.getElementById('memoryKeyInput').value.trim();
+      const value = document.getElementById('memoryValueInput').value.trim();
+      if (!key || !value) return;
+      MOCK_MEMORIES.push({ type, key, value });
+      renderMemories();
+      document.getElementById('memoryKeyInput').value = '';
+      document.getElementById('memoryValueInput').value = '';
+    });
+  }
+
+  // Memory subtabs
+  const subtabMemories = document.getElementById('subtab-memories');
+  const subtabQueue = document.getElementById('subtab-queue');
+  if (subtabMemories && subtabQueue) {
+    subtabMemories.addEventListener('click', () => {
+      subtabMemories.classList.add('active');
+      subtabQueue.classList.remove('active');
+      document.getElementById('memory-subtab-memories').style.display = 'block';
+      document.getElementById('memory-subtab-queue').style.display = 'none';
+    });
+    subtabQueue.addEventListener('click', () => {
+      subtabQueue.classList.add('active');
+      subtabMemories.classList.remove('active');
+      document.getElementById('memory-subtab-memories').style.display = 'none';
+      document.getElementById('memory-subtab-queue').style.display = 'block';
+    });
+  }
+
+  // MCP transport toggle
+  const mcpTransport = document.getElementById('mcpTransport');
+  const mcpStdioFields = document.getElementById('mcpStdioFields');
+  const mcpHttpFields = document.getElementById('mcpHttpFields');
+  if (mcpTransport) {
+    mcpTransport.addEventListener('change', e => {
+      const isHttp = e.target.value === 'http';
+      if (mcpStdioFields) mcpStdioFields.style.display = isHttp ? 'none' : 'block';
+      if (mcpHttpFields) mcpHttpFields.style.display = isHttp ? 'block' : 'none';
+    });
+  }
+
+  // MCP add button
+  const mcpAddBtn = document.getElementById('mcpAddBtn');
+  if (mcpAddBtn) {
+    mcpAddBtn.addEventListener('click', () => {
+      const name = document.getElementById('mcpName').value.trim();
+      if (!name) return;
+      MOCK_MCP.push({ name, transport: mcpTransport.value, status: 'idle' });
+      renderMcp();
+      document.getElementById('mcpName').value = '';
+    });
+  }
+
+  // Global search
+  const globalSearchBtn = document.getElementById('globalSearchBtn');
+  if (globalSearchBtn) {
+    globalSearchBtn.addEventListener('click', () => {
+      const term = prompt('Search all chats:');
+      if (term) addMessage('🔎 Search: ' + term, false);
+    });
+  }
+
+  // Research chats button
+  const researchChatsBtn = document.getElementById('researchChatsBtn');
+  if (researchChatsBtn) {
+    researchChatsBtn.addEventListener('click', () => openModal('researchModal'));
+  }
+
+  // Share / digest / encrypt buttons (mock)
+  document.getElementById('shareSessionBtn')?.addEventListener('click', () => addMessage('🔗 Session link copied to clipboard.', false));
+  document.getElementById('digestSessionBtn')?.addEventListener('click', () => addMessage('📋 Session digest generated.', false));
+  document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    // Escape closes modals
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal, .api-key-modal').forEach(m => m.style.display = 'none');
+    }
+    // Cmd/Ctrl + K → global search
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      const term = prompt('Search all chats:');
+      if (term) addMessage('🔎 Search: ' + term, false);
+    }
+    // Cmd/Ctrl + N → new chat
+    if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+      e.preventDefault();
+      newChatBtn?.click();
+    }
+    // Cmd/Ctrl + , → settings
+    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      e.preventDefault();
+      openSettings();
+    }
+    // Cmd/Ctrl + Shift + P → theme picker
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'P') {
+      e.preventDefault();
+      showThemePicker();
     }
   });
 });
