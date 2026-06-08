@@ -141,15 +141,44 @@ function addMessage(text, isUser) {
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
   }
-  // Update tab title when new message arrives
+  // Update tab title and favicon when new message arrives
   if (!isUser && document.hidden) {
     document.title = '💬 New message · ' + aiName;
+    unreadCount++;
+    updateFaviconBadge(unreadCount);
   }
   return div;
 }
 
 let codeBlockId = 0;
 const codeBlockMap = new Map();
+let unreadCount = 0;
+const originalFavicon = document.querySelector('link[rel="icon"]')?.href || '';
+
+function updateFaviconBadge(count) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  // Draw simple cow emoji background
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.font = '48px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🐄', 32, 32);
+  if (count > 0) {
+    ctx.fillStyle = '#ff6b6b';
+    ctx.beginPath();
+    ctx.arc(52, 12, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(count > 9 ? '9+' : String(count), 52, 12);
+  }
+  const link = document.querySelector('link[rel="icon"]');
+  if (link) link.href = canvas.toDataURL();
+}
 
 function formatMarkdown(text) {
   return escapeHtml(text)
@@ -919,10 +948,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Restore title when tab becomes visible
+  // Restore title and favicon when tab becomes visible
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       document.title = aiName + ' — Secure AI Agent';
+      unreadCount = 0;
+      updateFaviconBadge(0);
     }
   });
 
