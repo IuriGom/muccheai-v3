@@ -248,6 +248,8 @@ async function sendChat() {
   if (!text) return;
   input.value = '';
   localStorage.removeItem('chat_draft');
+  const meta = document.getElementById('inputMeta');
+  if (meta) meta.textContent = '';
   addMessage(text, true);
   showTyping(true);
 
@@ -660,6 +662,11 @@ document.addEventListener('DOMContentLoaded', () => {
       chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
       const sendBtn2 = document.getElementById('send');
       if (sendBtn2) sendBtn2.classList.toggle('pulse', chatInput.value.trim().length > 0);
+      const meta = document.getElementById('inputMeta');
+      if (meta) {
+        const len = chatInput.value.length;
+        meta.textContent = len > 0 ? len + ' chars' : '';
+      }
     });
     chatInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }
