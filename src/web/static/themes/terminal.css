@@ -278,3 +278,33 @@ input:focus, select:focus { border-color: var(--accent); }
 .toast.success { border-color: #51cf66; }
 .toast.error { border-color: #ff6b6b; }
 .toast.info { border-color: var(--accent); }
+
+.chat-search-box {
+  position: absolute;
+  top: 12px;
+  right: 20px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  z-index: 20;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.chat-search-box input {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 0.9rem;
+  outline: none;
+  width: 180px;
+}
+.chat-search-box button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1rem;
+}

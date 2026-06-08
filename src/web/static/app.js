@@ -920,6 +920,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Inline chat search (filter messages)
+  let searchBox = null;
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'f' && document.querySelector('.tab.active#tab-chat')) {
+      e.preventDefault();
+      if (!searchBox) {
+        searchBox = document.createElement('div');
+        searchBox.className = 'chat-search-box';
+        searchBox.innerHTML = '<input type="text" placeholder="Find in chat..."><button>✕</button>';
+        const input = searchBox.querySelector('input');
+        const closeBtn = searchBox.querySelector('button');
+        input.addEventListener('input', () => {
+          const term = input.value.toLowerCase();
+          document.querySelectorAll('.message').forEach(msg => {
+            msg.style.opacity = term && !msg.textContent.toLowerCase().includes(term) ? '0.3' : '1';
+          });
+        });
+        closeBtn.addEventListener('click', () => {
+          document.querySelectorAll('.message').forEach(msg => msg.style.opacity = '1');
+          searchBox.remove();
+          searchBox = null;
+        });
+        document.querySelector('.chat-panel').appendChild(searchBox);
+        input.focus();
+      }
+    }
+  });
+
   // Research chats button
   const researchChatsBtn = document.getElementById('researchChatsBtn');
   if (researchChatsBtn) {
