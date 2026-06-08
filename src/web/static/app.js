@@ -222,7 +222,7 @@ async function sendChat() {
     }
     const data = await res.json();
     const response = data.response || data.message || '...';
-    // Stream the response character by character
+    // Stream the response character by character for visual effect
     startStream();
     let i = 0;
     const chunkSize = 3;
@@ -238,6 +238,63 @@ async function sendChat() {
   } catch (e) {
     showTyping(false);
     addMessage('Network error. Please try again.', false);
+  }
+}
+
+// Real SSE streaming chat (used when backend supports it)
+async function sendChatStream() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMessage(text, true);
+  showTyping(true);
+
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + token
+    };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const res = await fetch(`${API}/api/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: text, session_id: currentSession() })
+    });
+    showTyping(false);
+    if (!res.ok) {
+      if (res.status === 403) {
+        addMessage('Session expired. Please log in again.', false);
+        logout();
+        return;
+      }
+      // Fall back to non-streaming endpoint
+      sendChat();
+      return;
+    }
+    startStream();
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+        const data = trimmed.slice(6);
+        if (data === '[DONE]') { endStream(); return; }
+        appendStream(data);
+      }
+    }
+    endStream();
+  } catch (e) {
+    showTyping(false);
+    // Fall back to non-streaming
+    sendChat();
   }
 }
 
@@ -489,10 +546,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Chat
   const sendBtn = document.getElementById('send');
   const chatInput = document.getElementById('input');
-  if (sendBtn) sendBtn.addEventListener('click', sendChat);
+  if (sendBtn) sendBtn.addEventListener('click', sendChatStream);
   if (chatInput) {
     chatInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }
     });
   }
 
