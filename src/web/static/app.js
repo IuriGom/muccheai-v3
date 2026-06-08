@@ -184,7 +184,14 @@ function updateScrollButton() {
   const container = document.getElementById('messages');
   const btn = document.getElementById('scrollBottomBtn');
   if (!container || !btn) return;
-  btn.classList.toggle('visible', !shouldAutoScroll(container));
+  const nearBottom = shouldAutoScroll(container);
+  btn.classList.toggle('visible', !nearBottom);
+  if (nearBottom) {
+    unreadMessages = 0;
+    btn.textContent = '⬇';
+  } else if (unreadMessages > 0) {
+    btn.textContent = '⬇ ' + unreadMessages;
+  }
 }
 
 function timeAgo(date) {
@@ -236,6 +243,11 @@ function addMessage(text, isUser) {
   // Update tab title and favicon when new message arrives
   if (!isUser) {
     playNotificationSound();
+    const container = document.getElementById('messages');
+    if (container && !shouldAutoScroll(container)) {
+      unreadMessages++;
+      updateScrollButton();
+    }
     if (document.hidden) {
       document.title = '💬 New message · ' + aiName;
       unreadCount++;
@@ -452,6 +464,7 @@ function showTyping(show, label) {
 
 let chatRetryCount = 0;
 let autoScrollEnabled = localStorage.getItem('autoScrollEnabled') !== 'false';
+let unreadMessages = 0;
 
 async function sendChat() {
   const input = document.getElementById('input');
