@@ -133,7 +133,8 @@ function addMessage(text, isUser) {
 
   const div = document.createElement('div');
   div.className = 'message ' + (isUser ? 'user' : 'ai');
-  div.innerHTML = formatMarkdown(text);
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  div.innerHTML = '<span class="msg-time">' + time + '</span>' + formatMarkdown(text);
   container.appendChild(div);
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
