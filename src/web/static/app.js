@@ -376,6 +376,9 @@ function startStream() {
   if (currentStreamEl) currentStreamEl.remove();
   if (streamInterval) clearInterval(streamInterval);
 
+  const stopBtn = document.getElementById('stopBtn');
+  if (stopBtn) stopBtn.classList.remove('hidden');
+
   const div = document.createElement('div');
   div.className = 'message ai';
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -414,6 +417,8 @@ function endStream() {
   }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
+  const stopBtn = document.getElementById('stopBtn');
+  if (stopBtn) stopBtn.classList.add('hidden');
   saveChat();
 }
 
@@ -1369,6 +1374,13 @@ document.addEventListener('DOMContentLoaded', () => {
         addMessage(`📎 **${file.name}** (${(file.size / 1024).toFixed(1)} KB) — file upload not yet implemented.`, false);
       });
     }
+  });
+
+  // Stop generating button
+  document.getElementById('stopBtn')?.addEventListener('click', () => {
+    endStream();
+    showTyping(false);
+    showToast('Generation stopped', 'info');
   });
 
   // Hide splash screen after a brief delay so fonts/styles settle
