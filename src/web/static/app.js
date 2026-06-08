@@ -605,9 +605,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (draft) chatInput.value = draft;
     chatInput.addEventListener('input', () => {
       localStorage.setItem('chat_draft', chatInput.value);
-      // Auto-resize textarea
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+      const sendBtn2 = document.getElementById('send');
+      if (sendBtn2) sendBtn2.classList.toggle('pulse', chatInput.value.trim().length > 0);
     });
     chatInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }
