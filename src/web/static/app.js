@@ -496,6 +496,38 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // File upload (visual only)
+  const uploadBtn = document.getElementById('uploadBtn');
+  const fileInput = document.getElementById('fileInput');
+  if (uploadBtn && fileInput) {
+    uploadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (file) addMessage('📎 Attached: ' + file.name, true);
+      fileInput.value = '';
+    });
+  }
+
+  // Image upload (visual only)
+  const imageBtn = document.getElementById('imageBtn');
+  const imageInput = document.getElementById('imageInput');
+  if (imageBtn && imageInput) {
+    imageBtn.addEventListener('click', () => imageInput.click());
+    imageInput.addEventListener('change', () => {
+      const file = imageInput.files[0];
+      if (file) addMessage('🖼️ Image: ' + file.name, true);
+      imageInput.value = '';
+    });
+  }
+
+  // Voice input (visual only)
+  const voiceBtn = document.getElementById('voiceBtn');
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', () => {
+      addMessage('🎤 Voice input not available in this browser.', false);
+    });
+  }
+
   // Settings button in sidebar
   const settingsBtn = document.querySelector('.nav-item:not([data-tab])');
   if (settingsBtn) settingsBtn.addEventListener('click', e => { e.preventDefault(); openSettings(); });
