@@ -1217,6 +1217,23 @@ document.addEventListener('DOMContentLoaded', () => {
     URL.revokeObjectURL(url);
     showToast('Chat exported as Markdown', 'success');
   });
+  document.getElementById('clearChatBtn')?.addEventListener('click', () => {
+    if (confirm('Clear all messages? This cannot be undone.')) {
+      document.getElementById('messages').innerHTML = `
+        <div class="welcome-message">
+          <h2>🐄 Welcome to ${aiName}</h2>
+          <p>Your local, secure AI agent. Select a persona and start chatting.</p>
+          <div class="prompt-suggestions">
+            <button class="prompt-chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing</button>
+            <button class="prompt-chip" data-prompt="Write a Python script to parse JSON">Write Python script</button>
+            <button class="prompt-chip" data-prompt="Summarize the theory of relativity">Summarize relativity</button>
+            <button class="prompt-chip" data-prompt="Debug this Rust code: fn main() { println!(\"Hello\"); }">Debug Rust code</button>
+          </div>
+        </div>`;
+      clearChatStorage();
+      showToast('Chat cleared', 'info');
+    }
+  });
   document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
 
   // Fullscreen toggle
