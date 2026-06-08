@@ -135,8 +135,22 @@ function addMessage(text, isUser) {
 
   const div = document.createElement('div');
   div.className = 'message ' + (isUser ? 'user' : 'ai');
+  div.dataset.rawText = text;
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  div.innerHTML = '<span class="msg-time">' + time + '</span>' + formatMarkdown(text);
+
+  const actions = isUser
+    ? `<div class="msg-actions">
+        <button class="msg-action-btn" data-action="edit" title="Edit">✏️</button>
+        <button class="msg-action-btn" data-action="copy" title="Copy">📋</button>
+        <button class="msg-action-btn" data-action="delete" title="Delete">🗑️</button>
+       </div>`
+    : `<div class="msg-actions">
+        <button class="msg-action-btn" data-action="copy" title="Copy">📋</button>
+        <button class="msg-action-btn" data-action="regenerate" title="Regenerate">🔄</button>
+        <button class="msg-action-btn" data-action="delete" title="Delete">🗑️</button>
+       </div>`;
+
+  div.innerHTML = '<span class="msg-time">' + time + '</span>' + actions + '<div class="msg-body">' + formatMarkdown(text) + '</div>';
   container.appendChild(div);
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
@@ -211,7 +225,14 @@ function startStream() {
 
   const div = document.createElement('div');
   div.className = 'message ai';
-  div.innerHTML = '<span class="stream-cursor">▋</span>';
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  div.innerHTML = '<span class="msg-time">' + time + '</span>' +
+    '<div class="msg-actions">' +
+      '<button class="msg-action-btn" data-action="copy" title="Copy">📋</button>' +
+      '<button class="msg-action-btn" data-action="regenerate" title="Regenerate">🔄</button>' +
+      '<button class="msg-action-btn" data-action="delete" title="Delete">🗑️</button>' +
+    '</div>' +
+    '<div class="msg-body"><span class="stream-cursor">▋</span></div>';
   container.appendChild(div);
   currentStreamEl = div;
   container.scrollTop = container.scrollHeight;
@@ -220,17 +241,24 @@ function startStream() {
 
 function appendStream(text) {
   if (!currentStreamEl) return;
-  const cursor = currentStreamEl.querySelector('.stream-cursor');
+  const body = currentStreamEl.querySelector('.msg-body');
+  if (!body) return;
+  const cursor = body.querySelector('.stream-cursor');
   if (cursor) cursor.remove();
-  currentStreamEl.innerHTML = formatMarkdown(currentStreamEl.textContent + text) + '<span class="stream-cursor">▋</span>';
+  const raw = (currentStreamEl.dataset.rawText || '') + text;
+  currentStreamEl.dataset.rawText = raw;
+  body.innerHTML = formatMarkdown(raw) + '<span class="stream-cursor">▋</span>';
   const container = document.getElementById('messages');
   container.scrollTop = container.scrollHeight;
 }
 
 function endStream() {
   if (!currentStreamEl) return;
-  const cursor = currentStreamEl.querySelector('.stream-cursor');
-  if (cursor) cursor.remove();
+  const body = currentStreamEl.querySelector('.msg-body');
+  if (body) {
+    const cursor = body.querySelector('.stream-cursor');
+    if (cursor) cursor.remove();
+  }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
 }
@@ -1006,6 +1034,49 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = 'Failed';
         setTimeout(() => btn.textContent = 'Copy', 1500);
       });
+    }
+  });
+
+  // Message action buttons (delegated)
+  document.getElementById('messages').addEventListener('click', e => {
+    const btn = e.target.closest('.msg-action-btn');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const msgEl = btn.closest('.message');
+    if (!msgEl) return;
+    const rawText = msgEl.dataset.rawText || '';
+
+    if (action === 'copy') {
+      navigator.clipboard.writeText(rawText).then(() => {
+        showToast('Message copied', 'success');
+      }).catch(() => showToast('Copy failed', 'error'));
+    } else if (action === 'delete') {
+      msgEl.remove();
+      showToast('Message deleted', 'info');
+    } else if (action === 'edit' && msgEl.classList.contains('user')) {
+      const input = document.getElementById('input');
+      if (input) {
+        input.value = rawText;
+        input.focus();
+        msgEl.remove();
+        showToast('Message loaded for editing', 'info');
+      }
+    } else if (action === 'regenerate' && msgEl.classList.contains('ai')) {
+      msgEl.remove();
+      showToast('Regenerating...', 'info');
+      // Find the preceding user message
+      const allMsgs = Array.from(document.querySelectorAll('.message'));
+      const idx = allMsgs.indexOf(msgEl);
+      const prevUser = allMsgs.slice(0, idx).reverse().find(m => m.classList.contains('user'));
+      if (prevUser) {
+        const input = document.getElementById('input');
+        if (input) {
+          input.value = prevUser.dataset.rawText || '';
+          sendChat();
+        }
+      } else {
+        showToast('No user message to regenerate from', 'error');
+      }
     }
   });
 

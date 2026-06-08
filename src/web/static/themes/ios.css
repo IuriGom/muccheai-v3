@@ -294,3 +294,24 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
 .splash-cow { font-size: 4rem; animation: bounce 1s infinite; }
 .splash-title { font-size: 1.5rem; font-weight: 700; margin-top: 12px; }
 .splash-subtitle { font-size: 0.85rem; color: var(--text-dim); margin-top: 4px; }
+
+.msg-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  margin-bottom: 6px;
+}
+.message:hover .msg-actions { opacity: 1; }
+
+.msg-action-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.msg-action-btn:hover { opacity: 1; background: rgba(255,255,255,0.08); }
