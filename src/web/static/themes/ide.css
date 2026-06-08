@@ -278,3 +278,19 @@ body.chat-fullscreen .sidebar { display: none; }
 body.chat-fullscreen .main { width: 100vw; }
 body.chat-fullscreen .chat-messages,
 body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
+
+.splash-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  transition: opacity 0.5s ease;
+}
+.splash-screen.hidden { opacity: 0; pointer-events: none; }
+.splash-content { text-align: center; }
+.splash-cow { font-size: 4rem; animation: bounce 1s infinite; }
+.splash-title { font-size: 1.5rem; font-weight: 700; margin-top: 12px; }
+.splash-subtitle { font-size: 0.85rem; color: var(--text-dim); margin-top: 4px; }

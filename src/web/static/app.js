@@ -1046,4 +1046,10 @@ document.addEventListener('DOMContentLoaded', () => {
       showThemePicker();
     }
   });
+
+  // Hide splash screen after a brief delay so fonts/styles settle
+  setTimeout(() => {
+    const splash = document.getElementById('splashScreen');
+    if (splash) splash.classList.add('hidden');
+  }, 600);
 });
