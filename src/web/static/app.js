@@ -5,6 +5,34 @@ let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
+// ===== Sound Notifications =====
+let soundEnabled = localStorage.getItem('soundEnabled') !== 'false'; // default on
+
+function playNotificationSound() {
+  if (!soundEnabled) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+    osc.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.08); // E5
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.25);
+  } catch (e) {
+    // AudioContext may be blocked until user interaction
+  }
+}
+
+function setSoundEnabled(enabled) {
+  soundEnabled = enabled;
+  localStorage.setItem('soundEnabled', String(enabled));
+}
+
 // ===== Chat Persistence =====
 function saveChat() {
   const messages = Array.from(document.querySelectorAll('.message')).map(m => ({
@@ -194,10 +222,13 @@ function addMessage(text, isUser) {
   }
   saveChat();
   // Update tab title and favicon when new message arrives
-  if (!isUser && document.hidden) {
-    document.title = '💬 New message · ' + aiName;
-    unreadCount++;
-    updateFaviconBadge(unreadCount);
+  if (!isUser) {
+    playNotificationSound();
+    if (document.hidden) {
+      document.title = '💬 New message · ' + aiName;
+      unreadCount++;
+      updateFaviconBadge(unreadCount);
+    }
   }
   return div;
 }
@@ -976,6 +1007,16 @@ document.addEventListener('DOMContentLoaded', () => {
   if (tempSlider) {
     tempSlider.addEventListener('input', e => {
       document.getElementById('tempValue').textContent = e.target.value;
+    });
+  }
+
+  // Sound notifications toggle
+  const soundToggle = document.getElementById('settingSound');
+  if (soundToggle) {
+    soundToggle.checked = soundEnabled;
+    soundToggle.addEventListener('change', e => {
+      setSoundEnabled(e.target.checked);
+      if (e.target.checked) playNotificationSound();
     });
   }
 
