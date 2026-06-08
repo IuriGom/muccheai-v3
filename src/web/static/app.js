@@ -424,6 +424,8 @@ function showTyping(show, label) {
   if (word) word.textContent = label || '';
 }
 
+let chatRetryCount = 0;
+
 async function sendChat() {
   const input = document.getElementById('input');
   const text = input.value.trim();
@@ -473,7 +475,13 @@ async function sendChat() {
     }, delay);
   } catch (e) {
     showTyping(false, aiName + ' is thinking...');
-    addMessage('Network error. Please try again.', false);
+    addMessage('Network error. Retrying in 2s...', false);
+    setTimeout(() => {
+      document.querySelectorAll('.message').forEach(m => {
+        if (m.textContent.includes('Retrying in 2s')) m.remove();
+      });
+      sendChat();
+    }, 2000);
   }
 }
 
@@ -540,8 +548,13 @@ async function sendChatStream() {
     endStream();
   } catch (e) {
     showTyping(false, aiName + ' is thinking...');
-    // Fall back to non-streaming
-    sendChat();
+    addMessage('Network error. Retrying in 2s...', false);
+    setTimeout(() => {
+      document.querySelectorAll('.message').forEach(m => {
+        if (m.textContent.includes('Retrying in 2s')) m.remove();
+      });
+      sendChatStream();
+    }, 2000);
   }
 }
 
