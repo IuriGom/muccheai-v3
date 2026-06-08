@@ -683,6 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Theme picker options
+  let previewTheme = null;
   document.querySelectorAll('.theme-option').forEach(opt => {
     opt.addEventListener('click', () => {
       applyTheme(opt.dataset.theme);
@@ -690,6 +691,15 @@ document.addEventListener('DOMContentLoaded', () => {
       opt.classList.add('selected');
       const modal = document.getElementById('themePickerModal');
       if (modal) modal.style.display = 'none';
+      previewTheme = null;
+    });
+    opt.addEventListener('mouseenter', () => {
+      previewTheme = currentTheme;
+      applyTheme(opt.dataset.theme);
+    });
+    opt.addEventListener('mouseleave', () => {
+      if (previewTheme) applyTheme(previewTheme);
+      previewTheme = null;
     });
   });
 
