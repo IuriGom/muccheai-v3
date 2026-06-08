@@ -186,6 +186,15 @@ function updateScrollButton() {
   btn.classList.toggle('visible', !shouldAutoScroll(container));
 }
 
+function timeAgo(date) {
+  const now = new Date();
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -215,7 +224,9 @@ function addMessage(text, isUser) {
         <button class="msg-action-btn" data-action="delete" title="Delete">🗑️</button>
        </div>`;
 
-  div.innerHTML = '<span class="msg-time">' + time + '</span>' + actions + '<div class="msg-body">' + formatMarkdown(text) + '</div>';
+  const now = new Date();
+  const timeAgoStr = timeAgo(now);
+  div.innerHTML = '<span class="msg-time" title="' + timeAgoStr + '">' + time + '</span>' + actions + '<div class="msg-body">' + formatMarkdown(text) + '</div>';
   container.appendChild(div);
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
