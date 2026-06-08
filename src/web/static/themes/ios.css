@@ -177,7 +177,44 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
   background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; text-align: center;
 }
 #researchResult { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 16px; }
-@media (max-width: 768px) { .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 50; transform: translateX(-100%); transition: transform 0.3s; } }
+.mobile-menu-btn { display: none; }
+@media (max-width: 768px) {
+  .mobile-menu-btn { display: inline-flex; }
+  .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 50; transform: translateX(-100%); transition: transform 0.3s; }
+  .sidebar.open { transform: translateX(0); }
+  .main { padding: 12px 4%; }
+  .chat-messages { padding: 12px 0; }
+  .chat-input-area { padding: 12px 0; }
+  .message { max-width: 95%; }
+  .topbar { padding: 8px 12px; gap: 8px; }
+  .topbar-left, .topbar-right { gap: 8px; }
+  .btn-icon { width: 32px; height: 32px; font-size: 0.9rem; }
+  .btn { padding: 8px 14px; font-size: 0.8rem; }
+  .chat-input { gap: 8px; padding: 10px 14px; }
+  .chat-input textarea { font-size: 0.9rem; }
+  .chat-input button { width: 36px; height: 36px; font-size: 1rem; }
+  .page-container { padding: 16px 4%; }
+  .welcome-message { padding: 40px 16px; }
+  .welcome-message h2 { font-size: 1.5rem; }
+  .prompt-suggestions { gap: 6px; margin-top: 12px; }
+  .prompt-chip { padding: 6px 12px; font-size: 0.8rem; }
+}
+@media (max-width: 480px) {
+  .main { padding: 8px 3%; }
+  .chat-messages { padding: 8px 0; gap: 12px; }
+  .chat-input-area { padding: 8px 0; }
+  .message { max-width: 98%; padding: 10px 14px; font-size: 0.9rem; }
+  .topbar { padding: 6px 10px; }
+  .topbar-left, .topbar-right { gap: 6px; }
+  .btn { padding: 6px 12px; font-size: 0.75rem; }
+  .chat-input { flex-wrap: wrap; padding: 8px 10px; }
+  .chat-input textarea { font-size: 0.85rem; min-height: 20px; }
+  .page-container { padding: 12px 3%; }
+  .welcome-message { padding: 24px 12px; }
+  .welcome-message h2 { font-size: 1.2rem; }
+  .prompt-suggestions { flex-direction: column; align-items: stretch; }
+  .prompt-chip { width: 100%; text-align: center; border-radius: 12px; padding: 8px 12px; }
+}
 
 .scroll-bottom-btn {
   position: absolute;

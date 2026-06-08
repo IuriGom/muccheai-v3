@@ -3575,49 +3575,51 @@ async fn login(
     }
 }
 
-/// Extract plain text from a DOCX byte slice.
-fn extract_text_from_docx(data: &[u8]) -> Result<String, String> {
-    use std::io::Cursor;
-    let docx_file = docx::DocxFile::from_reader(Cursor::new(data)).map_err(|e| format!("docx read: {:?}", e))?;
-    let docx = docx_file.parse().map_err(|e| format!("docx parse: {:?}", e))?;
-    let mut text = String::new();
-    for body_content in &docx.document.body.content {
-        if let docx::document::BodyContent::Paragraph(paragraph) = body_content {
-            for para_content in &paragraph.content {
-                let run = match para_content {
-                    docx::document::ParagraphContent::Run(r) => Some(r),
-                    docx::document::ParagraphContent::Link(l) => Some(&l.content),
-                    _ => None,
-                };
-                if let Some(r) = run {
-                    for run_content in &r.content {
-                        if let docx::document::RunContent::Text(t) = run_content {
-                            text.push_str(&t.text);
-                        }
-                    }
-                }
-            }
-            text.push('\n');
-        }
-    }
-    Ok(text)
-}
-
-/// Validate file magic bytes against the claimed extension.
-fn validate_magic_bytes(data: &[u8], filename: &str) -> bool {
+/// Guess MIME type from filename extension.
+fn guess_mime_type(filename: &str) -> &'static str {
     let lower = filename.to_lowercase();
     if lower.ends_with(".pdf") {
-        data.starts_with(b"%PDF")
+        "application/pdf"
     } else if lower.ends_with(".docx") {
-        // DOCX is a ZIP archive; check PK header.
-        data.len() >= 2 && &data[..2] == b"PK"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    } else if lower.ends_with(".txt") {
+        "text/plain"
+    } else if lower.ends_with(".md") {
+        "text/markdown"
+    } else if lower.ends_with(".json") {
+        "application/json"
+    } else if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        "text/html"
+    } else if lower.ends_with(".css") {
+        "text/css"
+    } else if lower.ends_with(".js") {
+        "application/javascript"
+    } else if lower.ends_with(".rs") {
+        "text/rust"
+    } else if lower.ends_with(".py") {
+        "text/x-python"
+    } else if lower.ends_with(".csv") {
+        "text/csv"
+    } else if lower.ends_with(".xml") {
+        "application/xml"
+    } else if lower.ends_with(".zip") {
+        "application/zip"
     } else {
-        // Text files — no magic bytes to check.
-        true
+        "application/octet-stream"
     }
 }
 
-/// Upload a file and store its content as a memory entry.
+/// Upload a file and save it to the uploads directory.
 async fn upload_file(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3631,91 +3633,64 @@ async fn upload_file(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let mut filename = String::new();
-    let mut content = String::new();
+    let upload_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".muccheai")
+        .join("uploads");
+
+    if let Err(e) = tokio::fs::create_dir_all(&upload_dir).await {
+        tracing::warn!("Failed to create upload directory: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let mut result = serde_json::Value::Null;
 
     const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024; // 10 MB
     while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
         if field.name() == Some("file") {
-            filename = field.file_name().unwrap_or("upload.txt").to_string();
+            let filename = field.file_name().unwrap_or("upload.bin").to_string();
             let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
             if data.len() > MAX_UPLOAD_SIZE {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
-            if !validate_magic_bytes(&data, &filename) {
-                return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+            let safe_filename: String = filename
+                .rsplit('/').next().unwrap_or(&filename)
+                .rsplit('\\').next().unwrap_or(&filename)
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+                .take(255)
+                .collect();
+
+            if safe_filename.is_empty() {
+                return Err(StatusCode::BAD_REQUEST);
             }
-            let lower = filename.to_lowercase();
-            if lower.ends_with(".pdf") {
-                let data = data.to_vec();
-                let mut handle = tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&data));
-                content = match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await {
-                    Ok(Ok(Ok(text))) => text,
-                    Ok(Ok(Err(e))) => {
-                        tracing::warn!("PDF extraction error: {:?}", e);
-                        return Err(StatusCode::BAD_REQUEST);
-                    }
-                    Ok(Err(join_err)) => {
-                        tracing::warn!("PDF extraction task failed: {:?}", join_err);
-                        return Err(StatusCode::BAD_REQUEST);
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        return Err(StatusCode::REQUEST_TIMEOUT);
-                    }
-                };
-            } else if lower.ends_with(".docx") {
-                let data = data.to_vec();
-                let mut handle = tokio::task::spawn_blocking(move || extract_text_from_docx(&data));
-                content = match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await {
-                    Ok(Ok(Ok(text))) => text,
-                    Ok(Ok(Err(e))) => {
-                        tracing::warn!("DOCX extraction error: {}", e);
-                        return Err(StatusCode::BAD_REQUEST);
-                    }
-                    Ok(Err(join_err)) => {
-                        tracing::warn!("DOCX extraction task failed: {:?}", join_err);
-                        return Err(StatusCode::BAD_REQUEST);
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        return Err(StatusCode::REQUEST_TIMEOUT);
-                    }
-                };
-            } else {
-                // Plain text files must be valid UTF-8.
-                if std::str::from_utf8(&data).is_err() {
-                    return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-                }
-                content = String::from_utf8_lossy(&data).to_string();
+
+            let unique_name = format!("{}_{}", uuid::Uuid::new_v4(), safe_filename);
+            let file_path = upload_dir.join(&unique_name);
+
+            if let Err(e) = tokio::fs::write(&file_path, &data).await {
+                tracing::warn!("Failed to write upload file: {}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
+
+            let mime_type = guess_mime_type(&filename);
+            let size = data.len();
+
+            result = serde_json::json!({
+                "path": file_path.to_string_lossy(),
+                "size": size,
+                "mime_type": mime_type,
+            });
+            break;
         }
     }
 
-    if content.is_empty() {
+    if result.is_null() {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Sanitize filename before using as a memory key.
-    let safe_filename: String = filename.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .take(255)
-        .collect();
-    if safe_filename.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    let sm = state.structured_memory.lock().await;
-    let mut map = serde_json::Map::new();
-    map.insert("filename".to_string(), serde_json::Value::String(safe_filename.clone()));
-    map.insert("text".to_string(), serde_json::Value::String(content));
-    let value = MemoryValue::JsonObject(map);
-    if let Err(e) = sm.store_fact_by_owner(&format!("upload:{}", safe_filename), &value, &owner) {
-        tracing::warn!("Failed to store upload: {}", e);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    Ok(Json(serde_json::json!({ "success": true, "filename": safe_filename })))
+    Ok(Json(result))
 }
 
 /// Speech-to-Text endpoint.

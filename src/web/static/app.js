@@ -613,6 +613,32 @@ function currentSession() {
   return localStorage.getItem('session_id') || '';
 }
 
+async function uploadFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const headers = { 'Authorization': 'Bearer ' + token };
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  try {
+    const res = await fetch(`${API}/api/upload`, {
+      method: 'POST',
+      headers,
+      body: formData
+    });
+    if (!res.ok) {
+      if (res.status === 403) {
+        addMessage('Session expired. Please log in again.', false);
+        logout();
+        return null;
+      }
+      throw new Error('Upload failed: ' + res.status);
+    }
+    return await res.json();
+  } catch (e) {
+    showToast(e.message, 'error');
+    return null;
+  }
+}
+
 // ===== Data Loading =====
 async function loadPersonasAndAgents() {
   try {
@@ -929,14 +955,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // File upload (visual only)
+  // File upload
   const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('fileInput');
   if (uploadBtn && fileInput) {
     uploadBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => {
+    fileInput.addEventListener('change', async () => {
       const file = fileInput.files[0];
-      if (file) addMessage('📎 Attached: ' + file.name, true);
+      if (file) {
+        addMessage('📎 Uploading **' + file.name + '**...', true);
+        const data = await uploadFile(file);
+        if (data) {
+          addMessage('✅ Uploaded **' + file.name + '** — ' + data.mime_type + ' (' + (data.size / 1024).toFixed(1) + ' KB)', false);
+        } else {
+          addMessage('❌ Failed to upload **' + file.name + '**', false);
+        }
+      }
       fileInput.value = '';
     });
   }
@@ -1464,13 +1498,19 @@ document.addEventListener('DOMContentLoaded', () => {
   document.body.addEventListener('dragleave', e => {
     if (e.relatedTarget === null) dragOverlay?.classList.remove('visible');
   });
-  document.body.addEventListener('drop', e => {
+  document.body.addEventListener('drop', async e => {
     dragOverlay?.classList.remove('visible');
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
-      Array.from(files).forEach(file => {
-        addMessage(`📎 **${file.name}** (${(file.size / 1024).toFixed(1)} KB) — file upload not yet implemented.`, false);
-      });
+      for (const file of Array.from(files)) {
+        addMessage('📎 Uploading **' + file.name + '**...', true);
+        const data = await uploadFile(file);
+        if (data) {
+          addMessage('✅ Uploaded **' + file.name + '** — ' + data.mime_type + ' (' + (data.size / 1024).toFixed(1) + ' KB)', false);
+        } else {
+          addMessage('❌ Failed to upload **' + file.name + '**', false);
+        }
+      }
     }
   });
 
