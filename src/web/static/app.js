@@ -480,11 +480,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Update version badge and status sidebar
   async function updateStatus() {
+    const offlineEl = document.querySelector('.offline-indicator');
     try {
       const res = await fetch(`${API}/api/status`, {
         headers: { 'Authorization': 'Bearer ' + token }
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (offlineEl) offlineEl.style.display = 'block';
+        return;
+      }
+      if (offlineEl) offlineEl.style.display = 'none';
       const data = await res.json();
       if (data.version) {
         const badge = document.getElementById('versionBadge');
@@ -500,7 +505,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const el = document.getElementById('ruleCount');
         if (el) el.textContent = data.policy_rule_count;
       }
-    } catch (_) {}
+    } catch (_) {
+      if (offlineEl) offlineEl.style.display = 'block';
+    }
   }
   updateStatus();
   setInterval(updateStatus, 30000);
