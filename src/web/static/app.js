@@ -276,6 +276,7 @@ async function sendChatStream() {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let metaReceived = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -287,6 +288,15 @@ async function sendChatStream() {
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
         const data = trimmed.slice(6);
         if (data === '[DONE]') { endStream(); return; }
+        // First data line may be JSON metadata
+        if (!metaReceived && data.startsWith('{') && data.endsWith('}')) {
+          try {
+            const meta = JSON.parse(data);
+            if (meta.session_id) localStorage.setItem('session_id', meta.session_id);
+            metaReceived = true;
+            continue;
+          } catch (_) {}
+        }
         appendStream(data);
       }
     }
