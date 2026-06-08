@@ -1,3 +1,5 @@
+.message pre { position: relative; }
+.message pre:hover .copy-code-btn { opacity: 1 !important; }
 /* ===== iOS Native Theme ===== */
 :root {
   --bg: #f5f5f7;

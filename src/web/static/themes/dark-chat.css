@@ -645,6 +645,9 @@ label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-botto
   50% { opacity: 0; }
 }
 
+.message pre { position: relative; }
+.message pre:hover .copy-code-btn { opacity: 1 !important; }
+
 /* ===== Theme Picker ===== */
 .theme-option { transition: all 0.2s ease; }
 .theme-option:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }

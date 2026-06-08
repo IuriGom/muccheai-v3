@@ -110,12 +110,22 @@ function addMessage(text, isUser) {
   return div;
 }
 
+let codeBlockId = 0;
+const codeBlockMap = new Map();
+
 function formatMarkdown(text) {
   return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.85em;">$1</code>')
-    .replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:8px 0;"><code>$1</code></pre>');
+    .replace(/```([\s\S]*?)```/g, (match, code) => {
+      const id = 'cb-' + (++codeBlockId);
+      codeBlockMap.set(id, code.trim());
+      return `<div style="position:relative;margin:8px 0;">
+        <button class="btn btn-secondary copy-code-btn" data-id="${id}" style="position:absolute;top:6px;right:6px;padding:4px 10px;font-size:0.75rem;opacity:0;transition:opacity 0.2s;">Copy</button>
+        <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code>${escapeHtml(code.trim())}</code></pre>
+      </div>`;
+    });
 }
 
 function escapeHtml(text) {
@@ -649,6 +659,23 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('shareSessionBtn')?.addEventListener('click', () => addMessage('🔗 Session link copied to clipboard.', false));
   document.getElementById('digestSessionBtn')?.addEventListener('click', () => addMessage('📋 Session digest generated.', false));
   document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
+
+  // Copy code buttons (delegated)
+  document.getElementById('messages').addEventListener('click', e => {
+    const btn = e.target.closest('.copy-code-btn');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const code = codeBlockMap.get(id);
+    if (code) {
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+      }).catch(() => {
+        btn.textContent = 'Failed';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+      });
+    }
+  });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', e => {
