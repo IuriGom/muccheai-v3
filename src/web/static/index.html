@@ -8,7 +8,10 @@
     <meta http-equiv="Expires" content="0">
     <title>MuccheAI — Secure AI Agent</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/style.css?v=12">
+    <link rel="stylesheet" href="/themes/dark-chat.css?v=1" id="theme-link">
+    <style>
+      body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
+    </style>
 </head>
 <body>
     <div class="offline-indicator">⚠️ You are offline — messages will be queued</div>
@@ -170,6 +173,12 @@
                         <input type="checkbox" id="settingShowReasoning" checked>
                         <span class="slider"></span>
                     </label>
+                </div>
+                <div class="setting-group">
+                    <label>Interface Theme</label>
+                    <div class="btn-row">
+                        <button class="btn btn-secondary" id="changeThemeBtn" type="button">🎨 Change Theme</button>
+                    </div>
                 </div>
                 <div class="btn-row">
                     <button class="btn btn-primary">Save Settings</button>
@@ -497,7 +506,7 @@
         </main>
     </div>
 
-    <script src="/app.js?v=12"></script>
+    <script src="/app.js?v=13"></script>
 
     <!-- Approval Notification Toast -->
     <div id="approvalToast" class="approval-toast" style="display:none;">
@@ -505,6 +514,45 @@
         <button class="btn btn-secondary" id="approvalToastBtn">Go to Memory</button>
         <button class="btn-icon" id="approvalToastDismiss" title="Dismiss">✕</button>
     </div>
+    <!-- Theme Picker Modal -->
+    <div id="themePickerModal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:640px;">
+            <div class="modal-header">
+                <h3>🎨 Choose Your Interface</h3>
+            </div>
+            <div class="modal-body">
+                <p style="color:var(--text-dim);margin-bottom:20px;">Pick a look for MuccheAI. You can change this anytime in Settings.</p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;">
+                    <div class="theme-option" data-theme="dark-chat" style="cursor:pointer;border:2px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <div style="font-size:2rem;margin-bottom:8px;">🌑</div>
+                        <div style="font-weight:600;font-size:0.9rem;">Dark Chat</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">Minimal, modern, like Kimi/Claude</div>
+                    </div>
+                    <div class="theme-option" data-theme="terminal" style="cursor:pointer;border:2px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <div style="font-size:2rem;margin-bottom:8px;">💻</div>
+                        <div style="font-weight:600;font-size:0.9rem;">Terminal</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">Hacker green, retro cyberpunk</div>
+                    </div>
+                    <div class="theme-option" data-theme="glass" style="cursor:pointer;border:2px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <div style="font-size:2rem;margin-bottom:8px;">🔮</div>
+                        <div style="font-weight:600;font-size:0.9rem;">Glass</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">Blur, gradients, floating feel</div>
+                    </div>
+                    <div class="theme-option" data-theme="ios" style="cursor:pointer;border:2px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <div style="font-size:2rem;margin-bottom:8px;">🍎</div>
+                        <div style="font-weight:600;font-size:0.9rem;">iOS Native</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">Light, Apple-style, springy</div>
+                    </div>
+                    <div class="theme-option" data-theme="ide" style="cursor:pointer;border:2px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <div style="font-size:2rem;margin-bottom:8px;">🛠️</div>
+                        <div style="font-weight:600;font-size:0.9rem;">IDE</div>
+                        <div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">VS Code layout, code + chat</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="versionBadge" class="version-badge"></div>
 </body>
 </html>
