@@ -175,6 +175,7 @@ let currentStreamEl = null;
 let streamInterval = null;
 
 function shouldAutoScroll(container) {
+  if (!autoScrollEnabled) return false;
   const threshold = 100; // pixels from bottom
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
 }
@@ -450,6 +451,7 @@ function showTyping(show, label) {
 }
 
 let chatRetryCount = 0;
+let autoScrollEnabled = localStorage.getItem('autoScrollEnabled') !== 'false';
 
 async function sendChat() {
   const input = document.getElementById('input');
@@ -1055,6 +1057,17 @@ document.addEventListener('DOMContentLoaded', () => {
     soundToggle.addEventListener('change', e => {
       setSoundEnabled(e.target.checked);
       if (e.target.checked) playNotificationSound();
+    });
+  }
+
+  // Auto-scroll toggle
+  const autoScrollToggle = document.getElementById('settingAutoScroll');
+  if (autoScrollToggle) {
+    autoScrollToggle.checked = autoScrollEnabled;
+    autoScrollToggle.addEventListener('change', e => {
+      autoScrollEnabled = e.target.checked;
+      localStorage.setItem('autoScrollEnabled', String(autoScrollEnabled));
+      showToast(autoScrollEnabled ? 'Auto-scroll enabled' : 'Auto-scroll disabled', 'info');
     });
   }
 
