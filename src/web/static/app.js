@@ -196,6 +196,7 @@ async function sendChat() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  localStorage.removeItem('chat_draft');
   addMessage(text, true);
   showTyping(true);
 
@@ -247,6 +248,7 @@ async function sendChatStream() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  localStorage.removeItem('chat_draft');
   addMessage(text, true);
   showTyping(true);
 
@@ -575,6 +577,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatInput = document.getElementById('input');
   if (sendBtn) sendBtn.addEventListener('click', sendChatStream);
   if (chatInput) {
+    // Restore draft
+    const draft = localStorage.getItem('chat_draft');
+    if (draft) chatInput.value = draft;
+    // Auto-save draft
+    chatInput.addEventListener('input', () => {
+      localStorage.setItem('chat_draft', chatInput.value);
+    });
     chatInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatStream(); }
     });
