@@ -1,6 +1,7 @@
 // ===== MuccheAI Web UI =====
 const API = (window.location.port === '8888') ? 'http://127.0.0.1:3000' : '';
 let token = localStorage.getItem('token') || '';
+let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
@@ -47,6 +48,7 @@ async function login(user, pass) {
   const data = await res.json();
   token = data.token;
   localStorage.setItem('token', token);
+  await fetchCsrf();
   closeModal('apiKeyModal');
   maybeShowNameAiModal();
   loadPersonasAndAgents();
@@ -62,10 +64,26 @@ async function register(user, pass) {
   const data = await res.json();
   token = data.token;
   localStorage.setItem('token', token);
+  await fetchCsrf();
   closeModal('apiKeyModal');
   maybeShowNameAiModal();
   loadPersonasAndAgents();
 }
+
+async function fetchCsrf() {
+  try {
+    const res = await fetch(`${API}/api/csrf`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      csrfToken = data.csrf_token || '';
+      localStorage.setItem('csrf_token', csrfToken);
+    }
+  } catch (_) {}
+}
+
+
 
 function logout() {
   token = '';
@@ -182,17 +200,24 @@ async function sendChat() {
   showTyping(true);
 
   try {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + token
+    };
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
     const res = await fetch(`${API}/api/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token
-      },
+      headers,
       body: JSON.stringify({ message: text, session_id: currentSession() })
     });
     showTyping(false);
     if (!res.ok) {
-      addMessage('Error: ' + res.status, false);
+      if (res.status === 403) {
+        addMessage('Session expired. Please log in again.', false);
+        logout();
+      } else {
+        addMessage('Error: ' + res.status, false);
+      }
       return;
     }
     const data = await res.json();
