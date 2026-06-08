@@ -47,21 +47,26 @@ async fn main() {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".muccheai")
         .join(".password_required");
+    let dev_mode = std::env::var("MUCCHEAI_DEV_MODE").unwrap_or_default() == "1";
     if password_flag.exists() && std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
-        eprintln!("╔══════════════════════════════════════════════════════════════╗");
-        eprintln!("║  PASSWORD REQUIRED                                           ║");
-        eprintln!("╚══════════════════════════════════════════════════════════════╝");
-        eprintln!();
-        eprintln!("  A password was configured during setup to protect your local key.");
-        eprintln!("  Set the environment variable before running MuccheAI:");
-        eprintln!();
-        eprintln!("    export MUCCHEAI_KEY_PASSWORD='your-password'");
-        eprintln!();
-        eprintln!("  Or run with the variable inline:");
-        eprintln!();
-        eprintln!("    MUCCHEAI_KEY_PASSWORD='your-password' muccheai ...");
-        eprintln!();
-        std::process::exit(1);
+        if dev_mode {
+            eprintln!("⚠️  Dev mode: bypassing password requirement.");
+        } else {
+            eprintln!("╔══════════════════════════════════════════════════════════════╗");
+            eprintln!("║  PASSWORD REQUIRED                                           ║");
+            eprintln!("╚══════════════════════════════════════════════════════════════╝");
+            eprintln!();
+            eprintln!("  A password was configured during setup to protect your local key.");
+            eprintln!("  Set the environment variable before running MuccheAI:");
+            eprintln!();
+            eprintln!("    export MUCCHEAI_KEY_PASSWORD='your-password'");
+            eprintln!();
+            eprintln!("  Or run with the variable inline:");
+            eprintln!();
+            eprintln!("    MUCCHEAI_KEY_PASSWORD='your-password' muccheai ...");
+            eprintln!();
+            std::process::exit(1);
+        }
     } else if std::env::var("MUCCHEAI_KEY_PASSWORD").is_err() {
         eprintln!("WARNING: MUCCHEAI_KEY_PASSWORD not set. Machine key is raw material — set a password for Argon2id derivation.");
     }
@@ -907,8 +912,20 @@ async fn run_web_server(bind: &str) {
     let mut user_db = match crate::users::UserDb::load_or_create() {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to load user database: {}", e);
-            std::process::exit(1);
+            if std::env::var("MUCCHEAI_DEV_MODE").unwrap_or_default() == "1" {
+                eprintln!("⚠️  Dev mode: failed to load user database ({}). Creating fresh database.", e);
+                // Nuke the old encrypted file so load_or_create will create a new one
+                let users_path = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".muccheai").join("users.json");
+                let _ = std::fs::remove_file(&users_path);
+                crate::users::UserDb::load_or_create().unwrap_or_else(|e2| {
+                    eprintln!("Failed to create user database even in dev mode: {}", e2);
+                    std::process::exit(1);
+                })
+            } else {
+                eprintln!("Failed to load user database: {}", e);
+                std::process::exit(1);
+            }
         }
     };
     if let Err(e) = user_db.migrate_api_key(&config.api_key) {

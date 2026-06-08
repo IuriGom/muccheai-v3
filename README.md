@@ -37,7 +37,7 @@ Built in Rust. No cloud lock-in. Your data stays on your machine.
 | **File upload** | Drag-and-drop PDF, DOCX, and text files. Extracted content is injected into the chat context. |
 | **Voice input** | Web Speech API in the frontend — click the microphone icon. |
 | **Memory search** | Live fuzzy filtering of memories in the web UI. |
-| **WebSocket chat** | Real-time streaming feel via `/api/chat/ws` with per-message auth re-validation. |
+| **Multi-theme UI** | 5 themes: Dark Chat (Kimi/Claude inspired), Terminal, Glassmorphism, iOS Native, IDE. Theme picker on first launch. |
 | **Plugin system** | WASM-based plugins with capability manifests. See [Plugin System](#plugin-system). |
 | **Multi-model fallback** | If your primary AI agent fails, MuccheAI automatically tries every other configured agent until one responds. |
 | **Structured memory** | The LLM extracts facts, preferences, and tasks from conversations. You can view, search, and delete them. |
@@ -453,6 +453,43 @@ cargo clippy --workspace
 # Build release binary
 cargo build --release
 ```
+
+### Frontend Themes
+
+MuccheAI ships with 5 built-in UI themes. The theme system is entirely CSS-variable based — switching themes swaps the stylesheet without reloading the page.
+
+| Theme | Description | File |
+|-------|-------------|------|
+| **Dark Chat** | Default. Kimi/Claude-inspired minimal dark interface. | `themes/dark-chat.css` |
+| **Terminal** | Hacker green, monospace, zero border-radius. | `themes/terminal.css` |
+| **Glass** | Animated gradient background with backdrop-filter blur. | `themes/glass.css` |
+| **iOS Native** | Light Apple-style with springy interactions. | `themes/ios.css` |
+| **IDE** | VS Code-style compact sidebar and monospace chat. | `themes/ide.css` |
+
+**First launch:** Users see a theme picker modal. Choice is persisted in `localStorage`.
+
+**Changing later:** Settings → "Change Theme" or press `Cmd/Ctrl + Shift + P`.
+
+**Adding a new theme:**
+1. Create `src/web/static/themes/my-theme.css`
+2. Define the CSS variables (`--bg`, `--accent`, `--radius`, etc.)
+3. Add a card to the theme picker in `index.html`
+4. Register the theme name in `app.js` (no code change needed if the card uses `data-theme`)
+
+### Frontend Dev Mode
+
+For rapid UI iteration without the Rust backend:
+
+```bash
+# Terminal 1 — mock API server
+cd src/web/static
+python3 -m http.server 8888
+
+# Terminal 2 — mock backend (provides /api/* endpoints)
+python3 /tmp/mock_server.py  # or any simple HTTP server on port 3000
+```
+
+The frontend auto-detects dev mode (`window.location.port === '8888'`) and routes API calls to `http://127.0.0.1:3000`.
 
 ### Project structure
 
