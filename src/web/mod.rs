@@ -1764,10 +1764,6 @@ async fn call_provider(
                 tracing::error!("SSRF blocked for ollama base_url: {}", e);
                 return Err("Provider configuration rejected".to_string());
             }
-            if let Err(e) = validate_no_ssrf_dns(base_url).await {
-                tracing::error!("SSRF DNS blocked for ollama base_url: {}", e);
-                return Err("Provider configuration rejected".to_string());
-            }
             let pinned_client = build_pinned_client(base_url).await?;
             let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
             let mut messages: Vec<serde_json::Value> = vec![
@@ -2050,7 +2046,7 @@ async fn call_provider_stream(
         _ => {
             // Ollama streaming
             let base_url = agent.base_url.as_deref().unwrap_or("http://localhost:11434");
-            if validate_no_ssrf(base_url).is_err() || validate_no_ssrf_dns(base_url).await.is_err() {
+            if validate_no_ssrf(base_url).is_err() {
                 return Err("Provider configuration rejected".into());
             }
             let pinned_client = build_pinned_client(base_url).await?;
