@@ -6,7 +6,7 @@
 use sha3::Digest;
 use std::collections::{HashSet, VecDeque};
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, Verifier, VerifyingKey};
 use rand::RngCore;
 use zeroize::Zeroize;
 

@@ -5,11 +5,8 @@ pub mod router;
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
-    middleware::Next,
     response::{Html, IntoResponse, Json, Response},
     response::sse::{Event, Sse},
-    routing::{delete, get, post},
-    Router,
 };
 use std::convert::Infallible;
 use tokio::sync::mpsc;
@@ -19,14 +16,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use base64::Engine;
 use chrono::{Timelike, Datelike};
 use tokio::sync::Mutex;
 use ring::rand::SecureRandom;
 
-use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::{ServeDir, ServeFile};
 
-use muccheai_build_verify::{MultiCiVerification, BuildIntegrityError};
+use muccheai_build_verify::MultiCiVerification;
 use muccheai_policy_engine::PolicyEngine;
 use muccheai_policy_engine::rules::RuleAction;
 use muccheai_sandbox::LlmSandbox;
@@ -41,7 +37,6 @@ use muccheai_types::Timestamp;
 use crate::structured_memory::StructuredMemoryManager;
 
 use crate::config::{AgentConfig, MuccheConfig, Persona};
-use crate::web_search::SearchResult as WebSearchResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -5337,7 +5332,7 @@ async fn post_collaborative_message(
             memories_used: None,
         });
     }
-    let owner = get_session_owner(&state, &headers).await.unwrap_or_default();
+    let _owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let secret = headers
         .get("x-session-secret")
         .and_then(|h| h.to_str().ok())
@@ -5412,7 +5407,7 @@ async fn install_preset(
     let _owner = get_session_owner(&state, &headers).await.unwrap_or_default();
     let presets = list_presets(State(state.clone()), headers.clone()).await?.0;
     let preset = match presets.iter().find(|p| p.name == payload.name) {
-        Some(p) => p.clone(),
+        Some(p) => p,
         None => return Err(StatusCode::NOT_FOUND),
     };
 
@@ -5762,7 +5757,7 @@ async fn chat_with_image(
             return Err(StatusCode::BAD_REQUEST);
         }
         // Verify image magic bytes by decoding prefix
-        let prefix = match base64::decode(&payload.image_b64.as_bytes()[..std::cmp::min(payload.image_b64.len(), 32)]) {
+        let prefix = match base64::engine::general_purpose::STANDARD.decode(&payload.image_b64.as_bytes()[..std::cmp::min(payload.image_b64.len(), 32)]) {
             Ok(p) => p,
             Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
@@ -6173,7 +6168,7 @@ async fn recompute_memory_tiers(
     if owner.is_empty() {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let mut mem = state.structured_memory.lock().await;
+    let mem = state.structured_memory.lock().await;
     let now = muccheai_types::Timestamp::now();
     let mut entries = mem.list_all_by_owner(&owner);
     let changed = crate::memory_tiers::recompute_tiers(&mut entries, now);

@@ -236,6 +236,7 @@ function addMessage(text, isUser) {
   const timeAgoStr = timeAgo(now);
   div.innerHTML = '<span class="msg-time" title="' + timeAgoStr + '">' + time + '</span>' + actions + '<div class="msg-body">' + formatMarkdown(text) + '</div>';
   container.appendChild(div);
+  highlightCodeBlocks(div);
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
   }
@@ -298,7 +299,7 @@ function formatMarkdown(text) {
     codeBlocks.push(`<div style="position:relative;margin:8px 0;">
       ${label}
       <button class="btn btn-secondary copy-code-btn" data-id="${id}" style="position:absolute;top:6px;right:6px;padding:4px 10px;font-size:0.75rem;opacity:0;transition:opacity 0.2s;">Copy</button>
-      <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code>${escapeHtml(code.trim())}</code></pre>
+      <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code${lang ? ` class="language-${escapeHtml(lang)}"` : ''}>${escapeHtml(code.trim())}</code></pre>
     </div>`);
     return placeholder;
   });
@@ -394,6 +395,15 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function highlightCodeBlocks(root) {
+  if (typeof hljs === 'undefined') return;
+  root.querySelectorAll('pre code').forEach(block => {
+    if (!block.classList.contains('hljs')) {
+      hljs.highlightElement(block);
+    }
+  });
+}
+
 function startStream() {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -430,6 +440,7 @@ function appendStream(text) {
   const raw = (currentStreamEl.dataset.rawText || '') + text;
   currentStreamEl.dataset.rawText = raw;
   body.innerHTML = formatMarkdown(raw) + '<span class="stream-cursor">▋</span>';
+  highlightCodeBlocks(body);
   const container = document.getElementById('messages');
   container.scrollTop = container.scrollHeight;
   const progress = document.getElementById('streamProgress');

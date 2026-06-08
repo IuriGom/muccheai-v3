@@ -11,7 +11,7 @@ use axum::{
 use axum::http::StatusCode;
 use axum::Json;
 
-use crate::web::{AppState, extract_bearer_token, extract_client_ip, get_session_owner, is_duress_session};
+use crate::web::{AppState, extract_bearer_token, extract_client_ip, get_session_owner};
 
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,

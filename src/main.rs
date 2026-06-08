@@ -618,7 +618,7 @@ fn run_demo() {
     println!("  ✓ KSM: {}", if sandbox_config.ksm_disabled { "disabled" } else { "enabled" });
     println!("  ✓ Memory encryption: {}", if sandbox_config.memory_encryption { "enabled" } else { "disabled" });
 
-    let mut sandbox = LlmSandbox::new(sandbox_config);
+    let sandbox = LlmSandbox::new(sandbox_config);
     // Demo mode: do not spawn real sandbox processes or make real HTTP calls.
     println!("  ✓ Sandbox configured");
 
@@ -672,7 +672,7 @@ fn run_demo() {
 
     // Step 2: LLM generates structured suggestion (in sandbox)
     println!("\n[LLM Sandbox] Generating structured suggestion...");
-    let prompt = ValidatedPrompt {
+    let _prompt = ValidatedPrompt {
         text: user_prompt.to_string(),
         output_schema: "action_proposal".to_string(),
         max_tokens: 512,

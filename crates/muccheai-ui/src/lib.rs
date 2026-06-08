@@ -6,7 +6,7 @@
 use ed25519_dalek::{Signer, SigningKey};
 use muccheai_crypto::sha3_512;
 use muccheai_types::*;
-use rand::{Rng, RngCore};
+use rand::Rng;
 
 /// Approval tier for an action
 #[derive(Debug, Clone, PartialEq, Eq)]

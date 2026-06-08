@@ -125,7 +125,7 @@ impl PluginRuntime {
         }
         let limits = limits_builder.build();
 
-        let mut state = PluginState {
+        let state = PluginState {
             wasi,
             http_hosts: manifest.capabilities.http_hosts.clone(),
             http_client: if role.may_network() {

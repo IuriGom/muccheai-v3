@@ -23,7 +23,7 @@ fn run_with_timeout(
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = if let Some(mut child) = child_clone.lock().unwrap().take() {
+        let result = if let Some(child) = child_clone.lock().unwrap().take() {
             child.wait_with_output()
         } else {
             Err(std::io::Error::new(

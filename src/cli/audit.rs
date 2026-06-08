@@ -135,7 +135,7 @@ pub fn append_audit_event(event: SecurityEvent) -> anyhow::Result<()> {
 
     // Sign the entry with Ed25519 using the current forward-secure key
     let entry_bytes = serde_json::to_vec(&(sequence, &event, timestamp.0)).unwrap_or_default();
-    let mut signing_key = ed25519_dalek::SigningKey::from_bytes(&log.current_key.key);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&log.current_key.key);
     let verifying_key = signing_key.verifying_key().to_bytes().to_vec();
     let sig = signing_key.sign(&entry_bytes).to_bytes().to_vec();
     signing_key.to_bytes().zeroize();

@@ -178,7 +178,7 @@ impl LlmSandbox {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let memory_limit_mb = self.config.memory_limit_mb;
+            let _memory_limit_mb = self.config.memory_limit_mb;
             // SAFETY: post-fork pre-exec, no alloc, no locks.
             let _ = unsafe {
                 cmd.pre_exec(move || {

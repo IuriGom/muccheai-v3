@@ -1,6 +1,6 @@
 //! Persistent memory storage backed by JSONL.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 

@@ -12,7 +12,6 @@ use std::sync::atomic::AtomicBool;
 /// Set to `true` when `--json` mode is active.
 pub static JSON_MODE: AtomicBool = AtomicBool::new(false);
 
-pub use progress::{bell, milk_progress_bar, start_thinking_spinner};
-pub use risk::{ConfirmationType, RiskLevel};
+pub use progress::milk_progress_bar;
+pub use risk::RiskLevel;
 pub use theme::Theme;
-pub use words::THINKING_WORDS;
