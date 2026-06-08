@@ -515,6 +515,20 @@ body {
   50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
 }
 
+.code-lang-label {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(255,255,255,0.1);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* ===== Modals ===== */
 .modal, .api-key-modal {
   display: none;

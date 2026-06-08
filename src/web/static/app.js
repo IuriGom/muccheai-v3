@@ -266,11 +266,13 @@ function updateFaviconBadge(count) {
 function formatMarkdown(text) {
   // Process code blocks first so inline rules don't touch them
   const codeBlocks = [];
-  text = text.replace(/```([\s\S]*?)```/g, (match, code) => {
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
     const placeholder = '\x00CODEBLOCK' + codeBlocks.length + '\x00';
     const id = 'cb-' + (++codeBlockId);
     codeBlockMap.set(id, code.trim());
+    const label = lang ? `<span class="code-lang-label">${escapeHtml(lang)}</span>` : '';
     codeBlocks.push(`<div style="position:relative;margin:8px 0;">
+      ${label}
       <button class="btn btn-secondary copy-code-btn" data-id="${id}" style="position:absolute;top:6px;right:6px;padding:4px 10px;font-size:0.75rem;opacity:0;transition:opacity 0.2s;">Copy</button>
       <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;overflow-x:auto;font-family:monospace;font-size:0.85em;margin:0;"><code>${escapeHtml(code.trim())}</code></pre>
     </div>`);
