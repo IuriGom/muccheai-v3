@@ -362,6 +362,21 @@ function closeSettings() { document.getElementById('settingsModal').style.displa
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
+// ===== Toast Notifications =====
+function showToast(message, type) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + (type || 'info');
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
 // ===== Mock Data for Demo =====
 const MOCK_PERSONAS = [
   { id: 'default', name: 'Default', emoji: '🐄', desc: 'Balanced, helpful assistant.' },
