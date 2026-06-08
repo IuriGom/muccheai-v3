@@ -1084,6 +1084,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Compact mode toggle
+  const compactToggle = document.getElementById('settingCompact');
+  if (compactToggle) {
+    compactToggle.checked = localStorage.getItem('compactMode') === 'true';
+    if (compactToggle.checked) document.body.classList.add('compact-mode');
+    compactToggle.addEventListener('change', e => {
+      document.body.classList.toggle('compact-mode', e.target.checked);
+      localStorage.setItem('compactMode', String(e.target.checked));
+      showToast(e.target.checked ? 'Compact mode enabled' : 'Compact mode disabled', 'info');
+    });
+  }
+
   // Sidebar toggle for mobile
   const sidebarToggle = document.getElementById('sidebarToggleBtn');
   const sidebar = document.querySelector('.sidebar');

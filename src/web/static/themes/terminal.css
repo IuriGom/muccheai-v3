@@ -503,3 +503,15 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
   opacity: 0.7;
 }
 .stream-progress.hidden { display: none; }
+
+body.compact-mode .message {
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  border-radius: 12px;
+}
+body.compact-mode .chat-messages {
+  padding: 12px 10%;
+  gap: 8px;
+}
+body.compact-mode .msg-time { margin-bottom: 2px; }
+body.compact-mode .msg-actions { margin-bottom: 4px; }
