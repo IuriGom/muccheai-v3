@@ -186,9 +186,11 @@ function endStream() {
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
 }
 
-function showTyping(show) {
+function showTyping(show, label) {
   const el = document.getElementById('typingIndicator');
+  const word = document.getElementById('typingWord');
   if (el) el.classList.toggle('hidden', !show);
+  if (word) word.textContent = label || '';
 }
 
 async function sendChat() {
@@ -211,7 +213,7 @@ async function sendChat() {
       headers,
       body: JSON.stringify({ message: text, session_id: currentSession() })
     });
-    showTyping(false);
+    showTyping(false, aiName + ' is thinking...');
     if (!res.ok) {
       if (res.status === 403) {
         addMessage('Session expired. Please log in again.', false);
@@ -237,7 +239,7 @@ async function sendChat() {
       i += chunkSize;
     }, delay);
   } catch (e) {
-    showTyping(false);
+    showTyping(false, aiName + ' is thinking...');
     addMessage('Network error. Please try again.', false);
   }
 }
@@ -304,7 +306,7 @@ async function sendChatStream() {
     }
     endStream();
   } catch (e) {
-    showTyping(false);
+    showTyping(false, aiName + ' is thinking...');
     // Fall back to non-streaming
     sendChat();
   }
