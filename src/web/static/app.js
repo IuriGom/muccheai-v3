@@ -956,7 +956,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Share / digest / encrypt buttons (mock)
   document.getElementById('shareSessionBtn')?.addEventListener('click', () => addMessage('🔗 Session link copied to clipboard.', false));
-  document.getElementById('digestSessionBtn')?.addEventListener('click', () => addMessage('📋 Session digest generated.', false));
+  document.getElementById('digestSessionBtn')?.addEventListener('click', () => {
+    const messages = Array.from(document.querySelectorAll('.message'));
+    let md = '# Chat Export\n\n';
+    messages.forEach(m => {
+      const role = m.classList.contains('user') ? 'User' : aiName;
+      const text = m.textContent.replace(/\d{1,2}:\d{2}/, '').trim();
+      md += `## ${role}\n${text}\n\n`;
+    });
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chat-export.md';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Chat exported as Markdown', 'success');
+  });
   document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
 
   // Fullscreen toggle
