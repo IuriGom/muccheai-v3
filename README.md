@@ -539,6 +539,16 @@ muccheai
 
 To disable password protection, delete `~/.muccheai/.password_required`.
 
+### "I forgot my keypair password"
+
+If you lost the password and cannot start the server, use dev mode to bypass the password check and create a fresh database:
+
+```bash
+MUCCHEAI_DEV_MODE=1 muccheai web
+```
+
+> ⚠️ Dev mode creates a **new empty user database** if the existing one cannot be decrypted. Your old encrypted data is preserved on disk but will not be accessible until you provide the correct password.
+
 ### "Cannot log in after switching branches"
 
 Database schemas may change between versions. Run:

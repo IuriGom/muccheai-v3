@@ -58,5 +58,14 @@ dep-clean: clean
 	rm -rf $(HOME)/.cargo/registry/cache
 	@echo "Deep clean complete."
 
+dev:
+	@echo "Starting MuccheAI in dev mode (no password required)..."
+	MUCCHEAI_DEV_MODE=1 cargo run -- web
+
+web:
+	@echo "Serving frontend at http://127.0.0.1:8888"
+	@echo "(Make sure the backend is running on port 3000)"
+	cd src/web/static && python3 -m http.server 8888
+
 clean:
 	cargo clean
