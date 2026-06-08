@@ -141,6 +141,10 @@ function addMessage(text, isUser) {
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
   }
+  // Update tab title when new message arrives
+  if (!isUser && document.hidden) {
+    document.title = '💬 New message · ' + aiName;
+  }
   return div;
 }
 
@@ -912,6 +916,13 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = 'Failed';
         setTimeout(() => btn.textContent = 'Copy', 1500);
       });
+    }
+  });
+
+  // Restore title when tab becomes visible
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      document.title = aiName + ' — Secure AI Agent';
     }
   });
 
