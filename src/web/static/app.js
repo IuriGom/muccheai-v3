@@ -5,6 +5,36 @@ let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
+// ===== Chat Persistence =====
+function saveChat() {
+  const messages = Array.from(document.querySelectorAll('.message')).map(m => ({
+    text: m.dataset.rawText || '',
+    isUser: m.classList.contains('user'),
+    time: m.querySelector('.msg-time')?.textContent || ''
+  }));
+  localStorage.setItem('chat_messages', JSON.stringify(messages));
+}
+
+function loadChat() {
+  const raw = localStorage.getItem('chat_messages');
+  if (!raw) return;
+  try {
+    const messages = JSON.parse(raw);
+    const container = document.getElementById('messages');
+    if (!container) return;
+    container.innerHTML = '';
+    messages.forEach(m => {
+      if (m.text) addMessage(m.text, m.isUser);
+    });
+  } catch (e) {
+    console.error('Failed to load chat', e);
+  }
+}
+
+function clearChatStorage() {
+  localStorage.removeItem('chat_messages');
+}
+
 // ===== Theme System =====
 function applyTheme(name) {
   currentTheme = name;
@@ -162,6 +192,7 @@ function addMessage(text, isUser) {
   if (shouldAutoScroll(container)) {
     container.scrollTop = container.scrollHeight;
   }
+  saveChat();
   // Update tab title and favicon when new message arrives
   if (!isUser && document.hidden) {
     document.title = '💬 New message · ' + aiName;
@@ -352,6 +383,7 @@ function endStream() {
   }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
+  saveChat();
 }
 
 function showTyping(show, label) {
@@ -644,6 +676,7 @@ function renderMemories() {
 // ===== Event Listeners =====
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  loadChat();
   renderPersonas();
   renderMcp();
   renderStatus();
@@ -883,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <h2>🐄 Welcome to ${aiName}</h2>
           <p>Your local, secure AI agent. Select a persona and start chatting.</p>
         </div>`;
+      clearChatStorage();
       localStorage.removeItem('session_id');
     });
   }
@@ -1183,6 +1217,15 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.classList.add('active');
     showToast(reaction === 'up' ? 'Thanks for the feedback!' : 'Thanks, we\'ll improve.', 'info');
   });
+
+  // Auto-resize textarea
+  const input = document.getElementById('input');
+  if (input) {
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    });
+  }
 
   // Restore title and favicon when tab becomes visible
   document.addEventListener('visibilitychange', () => {

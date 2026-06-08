@@ -121,6 +121,10 @@ body {
   color: var(--text);
   font-family: inherit;
   font-size: 0.85rem;
+  resize: none;
+  overflow-y: auto;
+  max-height: 200px;
+  min-height: 24px;
   outline: none;
 }
 .chat-input input:focus { border-color: var(--accent); }

@@ -122,6 +122,10 @@ body {
   border: none;
   color: #fff;
   font-size: 0.95rem;
+  resize: none;
+  overflow-y: auto;
+  max-height: 200px;
+  min-height: 24px;
   outline: none;
 }
 .chat-input textarea::placeholder { color: rgba(255,255,255,0.5); }

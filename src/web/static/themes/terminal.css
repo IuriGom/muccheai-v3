@@ -98,6 +98,10 @@ body {
   color: var(--accent);
   font-family: inherit;
   font-size: 0.9rem;
+  resize: none;
+  overflow-y: auto;
+  max-height: 200px;
+  min-height: 24px;
   outline: none;
 }
 .chat-input button {

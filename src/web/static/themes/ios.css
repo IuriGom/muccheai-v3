@@ -118,6 +118,10 @@ body {
   border: none;
   color: var(--text);
   font-size: 0.95rem;
+  resize: none;
+  overflow-y: auto;
+  max-height: 200px;
+  min-height: 24px;
   outline: none;
 }
 .chat-input button {
