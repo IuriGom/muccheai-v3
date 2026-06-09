@@ -151,7 +151,7 @@ pub async fn print_update_banner() {
     if let Some((latest, _remote_commit)) = check_for_update().await {
         eprintln!();
         eprintln!("  🔔 New update available: v{} → v{}", env!("CARGO_PKG_VERSION"), latest);
-        eprintln!("     Run 'muccheai update' (or 'muccheai upd') to update now.");
+        eprintln!("     Run 'muccheai update' to update now.");
         eprintln!();
     }
 }

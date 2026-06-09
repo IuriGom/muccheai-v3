@@ -30,29 +30,6 @@
         </div>
     </div>
     <div class="offline-indicator">⚠️ You are offline — messages will be queued</div>
-    <!-- Login Modal -->
-    <div id="apiKeyModal" class="api-key-modal" style="display:none;">
-        <div class="api-key-modal-content">
-            <h3 id="loginTitle">🔐 Login</h3>
-            <p id="loginDesc">Use your username and password.</p>
-            <form id="loginForm">
-                <input type="text" id="loginUser" placeholder="Username" autocomplete="username">
-                <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password">
-                <div id="duressPinSection" style="display:none;">
-                    <input type="password" id="duressPin" placeholder="Duress PIN (optional)" autocomplete="off">
-                    <p style="font-size:0.75rem;color:var(--text-dim);margin:0.25rem 0 0.5rem;text-align:left;">
-                        🔒 <strong>Duress PIN</strong> — a fake password for emergencies.<br>
-                        If someone forces you to log in, type this PIN <em>instead of your real password</em>. The app will unlock and look completely normal, but behind the scenes it instantly <strong>deletes all your memories, chat history, and active sessions</strong>. To the attacker it just looks like an empty account. You cannot recover the data after this.
-                    </p>
-                </div>
-                <div class="btn-row" style="gap:0.5rem;">
-                    <button type="submit" class="btn btn-primary" id="loginBtn" style="width:100%;">Connect</button>
-                </div>
-                <p id="loginError" style="font-size:0.8rem;color:#ff6b6b;margin-top:0.5rem;text-align:center;display:none;"></p>
-            </form>
-        </div>
-    </div>
-
     <!-- First Use — Name Your AI Modal -->
     <div id="nameAiModal" class="api-key-modal" style="display:none;">
         <div class="api-key-modal-content">

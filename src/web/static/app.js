@@ -1,6 +1,6 @@
 // ===== MuccheAI Web UI =====
 const API = (window.location.port === '8888') ? 'http://127.0.0.1:3000' : '';
-let token = localStorage.getItem('token') || '';
+let token = ''; // Auth disabled — no login required
 let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
@@ -95,29 +95,12 @@ function initTheme() {
   }
 }
 
-// ===== Auth =====
-async function login(user, pass) {
-  const res = await fetch(`${API}/api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: user, password: pass })
-  });
-  if (!res.ok) throw new Error('Login failed');
-  const data = await res.json();
-  token = data.token;
-  localStorage.setItem('token', token);
-  await fetchCsrf();
-  closeModal('apiKeyModal');
-  maybeShowNameAiModal();
-  loadPersonasAndAgents();
-  showToast('Welcome back, ' + (data.username || user) + '!', 'success');
-}
+// ===== Auth (disabled — no login required) =====
+// The web UI runs without authentication. All auth endpoints are bypassed.
 
 async function fetchCsrf() {
   try {
-    const res = await fetch(`${API}/api/csrf`, {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
+    const res = await fetch(`${API}/api/csrf`);
     if (res.ok) {
       const data = await res.json();
       csrfToken = data.csrf_token || '';
@@ -125,8 +108,6 @@ async function fetchCsrf() {
     }
   } catch (_) {}
 }
-
-
 
 function logout() {
   token = '';
@@ -474,7 +455,7 @@ async function sendChat() {
   try {
     const headers = {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token
+      // Auth disabled — no Bearer token sent
     };
     if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
     const res = await fetch(`${API}/api/chat`, {
@@ -532,7 +513,7 @@ async function sendChatStream() {
   try {
     const headers = {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token
+      // Auth disabled — no Bearer token sent
     };
     if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
     const res = await fetch(`${API}/api/chat/stream`, {
@@ -599,7 +580,7 @@ function currentSession() {
 async function uploadFile(file) {
   const formData = new FormData();
   formData.append('file', file);
-  const headers = { 'Authorization': 'Bearer ' + token };
+  const headers = {}; // Auth disabled
   if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
   try {
     const res = await fetch(`${API}/api/upload`, {
@@ -626,8 +607,8 @@ async function uploadFile(file) {
 async function loadPersonasAndAgents() {
   try {
     const [pRes, aRes] = await Promise.all([
-      fetch(`${API}/api/personas`, { headers: { 'Authorization': 'Bearer ' + token } }),
-      fetch(`${API}/api/agents`, { headers: { 'Authorization': 'Bearer ' + token } })
+      fetch(`${API}/api/personas`),
+      fetch(`${API}/api/agents`)
     ]);
     if (pRes.ok) {
       const data = await pRes.json();
@@ -792,7 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const offlineEl = document.querySelector('.offline-indicator');
     try {
       const res = await fetch(`${API}/api/status`, {
-        headers: { 'Authorization': 'Bearer ' + token }
+        // Auth disabled
       });
       if (!res.ok) {
         if (offlineEl) offlineEl.style.display = 'block';
@@ -821,22 +802,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateStatus();
   setInterval(updateStatus, 30000);
 
-  // Login
-  const loginForm = document.getElementById('loginForm');
-  if (loginForm) {
-    loginForm.addEventListener('submit', async e => {
-      e.preventDefault();
-      const user = document.getElementById('loginUser').value;
-      const pass = document.getElementById('loginPass').value;
-      try { await login(user, pass); }
-      catch (err) {
-        const el = document.getElementById('loginError');
-        el.textContent = err.message;
-        el.style.display = 'block';
-      }
-    });
-  }
-
   // Name AI modal
   const nameAiForm = document.querySelector('#nameAiModal form');
   if (nameAiForm) {
@@ -853,12 +818,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  if (!token) {
-    openModal('apiKeyModal');
-  } else {
-    closeModal('apiKeyModal');
-    loadPersonasAndAgents();
-  }
+  // No auth required — initialize immediately
+  loadPersonasAndAgents();
 
   // Update AI name in UI
   if (aiName) {
@@ -1010,13 +971,6 @@ document.addEventListener('DOMContentLoaded', () => {
       clearChatStorage();
       localStorage.removeItem('session_id');
     });
-  }
-
-  // Duress PIN toggle
-  const loginPass = document.getElementById('loginPass');
-  const duressSection = document.getElementById('duressPinSection');
-  if (loginPass && duressSection) {
-    loginPass.addEventListener('focus', () => { duressSection.style.display = 'block'; });
   }
 
   // Theme picker options

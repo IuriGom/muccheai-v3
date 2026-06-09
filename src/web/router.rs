@@ -109,12 +109,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         ))
         .with_state(state.clone());
 
-    // API routes — auth + rate limit required
-    let api = Router::new()
+    // Open API routes — no auth required (web UI runs without login)
+    let open_api = Router::new()
         .route("/status", get(status))
         .route("/config", get(get_config))
-        .route("/audit", post(audit_log))
-        .route("/revoke", post(revoke))
         .route("/build-verify", get(build_verify))
         .route("/memory", get(list_memories))
         .route("/memory", post(store_memory))
@@ -162,9 +160,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/scheduled-tasks", get(list_scheduled_tasks))
         .route("/scheduled-tasks", post(create_scheduled_task))
         .route("/scheduled-tasks/:id", delete(delete_scheduled_task))
-        .route("/vault/status", get(vault_status))
-        .route("/vault/split", post(vault_split))
-        .route("/vault/reconstruct", post(vault_reconstruct))
         .route("/plugin-audit", get(plugin_audit))
         .route("/chat/image", post(chat_with_image))
         .route("/sessions/:id/folder", post(update_session_folder))
@@ -185,12 +180,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/pipeline/run", post(run_pipeline))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
+            rate_limit_middleware,
+        ));
+
+    // Protected API routes — auth required
+    let protected_api = Router::new()
+        .route("/audit", post(audit_log))
+        .route("/revoke", post(revoke))
+        .route("/vault/status", get(vault_status))
+        .route("/vault/split", post(vault_split))
+        .route("/vault/reconstruct", post(vault_reconstruct))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
             auth_middleware,
         ))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
-        ))
+        ));
+
+    let api = open_api.merge(protected_api)
         .fallback(|| async { 
             (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "Not Found"}))) 
         })
