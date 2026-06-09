@@ -113,23 +113,6 @@ async function login(user, pass) {
   showToast('Welcome back, ' + (data.username || user) + '!', 'success');
 }
 
-async function register(user, pass) {
-  const res = await fetch(`${API}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: user, password: pass })
-  });
-  if (!res.ok) throw new Error('Registration failed');
-  const data = await res.json();
-  token = data.token;
-  localStorage.setItem('token', token);
-  await fetchCsrf();
-  closeModal('apiKeyModal');
-  maybeShowNameAiModal();
-  loadPersonasAndAgents();
-  showToast('Account created for ' + (data.username || user) + '!', 'success');
-}
-
 async function fetchCsrf() {
   try {
     const res = await fetch(`${API}/api/csrf`, {
@@ -846,27 +829,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const user = document.getElementById('loginUser').value;
       const pass = document.getElementById('loginPass').value;
       try { await login(user, pass); }
-      catch (err) {
-        const el = document.getElementById('loginError');
-        el.textContent = err.message;
-        el.style.display = 'block';
-      }
-    });
-  }
-
-  // Register
-  const registerBtn = document.getElementById('registerBtn');
-  if (registerBtn) {
-    registerBtn.addEventListener('click', async () => {
-      const user = document.getElementById('loginUser').value;
-      const pass = document.getElementById('loginPass').value;
-      if (!user || !pass) {
-        const el = document.getElementById('loginError');
-        el.textContent = 'Please enter username and password';
-        el.style.display = 'block';
-        return;
-      }
-      try { await register(user, pass); }
       catch (err) {
         const el = document.getElementById('loginError');
         el.textContent = err.message;

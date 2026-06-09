@@ -1,82 +1,40 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-LOGIN_SERVER="http://debgit.duckdns.org:8443"
-AUTH_KEY="97dc651f0e27f92f4c81783750d589b97c78b8ae0221da97"
-TIMEOUT_SECONDS=30
-
-usage() {
-    echo "Usage: debgit {on|off|status}"
-    exit 1
-}
-
-# Validate argument count
-if [[ $# -ne 1 ]]; then
-    usage
-fi
-
-# Extract hostname from login server URL for DNS check
-hostname=$(echo "$LOGIN_SERVER" | sed -E 's|https?://([^:/]+).*|\1|')
-
-check_dns() {
-    local resolved=""
-    
-    # Try dig (macOS has this by default). dig returns 0 even on NXDOMAIN,
-    # so we check if output is non-empty.
-    if command -v dig >/dev/null 2>&1; then
-        resolved=$(dig +short "$hostname" 2>/dev/null | head -1) || true
-    fi
-    
-    # Fallback to host
-    if [[ -z "$resolved" ]] && command -v host >/dev/null 2>&1; then
-        resolved=$(host "$hostname" 2>/dev/null | awk '/has address/ {print $4}' | head -1) || true
-    fi
-    
-    # Fallback to nslookup
-    if [[ -z "$resolved" ]] && command -v nslookup >/dev/null 2>&1; then
-        resolved=$(nslookup "$hostname" 2>/dev/null | awk '/Address: / {print $2}' | tail -1) || true
-    fi
-    
-    if [[ -z "$resolved" ]]; then
-        echo "[debgit] ERROR: Cannot resolve '$hostname'. Check your DNS or DuckDNS config." >&2
-        exit 1
-    fi
-    
-    echo "[debgit] Resolved $hostname -> $resolved"
-}
-
-# Run command with a timeout using perl alarm (macOS compatible, preserves TTY for sudo)
-run_with_timeout() {
-    if command -v perl >/dev/null 2>&1; then
-        perl -e "alarm($TIMEOUT_SECONDS); exec @ARGV" -- "$@"
-    else
-        "$@"
-    fi
-}
+AUTHKEY="97dc651f0e27f92f4c81783750d589b97c78b8ae0221da97"
+FALLBACK_IP="222.128.186.233"
 
 case "$1" in
     on)
-        check_dns
-        echo "[debgit] Connecting to $LOGIN_SERVER ..."
-        if run_with_timeout sudo tailscale up --login-server="$LOGIN_SERVER" --auth-key="$AUTH_KEY" --accept-dns=false; then
-            echo "[debgit] Connected. ssh root@100.64.0.1"
+        echo "[debgit] Fetching current server IP from ntfy..."
+        IP=$(curl -s -N --max-time 5 "https://ntfy.sh/debgit-home-ip/raw?poll=1" 2>/dev/null | tr -d '[:space:]')
+
+        if [ -z "$IP" ]; then
+            echo "[debgit] ntfy unreachable or empty, using fallback IP: $FALLBACK_IP"
+            IP="$FALLBACK_IP"
         else
-            echo "[debgit] Failed to connect." >&2
-            exit 1
+            echo "[debgit] Got IP from ntfy: $IP"
         fi
+
+        echo "[debgit] Starting tailscaled if needed..."
+        if ! pgrep -x tailscaled >/dev/null 2>&1; then
+            sudo tailscaled &
+            sleep 3
+        fi
+
+        echo "[debgit] Connecting..."
+        sudo tailscale up --login-server "http://${IP}:8443" --auth-key "$AUTHKEY" --accept-dns=false
+        echo "[debgit] Connected. ssh root@100.64.0.1"
         ;;
     off)
-        if sudo tailscale down; then
-            echo "[debgit] Off."
-        else
-            echo "[debgit] Failed to disconnect." >&2
-            exit 1
-        fi
+        echo "[debgit] Disconnecting..."
+        sudo tailscale down
+        sudo pkill tailscaled 2>/dev/null
+        echo "[debgit] Off."
         ;;
     status)
         tailscale status
         ;;
     *)
-        usage
+        echo "Usage: debgit {on|off|status}"
         ;;
 esac

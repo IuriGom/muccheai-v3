@@ -3472,49 +3472,12 @@ struct LoginResponse {
 
 /// Create a new user account and receive a session token.
 async fn register(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<LoginRequest>,
+    State(_state): State<Arc<AppState>>,
+    _req: Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    if req.username.is_empty() || req.password.len() < 8 {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let dummy_salt = [0u8; 16];
-    let (owner_hash, username) = {
-        let mut users = state.users.lock().await;
-        if users.get(&req.username).is_some() {
-            // Normalize timing: perform a dummy hash so the failure path
-            // takes roughly as long as a successful create_user.
-            let _ = crate::users::hash_password(&req.password, &dummy_salt);
-            // Also mirror the disk I/O that success does via create_user->save.
-            let _ = users.save();
-            return Err(StatusCode::CONFLICT);
-        }
-        let mut salt = [0u8; 16];
-        state.rng.fill(&mut salt).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        users.create_user(&req.username, &req.password, &salt, req.duress_pin.as_deref())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let user = users.get(&req.username)
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        (user.owner_hash.clone(), user.username.clone())
-    };
-
-    let mut buf = [0u8; 32];
-    state.rng.fill(&mut buf).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let token = hex::encode(buf);
-    let mut sessions = state.sessions.lock().await;
-    sessions.insert(
-        token.clone(),
-        Session {
-            owner_hash,
-            username: username.clone(),
-            created_at: Instant::now(),
-            duress: false,
-        },
-    );
-    Ok(Json(LoginResponse {
-        token,
-        username,
-    }))
+    // Web registration is disabled. Users must be created via CLI (`muccheai user create`)
+    // or by directly managing the user database.
+    Err(StatusCode::FORBIDDEN)
 }
 
 /// Authenticate and receive a session token.

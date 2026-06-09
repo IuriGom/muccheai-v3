@@ -78,26 +78,40 @@ pub async fn check_for_update() -> Option<(String, String)> {
 
     // Fetch latest version from GitHub raw TOML.
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
     {
         Ok(c) => c,
-        Err(_) => return None,
+        Err(e) => {
+            tracing::warn!("Update check: failed to build HTTP client: {}", e);
+            return None;
+        }
     };
 
     let text = match client.get(GITHUB_RAW_TOML).send().await {
         Ok(r) if r.status().is_success() => match r.text().await {
             Ok(t) => t,
-            Err(_) => return None,
+            Err(e) => {
+                tracing::warn!("Update check: failed to read response body: {}", e);
+                return None;
+            }
         },
-        _ => return None,
+        Ok(r) => {
+            tracing::warn!("Update check: GitHub returned status {}", r.status());
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!("Update check: request failed: {}", e);
+            return None;
+        }
     };
 
     let latest = text
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
-            if trimmed.starts_with("version") {
+            // Match exactly `version = "..."` (not `version.workspace = true`)
+            if trimmed.starts_with("version ") || trimmed.starts_with("version=") {
                 trimmed.split('=').nth(1).map(|s| {
                     s.trim()
                         .trim_matches('"')
@@ -111,6 +125,7 @@ pub async fn check_for_update() -> Option<(String, String)> {
         .unwrap_or_default();
 
     if latest.is_empty() {
+        tracing::warn!("Update check: could not parse version from GitHub Cargo.toml");
         return None;
     }
 
