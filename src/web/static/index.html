@@ -36,6 +36,12 @@
             <h3>👋 Welcome</h3>
             <p>I'm your AI assistant. What would you like to call me?</p>
             <form>
+                <label for="languageSelect" style="display:block;margin-bottom:4px;font-size:0.8rem;color:var(--text-dim);">Language</label>
+                <select id="languageSelect" style="margin-bottom:12px;">
+                    <option value="en">English</option>
+                    <option value="pt">Português (Brasil)</option>
+                    <option value="zh">中文 (简体)</option>
+                </select>
                 <input type="text" id="aiNameInput" placeholder="e.g. MuccheAI, Assistant, etc." autocomplete="off" maxlength="30">
                 <button type="submit" class="btn btn-primary">Start</button>
             </form>
@@ -54,9 +60,11 @@
             <div class="agent-form">
                 <h4>Add Provider</h4>
                 <select id="agentProvider">
-                    <option value="ollama">Ollama</option>
-                    <option value="openai">OpenAI</option>
+                    <option value="moonshot">Moonshot AI</option>
                     <option value="anthropic">Anthropic</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="ollama">Ollama</option>
                 </select>
                 <input type="text" id="agentName" placeholder="Name (e.g. My Ollama)">
                 <label>Model <span class="tooltip-icon" data-tip="The AI model identifier (e.g. qwen3:14b, gpt-4, claude-3-sonnet).">?</span></label>
@@ -263,6 +271,15 @@
                         <button class="btn-icon" id="researchChatsBtn" title="Research chats">🔍</button>
                     </div>
                 </div>
+                <!-- Sidebar Search Panel -->
+                <div id="sidebarSearchPanel" class="sidebar-search-panel">
+                    <div class="sidebar-search-header">
+                        <input type="text" id="sidebarSearchInput" placeholder="Search chats..." autocomplete="off">
+                        <button class="btn-icon" id="sidebarSearchClose" title="Close">✕</button>
+                    </div>
+                    <div id="sidebarSearchResults" class="sidebar-search-results"></div>
+                    <div id="sidebarSearchEmpty" class="sidebar-search-empty" style="display:none;">No results</div>
+                </div>
                 <input type="text" class="chat-history-search" id="chatHistorySearch" placeholder="Search chats...">
                 <div id="chatHistoryList"></div>
             </div>
@@ -362,9 +379,25 @@
                                 <div class="chat-input">
                                     <input type="file" id="fileInput" style="display:none;" accept=".txt,.md,.json,.pdf,.docx">
                                     <input type="file" id="imageInput" style="display:none;" accept="image/*">
+                                    <input type="file" id="cameraInput" style="display:none;" accept="image/*" capture="environment">
                                     <button id="stopBtn" class="stop-btn hidden" title="Stop generating">⏹</button>
-                                    <button id="uploadBtn" title="Upload file">📎</button>
-                                    <button id="imageBtn" title="Send image">🖼️</button>
+                                    <div class="attach-menu-wrapper">
+                                        <button id="attachBtn" title="Add attachment">+</button>
+                                        <div class="attach-dropdown" id="attachDropdown">
+                                            <button class="attach-option" data-action="file">
+                                                <span class="attach-icon">📎</span>
+                                                <span class="attach-label">Upload file</span>
+                                            </button>
+                                            <button class="attach-option" data-action="image">
+                                                <span class="attach-icon">🖼️</span>
+                                                <span class="attach-label">Upload image</span>
+                                            </button>
+                                            <button class="attach-option" data-action="camera">
+                                                <span class="attach-icon">📷</span>
+                                                <span class="attach-label">Take photo</span>
+                                            </button>
+                                        </div>
+                                    </div>
                                     <button id="voiceBtn" title="Voice input">🎤</button>
                                     <textarea id="input" placeholder="Message MuccheAI..." autocomplete="off" rows="1"></textarea>
                                     <button id="send">➤</button>
@@ -549,7 +582,7 @@
                 <button class="btn-icon" onclick="document.getElementById('shortcutsModal').style.display='none'">✕</button>
             </div>
             <div class="modal-body">
-                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>K</kbd><span>New chat</span></div>
+                <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>K</kbd><span>Search chats</span></div>
                 <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>,</kbd><span>Open Settings</span></div>
                 <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd><span>Theme picker</span></div>
                 <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>F</kbd><span>Find in page</span></div>
@@ -564,7 +597,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=15"></script>
+    <script src="/app.js?v=16"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>

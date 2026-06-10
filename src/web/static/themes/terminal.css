@@ -113,6 +113,53 @@ body {
   font-family: inherit;
 }
 .chat-input button:hover { background: rgba(0,255,65,0.1); }
+
+/* ===== Attachment Menu (+ button dropdown) ===== */
+.attach-menu-wrapper { position: relative; }
+
+#attachBtn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 1.1rem;
+  font-weight: 300;
+  padding: 6px 12px;
+}
+#attachBtn:hover { background: rgba(0,255,65,0.1); }
+
+.attach-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  padding: 4px;
+  min-width: 180px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 50;
+}
+.attach-dropdown.open { display: flex; }
+
+.attach-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.attach-option:hover { background: rgba(0,255,65,0.08); }
+.attach-icon { font-size: 1rem; }
+.attach-label { color: var(--accent); }
+
 .message {
   font-size: 0.9rem;
   line-height: 1.7;
@@ -276,6 +323,56 @@ input:focus, select:focus { border-color: var(--accent); }
 @keyframes pulse-glow {
   0%, 100% { box-shadow: 0 0 0 0 rgba(37,99,235,0.4); }
   50% { box-shadow: 0 0 0 8px rgba(37,99,235,0); }
+}
+
+/* ===== Sidebar Search ===== */
+.sidebar-search-panel {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, opacity 0.3s ease, margin 0.3s ease;
+  opacity: 0;
+  margin-bottom: 0;
+}
+.sidebar-search-panel.open {
+  max-height: 300px;
+  opacity: 1;
+  margin-bottom: 8px;
+}
+.sidebar-search-header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.sidebar-search-header input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.8rem;
+  outline: none;
+}
+.sidebar-search-header input:focus { border-color: var(--accent); }
+.sidebar-search-header .btn-icon {
+  width: 28px;
+  height: 28px;
+  font-size: 0.8rem;
+  padding: 2px;
+}
+.sidebar-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sidebar-search-empty {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  padding: 8px;
+  text-align: center;
 }
 
 .msg-time {

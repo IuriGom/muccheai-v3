@@ -132,6 +132,7 @@ function switchTab(tabId) {
   if (nav) nav.classList.add('active');
   const title = tabId.charAt(0).toUpperCase() + tabId.slice(1);
   document.getElementById('pageTitle').textContent = title;
+  if (tabId === 'graph') renderGraph();
 }
 
 // ===== Chat =====
@@ -621,10 +622,20 @@ async function loadPersonasAndAgents() {
       const data = await aRes.json();
       const sel = document.getElementById('agentSelect');
       if (sel && data.agents) {
-        sel.innerHTML = data.agents.map(a => `<option value="${a.id}">${a.name} (${a.model})</option>`).join('');
+        sel.innerHTML = data.agents.map(a => `<option value="${a.id}" data-provider="${a.provider || ''}">${a.name} (${a.model})</option>`).join('');
       }
+      updateCloudPrivacyWarning();
     }
   } catch (_) {}
+}
+
+function updateCloudPrivacyWarning() {
+  const warning = document.getElementById('cloudPrivacyWarning');
+  const agentSelect = document.getElementById('agentSelect');
+  if (!warning || !agentSelect) return;
+  const selectedOption = agentSelect.options[agentSelect.selectedIndex];
+  const provider = selectedOption?.dataset?.provider?.toLowerCase() || '';
+  warning.style.display = (provider && provider !== 'ollama') ? 'block' : 'none';
 }
 
 // ===== Settings =====
@@ -669,25 +680,28 @@ const MOCK_STATUS = [
   { label: 'Memory Rules', value: '42', healthy: true },
   { label: 'Total Tokens', value: '1.2M', healthy: true },
 ];
-const MOCK_MEMORIES = [
-  { type: 'Fact', key: 'user_name', value: 'Alice' },
-  { type: 'Preference', key: 'language', value: 'English' },
-  { type: 'Fact', key: 'timezone', value: 'UTC-3' },
-];
-const MOCK_CHAT_HISTORY = [
-  { id: '1', title: 'Rust workspace setup', date: '2h ago' },
-  { id: '2', title: 'Theme system design', date: '5h ago' },
-  { id: '3', title: 'Argon2 params review', date: '1d ago' },
-  { id: '4', title: 'MCP server integration', date: '2d ago' },
-];
+const MOCK_MEMORIES = [];
+const MOCK_CHAT_HISTORY = [];
 
-function renderChatHistory() {
+async function renderChatHistory() {
   const list = document.getElementById('chatHistoryList');
   if (!list) return;
-  list.innerHTML = MOCK_CHAT_HISTORY.map(h => `
+  let sessions = [];
+  try {
+    const res = await fetch(`${API}/api/sessions`);
+    if (res.ok) {
+      const data = await res.json();
+      sessions = data.sessions || [];
+    }
+  } catch (_) {}
+  if (!sessions.length) {
+    list.innerHTML = `<div class="nav-item" style="font-size:0.8rem;padding:6px 10px;color:var(--text-dim);">No chats yet</div>`;
+    return;
+  }
+  list.innerHTML = sessions.map(h => `
     <a href="#" class="nav-item chat-history-item" data-session="${h.id}" style="font-size:0.8rem;padding:6px 10px;">
-      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${h.title}</span>
-      <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;white-space:nowrap;">${h.date}</span>
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${h.title || 'Untitled'}</span>
+      <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;white-space:nowrap;">${h.date || ''}</span>
     </a>
   `).join('');
   list.querySelectorAll('.chat-history-item').forEach(item => {
@@ -747,26 +761,194 @@ function renderStatus() {
   document.getElementById('ollamaDot').classList.add('green');
 }
 
-function renderMemories() {
+async function renderMemories() {
   const facts = document.getElementById('factsList');
   const prefs = document.getElementById('preferencesList');
-  if (facts) facts.innerHTML = MOCK_MEMORIES.filter(m => m.type === 'Fact').map(m => `
-    <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
+  let memories = [];
+  try {
+    const res = await fetch(`${API}/api/memory`);
+    if (res.ok) {
+      const data = await res.json();
+      memories = data.memories || [];
+    }
+  } catch (_) {}
+  const emptyHtml = `<div class="memory-item" style="color:var(--text-dim);">No memories yet</div>`;
+  if (facts) {
+    const factItems = memories.filter(m => m.type === 'Fact');
+    facts.innerHTML = factItems.length ? factItems.map(m => `
+      <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
+    `).join('') : emptyHtml;
+  }
+  if (prefs) {
+    const prefItems = memories.filter(m => m.type === 'Preference');
+    prefs.innerHTML = prefItems.length ? prefItems.map(m => `
+      <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
+    `).join('') : emptyHtml;
+  }
+}
+
+async function renderPresets() {
+  const grid = document.getElementById('presetGrid');
+  if (!grid) return;
+  grid.innerHTML = '<div style="color:var(--text-dim);padding:1rem;">Loading presets...</div>';
+  let presets = [];
+  try {
+    const res = await fetch(`${API}/api/presets`);
+    if (res.ok) {
+      const data = await res.json();
+      presets = data.presets || [];
+    }
+  } catch (_) {}
+  if (!presets.length) {
+    grid.innerHTML = '<div style="color:var(--text-dim);padding:1rem;">No presets available.</div>';
+    return;
+  }
+  grid.innerHTML = presets.map(p => `
+    <div class="preset-card" data-name="${p.name}">
+      <div>
+        <strong>${p.name}</strong>
+        <div class="meta">${p.description || ''}</div>
+        <div class="meta">${p.provider || ''} · ${p.model || ''}</div>
+      </div>
+      <button class="btn btn-secondary preset-install-btn">Install</button>
+    </div>
   `).join('');
-  if (prefs) prefs.innerHTML = MOCK_MEMORIES.filter(m => m.type === 'Preference').map(m => `
-    <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
-  `).join('');
+  grid.querySelectorAll('.preset-install-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.preset-card');
+      const name = card?.dataset.name;
+      if (!name) return;
+      btn.textContent = 'Installing...';
+      btn.disabled = true;
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+        const res = await fetch(`${API}/api/presets/${encodeURIComponent(name)}/install`, {
+          method: 'POST',
+          headers
+        });
+        if (!res.ok) throw new Error('Status ' + res.status);
+        showToast('Preset "' + name + '" installed', 'success');
+        btn.textContent = 'Installed';
+      } catch (e) {
+        showToast('Failed to install preset: ' + e.message, 'error');
+        btn.textContent = 'Install';
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+async function renderGraph() {
+  const container = document.getElementById('graphContainer');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:2rem;">Loading graph...</div>';
+  let data;
+  try {
+    const res = await fetch(`${API}/api/knowledge-graph`);
+    if (!res.ok) throw new Error('Failed to fetch');
+    data = await res.json();
+  } catch (_) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:2rem;">Unable to load knowledge graph.</div>';
+    return;
+  }
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const edges = Array.isArray(data.edges) ? data.edges : [];
+  if (nodes.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:2rem;">No graph data yet.</div>';
+    return;
+  }
+
+  const width = container.clientWidth || 800;
+  const height = container.clientHeight || 500;
+  const nodeRadius = 40;
+  const padding = nodeRadius + 20;
+
+  // Simple force-directed-ish layout: place nodes in a circle
+  const positions = {};
+  nodes.forEach((node, i) => {
+    const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1);
+    const cx = width / 2;
+    const cy = height / 2;
+    const rx = Math.min(width, height) / 2 - padding;
+    const ry = rx;
+    positions[node.id || node.key || i] = {
+      x: cx + rx * Math.cos(angle),
+      y: cy + ry * Math.sin(angle)
+    };
+  });
+
+  // Build HTML
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'relative';
+  wrapper.style.width = width + 'px';
+  wrapper.style.height = height + 'px';
+  wrapper.style.overflow = 'hidden';
+
+  // Draw edges as rotated divs
+  edges.forEach(edge => {
+    const from = positions[edge.from || edge.source];
+    const to = positions[edge.to || edge.target];
+    if (!from || !to) return;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+    const line = document.createElement('div');
+    line.style.position = 'absolute';
+    line.style.left = from.x + 'px';
+    line.style.top = from.y + 'px';
+    line.style.width = length + 'px';
+    line.style.height = '2px';
+    line.style.background = 'var(--border)';
+    line.style.transformOrigin = '0 50%';
+    line.style.transform = `rotate(${angle}deg)`;
+    wrapper.appendChild(line);
+  });
+
+  // Draw nodes
+  nodes.forEach(node => {
+    const pos = positions[node.id || node.key];
+    if (!pos) return;
+    const el = document.createElement('div');
+    el.style.position = 'absolute';
+    el.style.left = (pos.x - nodeRadius) + 'px';
+    el.style.top = (pos.y - nodeRadius) + 'px';
+    el.style.width = (nodeRadius * 2) + 'px';
+    el.style.height = (nodeRadius * 2) + 'px';
+    el.style.borderRadius = '50%';
+    el.style.background = 'var(--accent)';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.fontSize = '0.7rem';
+    el.style.color = '#fff';
+    el.style.textAlign = 'center';
+    el.style.padding = '4px';
+    el.style.boxSizing = 'border-box';
+    el.style.wordBreak = 'break-word';
+    el.style.cursor = 'default';
+    el.title = node.label || node.key || '';
+    el.textContent = node.label || node.key || node.id || '';
+    wrapper.appendChild(el);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(wrapper);
 }
 
 // ===== Event Listeners =====
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  const savedLang = localStorage.getItem('language');
+  if (savedLang) document.documentElement.setAttribute('lang', savedLang);
   loadChat();
   renderPersonas();
   renderMcp();
   renderStatus();
   renderMemories();
   renderChatHistory();
+  renderPresets();
 
   // Update version badge and status sidebar
   async function updateStatus() {
@@ -814,12 +996,20 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelector('.welcome-message h2').textContent = '🐄 Welcome to ' + aiName;
         document.getElementById('input').placeholder = 'Message ' + aiName + '...';
       }
+      const lang = document.getElementById('languageSelect')?.value;
+      if (lang) localStorage.setItem('language', lang);
       closeModal('nameAiModal');
     });
   }
 
   // No auth required — initialize immediately
   loadPersonasAndAgents();
+
+  // Agent select change → update privacy warning
+  const agentSelectEl = document.getElementById('agentSelect');
+  if (agentSelectEl) {
+    agentSelectEl.addEventListener('change', updateCloudPrivacyWarning);
+  }
 
   // Update AI name in UI
   if (aiName) {
@@ -878,11 +1068,40 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Attachment menu (+ button dropdown)
+  const attachBtn = document.getElementById('attachBtn');
+  const attachDropdown = document.getElementById('attachDropdown');
+  if (attachBtn && attachDropdown) {
+    attachBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      attachDropdown.classList.toggle('open');
+    });
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!attachDropdown.contains(e.target) && e.target !== attachBtn) {
+        attachDropdown.classList.remove('open');
+      }
+    });
+    // Handle dropdown option clicks
+    attachDropdown.querySelectorAll('.attach-option').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = opt.dataset.action;
+        attachDropdown.classList.remove('open');
+        if (action === 'file') {
+          document.getElementById('fileInput')?.click();
+        } else if (action === 'image') {
+          document.getElementById('imageInput')?.click();
+        } else if (action === 'camera') {
+          document.getElementById('cameraInput')?.click();
+        }
+      });
+    });
+  }
+
   // File upload
-  const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('fileInput');
-  if (uploadBtn && fileInput) {
-    uploadBtn.addEventListener('click', () => fileInput.click());
+  if (fileInput) {
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files[0];
       if (file) {
@@ -899,14 +1118,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Image upload (visual only)
-  const imageBtn = document.getElementById('imageBtn');
   const imageInput = document.getElementById('imageInput');
-  if (imageBtn && imageInput) {
-    imageBtn.addEventListener('click', () => imageInput.click());
+  if (imageInput) {
     imageInput.addEventListener('change', () => {
       const file = imageInput.files[0];
       if (file) addMessage('🖼️ Image: ' + file.name, true);
       imageInput.value = '';
+    });
+  }
+
+  // Camera capture (visual only)
+  const cameraInput = document.getElementById('cameraInput');
+  if (cameraInput) {
+    cameraInput.addEventListener('change', () => {
+      const file = cameraInput.files[0];
+      if (file) addMessage('📷 Photo: ' + file.name, true);
+      cameraInput.value = '';
     });
   }
 
@@ -1016,6 +1243,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Persona switch
+  const personaSelect = document.getElementById('personaSelect');
+  if (personaSelect) {
+    personaSelect.addEventListener('change', async () => {
+      const personaId = personaSelect.value;
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+        const res = await fetch(`${API}/api/personas/switch`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ persona_id: personaId })
+        });
+        if (!res.ok) throw new Error('Status ' + res.status);
+        const option = personaSelect.options[personaSelect.selectedIndex];
+        const personaName = option ? option.textContent.trim() : '';
+        const topbarPersona = document.getElementById('topbarPersona');
+        if (topbarPersona) topbarPersona.textContent = personaName;
+        showToast('Persona switched to ' + personaName, 'success');
+      } catch (e) {
+        showToast('Failed to switch persona: ' + e.message, 'error');
+      }
+    });
+  }
+
   // Temperature slider
   const tempSlider = document.getElementById('settingTemp');
   if (tempSlider) {
@@ -1054,6 +1306,45 @@ document.addEventListener('DOMContentLoaded', () => {
       document.body.classList.toggle('compact-mode', e.target.checked);
       localStorage.setItem('compactMode', String(e.target.checked));
       showToast(e.target.checked ? 'Compact mode enabled' : 'Compact mode disabled', 'info');
+    });
+  }
+
+  // Save Settings button
+  const saveSettingsBtn = document.querySelector('#settingsModal .btn-row .btn-primary');
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', async () => {
+      const settings = {
+        language: document.getElementById('settingLanguage')?.value || 'en',
+        ai_name: document.getElementById('settingAiName')?.value?.trim() || aiName,
+        temperature: parseFloat(document.getElementById('settingTemp')?.value || '0.7'),
+        sound_enabled: document.getElementById('settingSound')?.checked ?? true,
+        auto_scroll: document.getElementById('settingAutoScroll')?.checked ?? true,
+        compact_mode: document.getElementById('settingCompact')?.checked ?? false,
+      };
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+        const res = await fetch(`${API}/api/settings`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(settings)
+        });
+        if (!res.ok) throw new Error('Status ' + res.status);
+        showToast('Settings saved', 'success');
+      } catch (e) {
+        showToast('Failed to save settings: ' + e.message, 'error');
+      }
+    });
+  }
+
+  // Language select
+  const languageSelect = document.getElementById('settingLanguage');
+  if (languageSelect) {
+    const savedLang = localStorage.getItem('language');
+    if (savedLang) languageSelect.value = savedLang;
+    languageSelect.addEventListener('change', () => {
+      localStorage.setItem('language', languageSelect.value);
+      document.documentElement.setAttribute('lang', languageSelect.value);
     });
   }
 
@@ -1149,13 +1440,57 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Global search
+  // Sidebar search
+  const sidebarSearchPanel = document.getElementById('sidebarSearchPanel');
+  const sidebarSearchInput = document.getElementById('sidebarSearchInput');
+  const sidebarSearchClose = document.getElementById('sidebarSearchClose');
+  const sidebarSearchResults = document.getElementById('sidebarSearchResults');
+  const sidebarSearchEmpty = document.getElementById('sidebarSearchEmpty');
+
+  function openSidebarSearch() {
+    if (!sidebarSearchPanel) return;
+    sidebarSearchPanel.classList.add('open');
+    sidebarSearchInput?.focus();
+  }
+  function closeSidebarSearch() {
+    if (!sidebarSearchPanel) return;
+    sidebarSearchPanel.classList.remove('open');
+    if (sidebarSearchInput) sidebarSearchInput.value = '';
+    if (sidebarSearchResults) sidebarSearchResults.innerHTML = '';
+    if (sidebarSearchEmpty) sidebarSearchEmpty.style.display = 'none';
+  }
+  function updateSidebarSearch(term) {
+    if (!sidebarSearchResults || !sidebarSearchEmpty) return;
+    const items = document.querySelectorAll('.chat-history-item');
+    const lower = term.toLowerCase();
+    let matchCount = 0;
+    sidebarSearchResults.innerHTML = '';
+    items.forEach(item => {
+      const text = item.textContent.toLowerCase();
+      if (!lower || text.includes(lower)) {
+        const clone = item.cloneNode(true);
+        clone.addEventListener('click', e => {
+          e.preventDefault();
+          localStorage.setItem('session_id', clone.dataset.session);
+          document.getElementById('messages').innerHTML = `<div class="message ai">Loaded session: <strong>${clone.querySelector('span').textContent}</strong></div>`;
+          closeSidebarSearch();
+        });
+        sidebarSearchResults.appendChild(clone);
+        matchCount++;
+      }
+    });
+    sidebarSearchEmpty.style.display = (term && matchCount === 0) ? 'block' : 'none';
+  }
+
   const globalSearchBtn = document.getElementById('globalSearchBtn');
   if (globalSearchBtn) {
-    globalSearchBtn.addEventListener('click', () => {
-      const term = prompt('Search all chats:');
-      if (term) addMessage('🔎 Search: ' + term, false);
-    });
+    globalSearchBtn.addEventListener('click', openSidebarSearch);
+  }
+  if (sidebarSearchClose) {
+    sidebarSearchClose.addEventListener('click', closeSidebarSearch);
+  }
+  if (sidebarSearchInput) {
+    sidebarSearchInput.addEventListener('input', e => updateSidebarSearch(e.target.value));
   }
 
   // Inline chat search (filter messages)
@@ -1345,15 +1680,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Keyboard shortcuts
   document.addEventListener('keydown', e => {
-    // Escape closes modals
+    // Escape closes sidebar search first, then modals
     if (e.key === 'Escape') {
+      if (sidebarSearchPanel?.classList.contains('open')) {
+        e.stopPropagation();
+        closeSidebarSearch();
+        return;
+      }
       document.querySelectorAll('.modal, .api-key-modal').forEach(m => m.style.display = 'none');
     }
-    // Cmd/Ctrl + K → global search
+    // Cmd/Ctrl + K → sidebar search
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
-      const term = prompt('Search all chats:');
-      if (term) addMessage('🔎 Search: ' + term, false);
+      openSidebarSearch();
     }
     // Cmd/Ctrl + N → new chat
     if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
@@ -1448,6 +1787,44 @@ document.addEventListener('DOMContentLoaded', () => {
       input.dispatchEvent(new Event('input'));
     }
   });
+
+  // Approval toast wiring
+  const approvalToast = document.getElementById('approvalToast');
+  const approvalToastBtn = document.getElementById('approvalToastBtn');
+  const approvalToastDismiss = document.getElementById('approvalToastDismiss');
+  if (approvalToastBtn) {
+    approvalToastBtn.addEventListener('click', () => {
+      switchTab('memory');
+      if (approvalToast) approvalToast.style.display = 'none';
+    });
+  }
+  if (approvalToastDismiss) {
+    approvalToastDismiss.addEventListener('click', () => {
+      if (approvalToast) approvalToast.style.display = 'none';
+    });
+  }
+
+  // Poll memory queue for pending approvals
+  async function checkMemoryQueue() {
+    try {
+      const res = await fetch(`${API}/api/memory/queue`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const pending = data.pending || data.queue || [];
+      const queueBadge = document.getElementById('queueBadge');
+      if (queueBadge) {
+        queueBadge.textContent = pending.length;
+        queueBadge.style.display = pending.length > 0 ? 'inline-flex' : 'none';
+      }
+      if (approvalToast) {
+        approvalToast.style.display = pending.length > 0 ? 'flex' : 'none';
+      }
+    } catch (_) {
+      // Backend may not support this endpoint
+    }
+  }
+  checkMemoryQueue();
+  setInterval(checkMemoryQueue, 30000);
 
   // Hide splash screen after a brief delay so fonts/styles settle
   setTimeout(() => {
