@@ -246,12 +246,26 @@ pub fn run_update() -> anyhow::Result<()> {
         }
 
         println!("  Pulling latest changes...\n");
+
+        // Try git pull with HTTP/2 disabled first (fixes curl 16 framing errors).
         let status = Command::new("git")
-            .args(["-C", &path.to_string_lossy(), "pull", "origin", "main"])
+            .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "pull", "origin", "main"])
             .status()?;
 
         if !status.success() {
-            anyhow::bail!("git pull failed — check for local changes and try again.");
+            eprintln!("  ⚠️  git pull failed. Trying fetch + merge fallback...");
+            let fetch_status = Command::new("git")
+                .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "fetch", "origin", "main"])
+                .status()?;
+            if !fetch_status.success() {
+                anyhow::bail!("git fetch failed — check your network connection and try again.");
+            }
+            let merge_status = Command::new("git")
+                .args(["-C", &path.to_string_lossy(), "merge", "origin/main"])
+                .status()?;
+            if !merge_status.success() {
+                anyhow::bail!("git merge failed — you may have local changes that conflict with the remote.");
+            }
         }
 
         let hash_output = Command::new("git")
@@ -289,15 +303,22 @@ pub fn run_update() -> anyhow::Result<()> {
             }
         }
 
-        let status = Command::new("cargo").args([
-            "install",
-            "--git",
-            GITHUB_REPO_URL,
-            "--force",
-        ]).status()?;
+        // Try cargo install --git with HTTP/1.1 fallback for libgit2.
+        let status = Command::new("cargo")
+            .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
+            .args(["install", "--git", GITHUB_REPO_URL, "--force"])
+            .status()?;
 
         if !status.success() {
-            anyhow::bail!("cargo install --git failed.");
+            eprintln!("  ⚠️  cargo install --git failed. Trying with explicit HTTP/1.1...");
+            let status2 = Command::new("cargo")
+                .env("CARGO_NET_GIT_FETCH_WITH_CLI", "true")
+                .env("GIT_HTTP_VERSION", "HTTP/1.1")
+                .args(["install", "--git", GITHUB_REPO_URL, "--force"])
+                .status()?;
+            if !status2.success() {
+                anyhow::bail!("cargo install --git failed. Try manually: git pull && cargo install --path .");
+            }
         }
 
         theme.print_success("Update complete!");
