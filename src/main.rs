@@ -995,7 +995,8 @@ async fn run_web_server(bind: &str) {
     };
     let url_clone = url.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+        // Wait a bit more for the server to actually bind before opening browser.
+        tokio::time::sleep(tokio::time::Duration::from_millis(2200)).await;
         println!("🌐 Opening browser at {}", url_clone);
         match std::process::Command::new("open").arg(&url_clone).spawn() {
             Ok(_) => {}

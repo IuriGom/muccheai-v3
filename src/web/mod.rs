@@ -5278,6 +5278,7 @@ pub async fn serve(addr: &str, state: Arc<AppState>) {
 
     println!("🌐 MuccheAI Control Panel running at http://{}", addr);
     println!("⚠️  SECURITY WARNING: Running without TLS. Set MUCCHEAI_TLS_CERT and MUCCHEAI_TLS_KEY for HTTPS.");
+    println!("🚀 Server listening on http://{}/", addr);
     if let Err(e) = axum_server::bind(addr)
         .serve(crate::web::router::router(state).into_make_service_with_connect_info::<SocketAddr>())
         .await

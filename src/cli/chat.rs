@@ -179,17 +179,26 @@ fn process_message_with_history(
     policy_engine: &mut muccheai_policy_engine::PolicyEngine,
     _trusted_ui: &mut TrustedUi,
     gateway: &ToolGateway,
-    _config: &MuccheConfig,
-    _persona: &crate::config::Persona,
+    config: &MuccheConfig,
+    persona: &crate::config::Persona,
     history: &mut Vec<(String, String)>,
     structured_memory: Option<&StructuredMemoryManager>,
     _memory: &mut MemoryEngine,
     keypair: &muccheai_types::crypto_primitives::HybridKeypair,
 ) -> anyhow::Result<()> {
+    // Try to interpret the message as a tool request first.
+    let tool_proposal = try_extract_tool_proposal(text, sandbox, keypair, config);
+    if let Ok(proposal) = tool_proposal {
+        return ask_and_execute(&proposal, policy_engine, gateway, history, structured_memory, text, keypair);
+    }
+
+    // Otherwise, run a normal conversational chat.
     let mut context = String::new();
+    context.push_str(&persona.system_prompt);
+    context.push_str("\n\n");
     if !history.is_empty() {
         context.push_str("Conversation history:\n");
-        for (user_msg, assistant_msg) in history.iter().rev().take(5) {
+        for (user_msg, assistant_msg) in history.iter().rev().take(10) {
             const MAX_HIST_LEN: usize = 2000;
             let um = &user_msg[..user_msg.len().min(MAX_HIST_LEN)];
             let am = &assistant_msg[..assistant_msg.len().min(MAX_HIST_LEN)];
@@ -197,30 +206,62 @@ fn process_message_with_history(
         }
         context.push_str("\n");
     }
-    context.push_str(&format!("Current user request: {}", text));
+    context.push_str(&format!("User: {}\nAssistant:", text));
 
     let prompt = ValidatedPrompt {
         text: context,
-        output_schema: r#"{"tool_id":"string","method":"string","params":{}}"#.to_string(),
-        max_tokens: 512,
+        output_schema: r#"{"response":"string"}"#.to_string(),
+        max_tokens: 1024,
         memory_context: None,
     };
 
-    // Wrap blocking sandbox inference to avoid stalling the async runtime.
     let suggestion = match tokio::task::block_in_place(|| sandbox.inference(&prompt)) {
         Ok(s) => s,
         Err(e) => return Err(anyhow::anyhow!("Inference failed: {e}")),
     };
 
+    let response = if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&suggestion.json_payload) {
+        payload
+            .get("response")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| String::from_utf8_lossy(&suggestion.json_payload).to_string())
+    } else {
+        String::from_utf8_lossy(&suggestion.json_payload).to_string()
+    };
+
+    println!("{}", response);
+    history.push((text.to_string(), response));
+    Ok(())
+}
+
+/// Heuristic: ask the model whether the user wants to execute a tool.
+fn try_extract_tool_proposal(
+    text: &str,
+    sandbox: &muccheai_sandbox::LlmSandbox,
+    keypair: &muccheai_types::crypto_primitives::HybridKeypair,
+    config: &MuccheConfig,
+) -> anyhow::Result<muccheai_types::ActionProposal> {
+    let allowed: Vec<String> = config.allowed_tools.iter().map(|t| t.to_string()).collect();
+    let context = format!(
+        "Available tools: {}.\nUser request: {}\n\nIf this is a tool request, reply with ONLY this JSON and nothing else: {{\"tool_id\":\"...\",\"method\":\"...\",\"params\":{{}}}}. If not a tool request, reply with {{\"tool_id\":\"none\"}}.",
+        allowed.join(", "),
+        text
+    );
+    let prompt = ValidatedPrompt {
+        text: context,
+        output_schema: r#"{"tool_id":"string","method":"string","params":{}}"#.to_string(),
+        max_tokens: 256,
+        memory_context: None,
+    };
+    let suggestion = tokio::task::block_in_place(|| sandbox.inference(&prompt))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let payload: serde_json::Value = serde_json::from_slice(&suggestion.json_payload)
-        .map_err(|e| anyhow::anyhow!("Invalid JSON from sandbox: {e}"))?;
-    let proposal = json_to_proposal(&payload, &keypair.pubkey.classical)?;
-
-    println!("📋 Structured suggestion:");
-    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
-    println!("⏱  Inference time: {} ms", suggestion.inference_time_ms);
-
-    ask_and_execute(&proposal, policy_engine, gateway, history, structured_memory, text, keypair)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if payload.get("tool_id").and_then(|v| v.as_str()) == Some("none") {
+        return Err(anyhow::anyhow!("not a tool request"));
+    }
+    json_to_proposal(&payload, &keypair.pubkey.classical)
 }
 
 fn ask_and_execute(
