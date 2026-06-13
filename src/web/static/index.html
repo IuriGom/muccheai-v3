@@ -15,7 +15,7 @@
     <meta name="twitter:title" content="MuccheAI — Secure AI Agent">
     <meta name="twitter:description" content="Self-hosted AI with multi-model fallback, encrypted secrets, and 5 beautiful themes.">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/themes/dark-chat.css?v=4" id="theme-link">
+    <link rel="stylesheet" href="/themes/dark-chat.css?v=100" id="theme-link">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
       body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
@@ -507,6 +507,16 @@
                             <input type="checkbox" id="ragSemantic" checked>
                             <label data-i18n="embeddingModel">Embedding model</label>
                             <input type="text" id="ragEmbeddingModel" placeholder="nomic-embed-text:latest">
+                            <label data-i18n="embeddingProvider">Embedding provider</label>
+                            <select id="ragEmbeddingProvider">
+                                <option value="ollama">Ollama (local)</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="openai-compatible">OpenAI-compatible API</option>
+                            </select>
+                            <label data-i18n="embeddingApiKey">Embedding API key</label>
+                            <input type="password" id="ragEmbeddingApiKey" placeholder="sk-... (optional)">
+                            <label data-i18n="embeddingApiBase">API base URL</label>
+                            <input type="text" id="ragEmbeddingApiBase" placeholder="https://api.openai.com/v1">
                             <label data-i18n="noEmbeddingModel">Keyword fallback</label>
                             <input type="checkbox" id="ragKeywordFallback" checked>
                         </div>
@@ -663,7 +673,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=33"></script>
+    <script src="/app.js?v=34"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>

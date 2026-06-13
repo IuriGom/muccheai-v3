@@ -71,6 +71,9 @@ const TRANSLATIONS = {
     chunking: 'Chunking',
     semanticSearch: 'Semantic search',
     embeddingModel: 'Embedding model',
+    embeddingProvider: 'Embedding provider',
+    embeddingApiKey: 'Embedding API key',
+    embeddingApiBase: 'API base URL',
     noEmbeddingModel: 'Use keyword search instead of embeddings',
     agent: 'Agent',
     toolsSection: 'Tools',
@@ -204,6 +207,9 @@ const TRANSLATIONS = {
     chunking: 'Fragmentação',
     semanticSearch: 'Busca semântica',
     embeddingModel: 'Modelo de embeddings',
+    embeddingProvider: 'Provedor de embeddings',
+    embeddingApiKey: 'Chave de API de embeddings',
+    embeddingApiBase: 'URL base da API',
     noEmbeddingModel: 'Usar busca por palavras-chave em vez de embeddings',
     agent: 'Agente',
     toolsSection: 'Ferramentas',
@@ -337,6 +343,9 @@ const TRANSLATIONS = {
     chunking: '分块',
     semanticSearch: '语义搜索',
     embeddingModel: '嵌入模型',
+    embeddingProvider: '嵌入提供商',
+    embeddingApiKey: '嵌入 API 密钥',
+    embeddingApiBase: 'API 基础 URL',
     noEmbeddingModel: '不使用嵌入模型，改用关键词搜索',
     agent: '代理',
     toolsSection: '工具',
@@ -585,7 +594,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}.css?v=4`;
+  link.href = `/themes/${name}.css?v=100`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -2739,6 +2748,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (semantic) semantic.checked = s.semantic ?? true;
     const model = document.getElementById('ragEmbeddingModel');
     if (model) model.value = s.embeddingModel ?? '';
+    const provider = document.getElementById('ragEmbeddingProvider');
+    if (provider) provider.value = s.embeddingProvider ?? 'ollama';
+    const apiKey = document.getElementById('ragEmbeddingApiKey');
+    if (apiKey) apiKey.value = s.embeddingApiKey ?? '';
+    const apiBase = document.getElementById('ragEmbeddingApiBase');
+    if (apiBase) apiBase.value = s.embeddingApiBase ?? '';
     const fallback = document.getElementById('ragKeywordFallback');
     if (fallback) fallback.checked = s.keywordFallback ?? true;
     renderRagDbs();
@@ -2777,6 +2792,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     s.temperature = parseFloat(document.getElementById('ragTemperature')?.value || '0.3');
     s.semantic = document.getElementById('ragSemantic')?.checked ?? true;
     s.embeddingModel = document.getElementById('ragEmbeddingModel')?.value || '';
+    s.embeddingProvider = document.getElementById('ragEmbeddingProvider')?.value || 'ollama';
+    s.embeddingApiKey = document.getElementById('ragEmbeddingApiKey')?.value || '';
+    s.embeddingApiBase = document.getElementById('ragEmbeddingApiBase')?.value || '';
     s.keywordFallback = document.getElementById('ragKeywordFallback')?.checked ?? true;
     s.databases = s.databases || ['default'];
     s.activeDatabase = s.activeDatabase || 'default';
