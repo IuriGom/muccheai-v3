@@ -521,18 +521,28 @@ pub struct SettingsResponse {
     pub dual_verification: bool,
     pub auto_approve_low_risk: bool,
     pub show_reasoning: bool,
+    pub ai_name: String,
+    pub language: String,
+    pub sound_enabled: bool,
+    pub auto_scroll: bool,
+    pub compact_mode: bool,
 }
 
 /// Save settings request.
 #[derive(Debug, Deserialize)]
 pub struct SaveSettingsRequest {
-    pub model: String,
-    pub temperature: f32,
-    pub max_tokens: u32,
-    pub sandbox_memory_limit_mb: u32,
-    pub dual_verification: bool,
-    pub auto_approve_low_risk: bool,
-    pub show_reasoning: bool,
+    pub model: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+    pub sandbox_memory_limit_mb: Option<u32>,
+    pub dual_verification: Option<bool>,
+    pub auto_approve_low_risk: Option<bool>,
+    pub show_reasoning: Option<bool>,
+    pub ai_name: Option<String>,
+    pub language: Option<String>,
+    pub sound_enabled: Option<bool>,
+    pub auto_scroll: Option<bool>,
+    pub compact_mode: Option<bool>,
 }
 
 /// Version response.
@@ -761,7 +771,12 @@ fn extract_client_ip(direct_ip: &std::net::IpAddr, headers: &HeaderMap, trusted:
 }
 
 async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<String> {
-    let token = extract_bearer_token(headers)?;
+    let token = match extract_bearer_token(headers) {
+        Some(t) => t,
+        // When the web UI runs without authentication, fall back to a shared
+        // local owner so chat sessions and memories still persist.
+        None => return Some(default_local_owner()),
+    };
     // Fast path: read-only lookup.
     let (owner, expired) = {
         let sessions = state.sessions.lock().await;
@@ -780,7 +795,14 @@ async fn get_session_owner(state: &AppState, headers: &HeaderMap) -> Option<Stri
         sessions.remove(&token);
     }
     // Do NOT authenticate requests presenting an expired token.
-    if expired { None } else { owner }
+    if expired { Some(default_local_owner()) } else { owner }
+}
+
+/// Fallback owner used when the web UI runs without authentication.
+/// All unauthenticated requests share a single local owner so chat sessions
+/// and memories still persist on the local machine.
+fn default_local_owner() -> String {
+    "local-anonymous".to_string()
 }
 
 /// Check whether the current session was created via duress PIN.
@@ -970,10 +992,15 @@ async fn build_pinned_client(base_url: &str) -> Result<reqwest::Client, String> 
     let host = parsed.host_str()
         .ok_or_else(|| "URL has no host".to_string())?;
 
-    // Skip pinning for pure IP addresses (already checked by validate_no_ssrf).
-    if host.parse::<std::net::IpAddr>().is_ok() {
+    // Skip pinning for pure IP addresses and local hostnames (already checked by validate_no_ssrf).
+    let host_lower = host.to_lowercase();
+    if host.parse::<std::net::IpAddr>().is_ok()
+        || host_lower == "localhost"
+        || host_lower == "127.0.0.1"
+        || host_lower == "[::1]"
+    {
         return reqwest::Client::builder()
-            .timeout(Duration::from_secs(90))
+            .timeout(Duration::from_secs(180))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to build HTTP client: {}", e));
@@ -1015,7 +1042,7 @@ async fn build_pinned_client(base_url: &str) -> Result<reqwest::Client, String> 
 
     reqwest::Client::builder()
         .resolve(host, addr)
-        .timeout(Duration::from_secs(90))
+        .timeout(Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
@@ -1102,17 +1129,12 @@ async fn build_chat_context(
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
     // Inject approved structured memories into the system prompt.
-    let memories_count: usize = {
-        let owner = get_session_owner(state, headers).await.unwrap_or_default();
-        if owner.is_empty() {
-            return Err(ChatResponse {
-                response: String::new(),
-                session_id: req.session_id.clone().unwrap_or_default(),
-                session_secret: String::new(),
-                needs_confirmation: None,
-                memories_used: None,
-            });
-        }
+    // When no authentication token is present (e.g. web UI with auth removed),
+    // simply skip memory injection rather than failing the request.
+    let owner = get_session_owner(state, headers).await.unwrap_or_default();
+    let memories_count: usize = if owner.is_empty() {
+        0
+    } else {
         let sm = state.structured_memory.lock().await;
         let memories = sm.list_all_by_owner(&owner);
         let count = memories.len();
@@ -3801,6 +3823,11 @@ async fn get_settings(
             dual_verification: false,
             auto_approve_low_risk: false,
             show_reasoning: false,
+            ai_name: String::new(),
+            language: String::new(),
+            sound_enabled: true,
+            auto_scroll: true,
+            compact_mode: false,
         });
     }
     let config = state.config.lock().await;
@@ -3812,6 +3839,11 @@ async fn get_settings(
         dual_verification: config.dual_verification,
         auto_approve_low_risk: config.auto_approve_low_risk,
         show_reasoning: config.show_reasoning,
+        ai_name: config.ai_name.clone(),
+        language: config.language.clone(),
+        sound_enabled: config.sound_enabled,
+        auto_scroll: config.auto_scroll,
+        compact_mode: config.compact_mode,
     })
 }
 
@@ -3825,19 +3857,48 @@ async fn save_settings(
         return Err(StatusCode::FORBIDDEN);
     }
     let mut config = state.config.lock().await;
-    config.ollama_model = req.model;
-    if req.max_tokens < 1 || req.max_tokens > 8192 {
-        return Err(StatusCode::BAD_REQUEST);
+    if let Some(model) = req.model {
+        config.ollama_model = model;
     }
-    if req.sandbox_memory_limit_mb < 128 || req.sandbox_memory_limit_mb > 8192 {
-        return Err(StatusCode::BAD_REQUEST);
+    if let Some(max_tokens) = req.max_tokens {
+        if max_tokens < 1 || max_tokens > 8192 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        config.max_tokens = max_tokens;
     }
-    config.temperature = req.temperature.clamp(0.0, 1.0);
-    config.max_tokens = req.max_tokens;
-    config.sandbox_memory_limit_mb = req.sandbox_memory_limit_mb;
-    config.dual_verification = req.dual_verification;
-    config.auto_approve_low_risk = req.auto_approve_low_risk;
-    config.show_reasoning = req.show_reasoning;
+    if let Some(sandbox_memory_limit_mb) = req.sandbox_memory_limit_mb {
+        if sandbox_memory_limit_mb < 128 || sandbox_memory_limit_mb > 8192 {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        config.sandbox_memory_limit_mb = sandbox_memory_limit_mb;
+    }
+    if let Some(temperature) = req.temperature {
+        config.temperature = temperature.clamp(0.0, 1.0);
+    }
+    if let Some(dual_verification) = req.dual_verification {
+        config.dual_verification = dual_verification;
+    }
+    if let Some(auto_approve_low_risk) = req.auto_approve_low_risk {
+        config.auto_approve_low_risk = auto_approve_low_risk;
+    }
+    if let Some(show_reasoning) = req.show_reasoning {
+        config.show_reasoning = show_reasoning;
+    }
+    if let Some(ai_name) = req.ai_name {
+        config.ai_name = ai_name;
+    }
+    if let Some(language) = req.language {
+        config.language = language;
+    }
+    if let Some(sound_enabled) = req.sound_enabled {
+        config.sound_enabled = sound_enabled;
+    }
+    if let Some(auto_scroll) = req.auto_scroll {
+        config.auto_scroll = auto_scroll;
+    }
+    if let Some(compact_mode) = req.compact_mode {
+        config.compact_mode = compact_mode;
+    }
     config.save()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(SettingsResponse {
@@ -3848,6 +3909,11 @@ async fn save_settings(
         dual_verification: config.dual_verification,
         auto_approve_low_risk: config.auto_approve_low_risk,
         show_reasoning: config.show_reasoning,
+        ai_name: config.ai_name.clone(),
+        language: config.language.clone(),
+        sound_enabled: config.sound_enabled,
+        auto_scroll: config.auto_scroll,
+        compact_mode: config.compact_mode,
     }))
 }
 
@@ -4013,9 +4079,13 @@ async fn get_chat_session(
     sessions
         .iter()
         .find(|s| {
-            s.id == id
-                && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
-                && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+            let owner_ok = muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes());
+            // Local anonymous sessions may be retrieved without a secret so the
+            // web UI can reload chat history when running without authentication.
+            let secret_ok = secret.is_empty()
+                || owner == default_local_owner()
+                || muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes());
+            s.id == id && owner_ok && secret_ok
         })
         .cloned()
         .map(Json)
@@ -4240,9 +4310,11 @@ async fn share_session(
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let found = sessions.iter().any(|s| {
-        s.id == id
-            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
-            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
+        let owner_ok = muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes());
+        let secret_ok = secret.is_empty()
+            || owner == default_local_owner()
+            || muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes());
+        s.id == id && owner_ok && secret_ok
     });
     drop(sessions);
     if !found {
@@ -4524,8 +4596,17 @@ async fn chat_stream(
             }
         };
 
+        // Generate the session id up front so the frontend can persist it.
+        let mut session_id = req.session_id.clone().unwrap_or_else(|| {
+            let mut buf = [0u8; 16];
+            if state.rng.fill(&mut buf).is_err() {
+                return String::new();
+            }
+            format!("session-{}", hex::encode(buf))
+        });
+
         let meta = serde_json::json!({
-            "session_id": req.session_id.clone().unwrap_or_default(),
+            "session_id": session_id.clone(),
             "memories_used": ctx.memories_count,
         });
         if tx.send(Ok(Event::default().event("meta").data(meta.to_string()))).await.is_err() {
@@ -4550,7 +4631,6 @@ async fn chat_stream(
         }
 
         let mut full_text = String::new();
-        let mut session_id = req.session_id.clone().unwrap_or_default();
         let mut session_secret = String::new();
 
         if let Some(mut rx) = stream_rx {
@@ -4636,17 +4716,12 @@ async fn chat_stream(
         const MAX_SESSIONS: usize = 100;
         const MAX_MESSAGES_PER_SESSION: usize = 500;
         let mut sessions = state.chat_sessions.lock().await;
-        session_id = if let Some(ref sid) = req.session_id {
-            sid.clone()
-        } else {
-            let mut buf = [0u8; 16];
-            if state.rng.fill(&mut buf).is_err() {
-                let _ = tx.send(Ok(Event::default().data("[ERROR]"))).await;
-                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
-                return;
-            }
-            format!("session-{}", hex::encode(buf))
-        };
+        // session_id was already generated above for the meta event.
+        if session_id.is_empty() {
+            let _ = tx.send(Ok(Event::default().data("[ERROR]"))).await;
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+            return;
+        }
         let existing = sessions.iter().position(|s| s.id == session_id);
         let timestamp = Timestamp::now().0;
         let secret = headers.get("x-session-secret").and_then(|h| h.to_str().ok()).unwrap_or("");
@@ -5923,9 +5998,11 @@ async fn create_encrypted_share(
         .unwrap_or("");
     let sessions = state.chat_sessions.lock().await;
     let found = sessions.iter().any(|s| {
-        s.id == id
-            && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
-            && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
+        let owner_ok = muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes());
+        let secret_ok = secret.is_empty()
+            || owner == default_local_owner()
+            || muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes());
+        s.id == id && owner_ok && secret_ok
     });
     if !found {
         return Err(StatusCode::FORBIDDEN);

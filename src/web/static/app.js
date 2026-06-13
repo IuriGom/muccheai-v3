@@ -123,7 +123,7 @@ function maybeShowNameAiModal() {
 }
 
 // ===== Tabs =====
-function switchTab(tabId) {
+async function switchTab(tabId) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const tab = document.getElementById('tab-' + tabId);
@@ -132,7 +132,7 @@ function switchTab(tabId) {
   if (nav) nav.classList.add('active');
   const title = tabId.charAt(0).toUpperCase() + tabId.slice(1);
   document.getElementById('pageTitle').textContent = title;
-  if (tabId === 'graph') renderGraph();
+  if (tabId === 'graph') await renderGraph();
 }
 
 // ===== Chat =====
@@ -615,14 +615,14 @@ async function loadPersonasAndAgents() {
       const data = await pRes.json();
       const sel = document.getElementById('personaSelect');
       if (sel && data.personas) {
-        sel.innerHTML = data.personas.map(p => `<option value="${p.id}">${p.emoji || ''} ${p.name}</option>`).join('');
+        sel.innerHTML = data.personas.map(p => `<option value="${p.name}">${p.emoji || ''} ${p.name}</option>`).join('');
       }
     }
     if (aRes.ok) {
       const data = await aRes.json();
       const sel = document.getElementById('agentSelect');
       if (sel && data.agents) {
-        sel.innerHTML = data.agents.map(a => `<option value="${a.id}" data-provider="${a.provider || ''}">${a.name} (${a.model})</option>`).join('');
+        sel.innerHTML = data.agents.map(a => `<option value="${a.name}" data-provider="${a.provider || ''}">${a.name} (${a.model})</option>`).join('');
       }
       updateCloudPrivacyWarning();
     }
@@ -661,27 +661,7 @@ function showToast(message, type) {
   }, 3000);
 }
 
-// ===== Mock Data for Demo =====
-const MOCK_PERSONAS = [
-  { id: 'default', name: 'Default', emoji: '🐄', desc: 'Balanced, helpful assistant.' },
-  { id: 'engineer', name: 'Engineer', emoji: '⚙️', desc: 'Focused on code and architecture.' },
-  { id: 'creative', name: 'Creative', emoji: '🎨', desc: 'Imaginative and artistic.' },
-  { id: 'researcher', name: 'Researcher', emoji: '🔬', desc: 'Deep dives into topics.' },
-  { id: 'concise', name: 'Concise', emoji: '⚡', desc: 'Short and to the point.' },
-];
-const MOCK_MCP = [
-  { name: 'filesystem', transport: 'stdio', status: 'connected' },
-  { name: 'github', transport: 'stdio', status: 'idle' },
-];
-const MOCK_STATUS = [
-  { label: 'Backend', value: 'Online', healthy: true },
-  { label: 'Ollama', value: 'Connected', healthy: true },
-  { label: 'PQC Keys', value: 'Active', healthy: true },
-  { label: 'Memory Rules', value: '42', healthy: true },
-  { label: 'Total Tokens', value: '1.2M', healthy: true },
-];
-const MOCK_MEMORIES = [];
-const MOCK_CHAT_HISTORY = [];
+
 
 async function renderChatHistory() {
   const list = document.getElementById('chatHistoryList');
@@ -705,22 +685,35 @@ async function renderChatHistory() {
     </a>
   `).join('');
   list.querySelectorAll('.chat-history-item').forEach(item => {
-    item.addEventListener('click', e => {
+    item.addEventListener('click', async (e) => {
       e.preventDefault();
-      localStorage.setItem('session_id', item.dataset.session);
-      document.getElementById('messages').innerHTML = `<div class="message ai">Loaded session: <strong>${item.querySelector('span').textContent}</strong></div>`;
+      const sessionId = item.dataset.session;
+      localStorage.setItem('session_id', sessionId);
+      await loadSessionIntoChat(sessionId, item.querySelector('span')?.textContent);
     });
   });
 }
 
-function renderPersonas() {
+async function renderPersonas() {
   const grid = document.getElementById('personaGrid');
   if (!grid) return;
-  grid.innerHTML = MOCK_PERSONAS.map(p => `
-    <div class="persona-card" data-id="${p.id}">
-      <div class="emoji">${p.emoji}</div>
+  let personas = [];
+  try {
+    const res = await fetch(`${API}/api/personas`);
+    if (res.ok) {
+      const data = await res.json();
+      personas = data.personas || [];
+    }
+  } catch (_) {}
+  if (!personas.length) {
+    grid.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:0.85rem;">No personas configured.</div>';
+    return;
+  }
+  grid.innerHTML = personas.map(p => `
+    <div class="persona-card" data-id="${p.name}">
+      <div class="emoji">${p.emoji || '🐄'}</div>
       <div class="name">${p.name}</div>
-      <div class="desc">${p.desc}</div>
+      <div class="desc">${p.description || ''}</div>
     </div>
   `).join('');
   grid.querySelectorAll('.persona-card').forEach(card => {
@@ -733,32 +726,64 @@ function renderPersonas() {
   });
 }
 
-function renderMcp() {
+async function renderMcp() {
   const list = document.getElementById('mcpList');
   if (!list) return;
-  list.innerHTML = MOCK_MCP.map(m => `
+  let servers = [];
+  try {
+    const res = await fetch(`${API}/api/mcp/servers`);
+    if (res.ok) {
+      const data = await res.json();
+      servers = data.servers || [];
+    }
+  } catch (_) {}
+  if (!servers.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:0.85rem;">No MCP servers configured.</div>';
+    return;
+  }
+  list.innerHTML = servers.map(m => `
     <div class="mcp-item">
       <div>
         <strong>${m.name}</strong>
-        <div class="meta">${m.transport} · ${m.status}</div>
+        <div class="meta">${m.transport || 'stdio'} · ${m.status || 'idle'}</div>
       </div>
       <button class="btn btn-secondary">Test</button>
     </div>
   `).join('');
 }
 
-function renderStatus() {
+async function renderStatus() {
   const grid = document.getElementById('statusGrid');
   if (!grid) return;
-  grid.innerHTML = MOCK_STATUS.map(s => `
+  let statusItems = [];
+  try {
+    const res = await fetch(`${API}/api/status`);
+    if (res.ok) {
+      const data = await res.json();
+      statusItems = [
+        { label: 'Backend', value: 'Online', healthy: true },
+        { label: 'Ollama', value: data.active_agent ? 'Connected' : 'Offline', healthy: !!data.active_agent },
+        { label: 'Model', value: data.active_agent || 'None', healthy: !!data.active_agent },
+        { label: 'PQC Keys', value: data.pqc_enabled ? 'Active' : 'Inactive', healthy: data.pqc_enabled },
+        { label: 'Sandbox', value: data.sandbox_running ? 'Running' : 'Stopped', healthy: data.sandbox_running },
+        { label: 'Policy Rules', value: String((data.policy_rules || []).length), healthy: true },
+      ];
+      const ruleCount = document.getElementById('ruleCount');
+      if (ruleCount) ruleCount.textContent = String((data.policy_rules || []).length);
+      const ollamaDot = document.getElementById('ollamaDot');
+      if (ollamaDot) ollamaDot.classList.toggle('green', !!data.active_agent);
+    }
+  } catch (_) {}
+  if (!statusItems.length) {
+    grid.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:0.85rem;">Status unavailable.</div>';
+    return;
+  }
+  grid.innerHTML = statusItems.map(s => `
     <div class="status-card">
       <div class="label">${s.label}</div>
       <div class="value" style="color:${s.healthy ? '#51cf66' : '#ff6b6b'}">${s.value}</div>
     </div>
   `).join('');
-  document.getElementById('ruleCount').textContent = '42';
-  document.getElementById('tokenCount').textContent = '1.2M';
-  document.getElementById('ollamaDot').classList.add('green');
 }
 
 async function renderMemories() {
@@ -769,18 +794,18 @@ async function renderMemories() {
     const res = await fetch(`${API}/api/memory`);
     if (res.ok) {
       const data = await res.json();
-      memories = data.memories || [];
+      memories = data.entries || data.memories || [];
     }
   } catch (_) {}
   const emptyHtml = `<div class="memory-item" style="color:var(--text-dim);">No memories yet</div>`;
   if (facts) {
-    const factItems = memories.filter(m => m.type === 'Fact');
+    const factItems = memories.filter(m => (m.memory_type || m.type || '').toLowerCase() === 'fact');
     facts.innerHTML = factItems.length ? factItems.map(m => `
       <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
     `).join('') : emptyHtml;
   }
   if (prefs) {
-    const prefItems = memories.filter(m => m.type === 'Preference');
+    const prefItems = memories.filter(m => (m.memory_type || m.type || '').toLowerCase() === 'preference');
     prefs.innerHTML = prefItems.length ? prefItems.map(m => `
       <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
     `).join('') : emptyHtml;
@@ -796,7 +821,7 @@ async function renderPresets() {
     const res = await fetch(`${API}/api/presets`);
     if (res.ok) {
       const data = await res.json();
-      presets = data.presets || [];
+      presets = Array.isArray(data) ? data : (data.presets || []);
     }
   } catch (_) {}
   if (!presets.length) {
@@ -938,45 +963,61 @@ async function renderGraph() {
 }
 
 // ===== Event Listeners =====
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  async function loadSessionIntoChat(sessionId, titleFallback) {
+    const messagesContainer = document.getElementById('messages');
+    if (!messagesContainer || !sessionId) return;
+    try {
+      const res = await fetch(`${API}/api/sessions/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const session = await res.json();
+      messagesContainer.innerHTML = '';
+      if (session.messages && session.messages.length) {
+        session.messages.forEach(m => addMessage(m.content || m.text || '', m.role === 'user'));
+      } else {
+        messagesContainer.innerHTML = `<div class="message ai">Loaded session: <strong>${titleFallback || session.title || 'Untitled'}</strong></div>`;
+      }
+    } catch (err) {
+      messagesContainer.innerHTML = `<div class="message ai">Could not load session: ${err.message}</div>`;
+    }
+  }
+
   initTheme();
   const savedLang = localStorage.getItem('language');
   if (savedLang) document.documentElement.setAttribute('lang', savedLang);
   loadChat();
-  renderPersonas();
-  renderMcp();
-  renderStatus();
-  renderMemories();
-  renderChatHistory();
-  renderPresets();
+  await renderPersonas();
+  await renderMcp();
+  await renderStatus();
+  await renderMemories();
+  await renderChatHistory();
+  await renderPresets();
 
   // Update version badge and status sidebar
   async function updateStatus() {
     const offlineEl = document.querySelector('.offline-indicator');
     try {
-      const res = await fetch(`${API}/api/status`, {
-        // Auth disabled
-      });
-      if (!res.ok) {
+      const [statusRes, versionRes] = await Promise.all([
+        fetch(`${API}/api/status`),
+        fetch(`${API}/api/version`)
+      ]);
+      if (!statusRes.ok) {
         if (offlineEl) offlineEl.style.display = 'block';
         return;
       }
       if (offlineEl) offlineEl.style.display = 'none';
-      const data = await res.json();
-      if (data.version) {
+      const data = await statusRes.json();
+      if (versionRes.ok) {
+        const v = await versionRes.json();
         const badge = document.getElementById('versionBadge');
-        if (badge) badge.textContent = 'v' + data.version;
+        if (badge && v.version) badge.textContent = 'v' + v.version;
         const display = document.getElementById('versionDisplay');
-        if (display) display.textContent = 'v' + data.version;
+        if (display && v.version) display.textContent = 'v' + v.version;
       }
-      if (data.ollama_connected !== undefined) {
-        const dot = document.getElementById('ollamaDot');
-        if (dot) dot.classList.toggle('green', data.ollama_connected);
-      }
-      if (data.policy_rule_count !== undefined) {
-        const el = document.getElementById('ruleCount');
-        if (el) el.textContent = data.policy_rule_count;
-      }
+      const dot = document.getElementById('ollamaDot');
+      if (dot) dot.classList.toggle('green', !!data.active_agent);
+      const el = document.getElementById('ruleCount');
+      if (el) el.textContent = String((data.policy_rules || []).length);
     } catch (_) {
       if (offlineEl) offlineEl.style.display = 'block';
     }
@@ -987,17 +1028,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // Name AI modal
   const nameAiForm = document.querySelector('#nameAiModal form');
   if (nameAiForm) {
-    nameAiForm.addEventListener('submit', e => {
+    nameAiForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const val = document.getElementById('aiNameInput').value.trim();
+      const lang = document.getElementById('languageSelect')?.value;
       if (val) {
         aiName = val;
         localStorage.setItem('aiName', aiName);
         document.querySelector('.welcome-message h2').textContent = '🐄 Welcome to ' + aiName;
         document.getElementById('input').placeholder = 'Message ' + aiName + '...';
       }
-      const lang = document.getElementById('languageSelect')?.value;
-      if (lang) localStorage.setItem('language', lang);
+      if (lang) {
+        localStorage.setItem('language', lang);
+        document.documentElement.setAttribute('lang', lang);
+      }
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+        await fetch(`${API}/api/settings`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ai_name: val || aiName, language: lang || '' })
+        });
+      } catch (_) {}
       closeModal('nameAiModal');
     });
   }
@@ -1027,9 +1080,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Tabs
   document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
-    el.addEventListener('click', e => {
+    el.addEventListener('click', async (e) => {
       e.preventDefault();
-      switchTab(el.dataset.tab);
+      await switchTab(el.dataset.tab);
     });
   });
 
@@ -1254,7 +1307,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const res = await fetch(`${API}/api/personas/switch`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ persona_id: personaId })
+          body: JSON.stringify({ name: personaId })
         });
         if (!res.ok) throw new Error('Status ' + res.status);
         const option = personaSelect.options[personaSelect.selectedIndex];
@@ -1309,6 +1362,39 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  async function loadSettings() {
+    try {
+      const res = await fetch(`${API}/api/settings`);
+      if (!res.ok) return;
+      const s = await res.json();
+      const langEl = document.getElementById('settingLanguage');
+      if (langEl && s.language) langEl.value = s.language;
+      const nameEl = document.getElementById('settingAiName');
+      if (nameEl && s.ai_name) nameEl.value = s.ai_name;
+      const modelEl = document.getElementById('settingModel');
+      if (modelEl && s.model) modelEl.value = s.model;
+      const tempEl = document.getElementById('settingTemp');
+      if (tempEl && s.temperature !== undefined) tempEl.value = s.temperature;
+      const maxTokensEl = document.getElementById('settingMaxTokens');
+      if (maxTokensEl && s.max_tokens !== undefined) maxTokensEl.value = s.max_tokens;
+      const soundEl = document.getElementById('settingSound');
+      if (soundEl && s.sound_enabled !== undefined) soundEl.checked = s.sound_enabled;
+      const scrollEl = document.getElementById('settingAutoScroll');
+      if (scrollEl && s.auto_scroll !== undefined) scrollEl.checked = s.auto_scroll;
+      const compactEl = document.getElementById('settingCompact');
+      if (compactEl && s.compact_mode !== undefined) compactEl.checked = s.compact_mode;
+      if (s.ai_name) {
+        aiName = s.ai_name;
+        localStorage.setItem('aiName', s.ai_name);
+      }
+      if (s.language) {
+        localStorage.setItem('language', s.language);
+        document.documentElement.setAttribute('lang', s.language);
+      }
+    } catch (_) {}
+  }
+  loadSettings();
+
   // Save Settings button
   const saveSettingsBtn = document.querySelector('#settingsModal .btn-row .btn-primary');
   if (saveSettingsBtn) {
@@ -1316,7 +1402,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const settings = {
         language: document.getElementById('settingLanguage')?.value || 'en',
         ai_name: document.getElementById('settingAiName')?.value?.trim() || aiName,
+        model: document.getElementById('settingModel')?.value || '',
         temperature: parseFloat(document.getElementById('settingTemp')?.value || '0.7'),
+        max_tokens: parseInt(document.getElementById('settingMaxTokens')?.value || '1024', 10),
         sound_enabled: document.getElementById('settingSound')?.checked ?? true,
         auto_scroll: document.getElementById('settingAutoScroll')?.checked ?? true,
         compact_mode: document.getElementById('settingCompact')?.checked ?? false,
@@ -1331,6 +1419,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         if (!res.ok) throw new Error('Status ' + res.status);
         showToast('Settings saved', 'success');
+        await loadSettings();
       } catch (e) {
         showToast('Failed to save settings: ' + e.message, 'error');
       }
@@ -1340,8 +1429,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Language select
   const languageSelect = document.getElementById('settingLanguage');
   if (languageSelect) {
-    const savedLang = localStorage.getItem('language');
-    if (savedLang) languageSelect.value = savedLang;
     languageSelect.addEventListener('change', () => {
       localStorage.setItem('language', languageSelect.value);
       document.documentElement.setAttribute('lang', languageSelect.value);
@@ -1374,27 +1461,51 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!query) return;
       const result = document.getElementById('researchResult');
       const loading = document.getElementById('researchLoading');
-      loading.style.display = 'block';
-      result.textContent = '';
-      await new Promise(r => setTimeout(r, 1200));
-      loading.style.display = 'none';
-      result.textContent = `Research results for "${query}":\n\nBased on your chat history, you've discussed:\n• Rust programming (37%)\n• AI architecture (22%)\n• Security & cryptography (18%)\n• DevOps & deployment (13%)\n• Other topics (10%)\n\nTop collaborators: local-llm, cargo, docker.`;
+      if (loading) loading.style.display = 'block';
+      if (result) result.textContent = '';
+      try {
+        const res = await fetch(`${API}/api/search?q=` + encodeURIComponent(query));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const items = data.results || [];
+        if (loading) loading.style.display = 'none';
+        if (!items.length) {
+          if (result) result.textContent = 'No results found for "' + query + '".';
+          return;
+        }
+        const lines = items.slice(0, 10).map(r => `• [${r.type}] ${r.title}\n  ${(r.content || '').substring(0, 160)}`);
+        if (result) result.textContent = `Results for "${query}":\n\n${lines.join('\n\n')}`;
+      } catch (e) {
+        if (loading) loading.style.display = 'none';
+        if (result) result.textContent = 'Research failed: ' + e.message;
+      }
     });
   }
 
   // Memory add form
   const memoryAddBtn = document.querySelector('#memory-subtab-memories .memory-add-form button');
   if (memoryAddBtn) {
-    memoryAddBtn.addEventListener('click', e => {
+    memoryAddBtn.addEventListener('click', async (e) => {
       e.preventDefault();
       const type = document.getElementById('memoryTypeSelect').value;
       const key = document.getElementById('memoryKeyInput').value.trim();
       const value = document.getElementById('memoryValueInput').value.trim();
       if (!key || !value) return;
-      MOCK_MEMORIES.push({ type, key, value });
-      renderMemories();
-      document.getElementById('memoryKeyInput').value = '';
-      document.getElementById('memoryValueInput').value = '';
+      try {
+        const memoryType = type.charAt(0).toUpperCase() + type.slice(1);
+        const res = await fetch(`${API}/api/memory`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+          body: JSON.stringify({ key, value, memory_type: memoryType })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await renderMemories();
+        document.getElementById('memoryKeyInput').value = '';
+        document.getElementById('memoryValueInput').value = '';
+        showToast('Memory saved', 'success');
+      } catch (e) {
+        showToast('Failed to save memory: ' + e.message, 'error');
+      }
     });
   }
 
@@ -1431,12 +1542,28 @@ document.addEventListener('DOMContentLoaded', () => {
   // MCP add button
   const mcpAddBtn = document.getElementById('mcpAddBtn');
   if (mcpAddBtn) {
-    mcpAddBtn.addEventListener('click', () => {
+    mcpAddBtn.addEventListener('click', async () => {
       const name = document.getElementById('mcpName').value.trim();
       if (!name) return;
-      MOCK_MCP.push({ name, transport: mcpTransport.value, status: 'idle' });
-      renderMcp();
-      document.getElementById('mcpName').value = '';
+      const transport = document.getElementById('mcpTransport')?.value || 'stdio';
+      const command = document.getElementById('mcpCommand')?.value.trim() || '';
+      const url = document.getElementById('mcpUrl')?.value.trim() || '';
+      const body = { name, transport };
+      if (transport === 'http') body.url = url;
+      else body.command = command;
+      try {
+        const res = await fetch(`${API}/api/mcp/servers`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await renderMcp();
+        document.getElementById('mcpName').value = '';
+        showToast('MCP server added', 'success');
+      } catch (e) {
+        showToast('Failed to add MCP server: ' + e.message, 'error');
+      }
     });
   }
 
@@ -1469,10 +1596,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const text = item.textContent.toLowerCase();
       if (!lower || text.includes(lower)) {
         const clone = item.cloneNode(true);
-        clone.addEventListener('click', e => {
+        clone.addEventListener('click', async (e) => {
           e.preventDefault();
           localStorage.setItem('session_id', clone.dataset.session);
-          document.getElementById('messages').innerHTML = `<div class="message ai">Loaded session: <strong>${clone.querySelector('span').textContent}</strong></div>`;
+          await loadSessionIntoChat(clone.dataset.session, clone.querySelector('span')?.textContent);
           closeSidebarSearch();
         });
         sidebarSearchResults.appendChild(clone);
@@ -1527,8 +1654,29 @@ document.addEventListener('DOMContentLoaded', () => {
     researchChatsBtn.addEventListener('click', () => openModal('researchModal'));
   }
 
-  // Share / digest / encrypt buttons (mock)
-  document.getElementById('shareSessionBtn')?.addEventListener('click', () => addMessage('🔗 Session link copied to clipboard.', false));
+  // Share / digest / encrypt buttons
+  document.getElementById('shareSessionBtn')?.addEventListener('click', async () => {
+    const sessionId = currentSession();
+    if (!sessionId) {
+      showToast('No active session to share', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/sessions/${encodeURIComponent(sessionId)}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) }
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const token = data.share_token || data.token;
+      const link = data.url || data.link || (token ? location.origin + '/share/' + token : '');
+      if (!link) throw new Error('No share token returned');
+      await navigator.clipboard.writeText(link);
+      showToast('Session link copied to clipboard', 'success');
+    } catch (e) {
+      showToast('Share failed: ' + e.message, 'error');
+    }
+  });
   document.getElementById('copyChatBtn')?.addEventListener('click', () => {
     const messages = Array.from(document.querySelectorAll('.message'));
     let text = '';
@@ -1572,10 +1720,32 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>`;
       clearChatStorage();
+      localStorage.removeItem('session_id');
       showToast('Chat cleared', 'info');
     }
   });
-  document.getElementById('encryptShareBtn')?.addEventListener('click', () => addMessage('🔐 Encrypted share created.', false));
+  document.getElementById('encryptShareBtn')?.addEventListener('click', async () => {
+    const sessionId = currentSession();
+    if (!sessionId) {
+      showToast('No active session to share', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/sessions/${encodeURIComponent(sessionId)}/encrypt-share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) }
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const token = data.share_token || data.token;
+      const link = data.url || data.link || (token ? location.origin + '/encrypt-share/' + token : '');
+      if (!link) throw new Error('No share token returned');
+      await navigator.clipboard.writeText(link);
+      showToast('Encrypted share link copied', 'success');
+    } catch (e) {
+      showToast('Encrypted share failed: ' + e.message, 'error');
+    }
+  });
 
   // Fullscreen toggle
   const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -1639,7 +1809,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const input = document.getElementById('input');
         if (input) {
           input.value = prevUser.dataset.rawText || '';
-          sendChat();
+          sendChatStream();
         }
       } else {
         showToast('No user message to regenerate from', 'error');
@@ -1793,8 +1963,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const approvalToastBtn = document.getElementById('approvalToastBtn');
   const approvalToastDismiss = document.getElementById('approvalToastDismiss');
   if (approvalToastBtn) {
-    approvalToastBtn.addEventListener('click', () => {
-      switchTab('memory');
+    approvalToastBtn.addEventListener('click', async () => {
+      await switchTab('memory');
       if (approvalToast) approvalToast.style.display = 'none';
     });
   }
@@ -1810,7 +1980,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch(`${API}/api/memory/queue`);
       if (!res.ok) return;
       const data = await res.json();
-      const pending = data.pending || data.queue || [];
+      const pending = data.proposals || data.pending || data.queue || [];
       const queueBadge = document.getElementById('queueBadge');
       if (queueBadge) {
         queueBadge.textContent = pending.length;

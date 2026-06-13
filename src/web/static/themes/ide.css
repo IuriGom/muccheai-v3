@@ -1,6 +1,24 @@
 .message pre { position: relative; }
 .message pre:hover .copy-code-btn { opacity: 1 !important; }
 /* ===== IDE Theme ===== */
+
+/* Hidden file inputs used by the attachment menu */
+.file-input-hidden,
+#fileInput,
+#imageInput,
+#cameraInput {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
 :root {
   --bg: #1e1e1e;
   --bg-elevated: #252526;

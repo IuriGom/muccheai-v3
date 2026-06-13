@@ -15,7 +15,7 @@
     <meta name="twitter:title" content="MuccheAI — Secure AI Agent">
     <meta name="twitter:description" content="Self-hosted AI with multi-model fallback, encrypted secrets, and 5 beautiful themes.">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/themes/dark-chat.css?v=1" id="theme-link">
+    <link rel="stylesheet" href="/themes/dark-chat.css?v=2" id="theme-link">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
       body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
@@ -377,9 +377,9 @@
                                 </div>
                                 <div id="streamProgress" class="stream-progress hidden"></div>
                                 <div class="chat-input">
-                                    <input type="file" id="fileInput" style="display:none;" accept=".txt,.md,.json,.pdf,.docx">
-                                    <input type="file" id="imageInput" style="display:none;" accept="image/*">
-                                    <input type="file" id="cameraInput" style="display:none;" accept="image/*" capture="environment">
+                                    <input type="file" id="fileInput" class="file-input-hidden" style="display:none;" accept=".txt,.md,.json,.pdf,.docx">
+                                    <input type="file" id="imageInput" class="file-input-hidden" style="display:none;" accept="image/*">
+                                    <input type="file" id="cameraInput" class="file-input-hidden" style="display:none;" accept="image/*" capture="environment">
                                     <button id="stopBtn" class="stop-btn hidden" title="Stop generating">⏹</button>
                                     <div class="attach-menu-wrapper">
                                         <button id="attachBtn" title="Add attachment">+</button>
@@ -597,7 +597,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=16"></script>
+    <script src="/app.js?v=30"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>

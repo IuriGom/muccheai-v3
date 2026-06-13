@@ -43,6 +43,10 @@ use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCo
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let password_flag = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".muccheai")
@@ -886,7 +890,7 @@ async fn run_web_server(bind: &str) {
     let bootstrap_context = std::fs::read_to_string(workspace.join("SOUL.md")).unwrap_or_default();
 
     let http_client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
+        .timeout(std::time::Duration::from_secs(180))
         .build()
     {
         Ok(c) => c,
@@ -994,15 +998,18 @@ async fn run_web_server(bind: &str) {
         format!("http://{}/", bind)
     };
     let url_clone = url.clone();
-    tokio::spawn(async move {
-        // Wait a bit more for the server to actually bind before opening browser.
-        tokio::time::sleep(tokio::time::Duration::from_millis(2200)).await;
-        println!("🌐 Opening browser at {}", url_clone);
-        match std::process::Command::new("open").arg(&url_clone).spawn() {
-            Ok(_) => {}
-            Err(e) => eprintln!("⚠ Could not open browser: {}. Open {} manually.", e, url_clone),
-        }
-    });
+    let no_open = std::env::var("MUCCHEAI_NO_OPEN").unwrap_or_default() == "1";
+    if !no_open {
+        tokio::spawn(async move {
+            // Wait a bit more for the server to actually bind before opening browser.
+            tokio::time::sleep(tokio::time::Duration::from_millis(2200)).await;
+            println!("🌐 Opening browser at {}", url_clone);
+            match std::process::Command::new("open").arg(&url_clone).spawn() {
+                Ok(_) => {}
+                Err(e) => eprintln!("⚠ Could not open browser: {}. Open {} manually.", e, url_clone),
+            }
+        });
+    }
 
     web::serve(bind, state).await;
 }

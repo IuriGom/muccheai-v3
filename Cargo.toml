@@ -52,6 +52,7 @@ toml = { workspace = true }
 rand = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = { workspace = true }
 ring = { workspace = true }
 axum = { version = "0.7", features = ["macros", "ws", "multipart"] }

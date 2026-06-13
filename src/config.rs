@@ -330,6 +330,21 @@ pub struct MuccheConfig {
     /// Enable modular processing pipelines for chat.
     #[serde(default = "default_true")]
     pub modular_pipelines: bool,
+    /// Display name for the AI assistant in the web UI.
+    #[serde(default)]
+    pub ai_name: String,
+    /// UI language code.
+    #[serde(default)]
+    pub language: String,
+    /// Enable UI sound effects.
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    /// Auto-scroll to new messages in the chat.
+    #[serde(default = "default_true")]
+    pub auto_scroll: bool,
+    /// Compact UI mode.
+    #[serde(default)]
+    pub compact_mode: bool,
 }
 
 impl std::fmt::Debug for MuccheConfig {
@@ -364,6 +379,11 @@ impl std::fmt::Debug for MuccheConfig {
             .field("summarize_after_messages", &self.summarize_after_messages)
             .field("native_tool_calling", &self.native_tool_calling)
             .field("modular_pipelines", &self.modular_pipelines)
+            .field("ai_name", &self.ai_name)
+            .field("language", &self.language)
+            .field("sound_enabled", &self.sound_enabled)
+            .field("auto_scroll", &self.auto_scroll)
+            .field("compact_mode", &self.compact_mode)
             .finish()
     }
 }
@@ -436,6 +456,11 @@ impl Default for MuccheConfig {
             summarize_after_messages: 50,
             native_tool_calling: true,
             modular_pipelines: true,
+            ai_name: String::new(),
+            language: String::new(),
+            sound_enabled: true,
+            auto_scroll: true,
+            compact_mode: false,
         }
     }
 }
