@@ -169,3 +169,6 @@ uuid = { version = "1.0", features = ["v4"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets", "getrandom"] }
 zeroize = { version = "1.8", features = ["derive"] }
 rustc_version = "0.4"
+
+[build-dependencies]
+chrono = "0.4"

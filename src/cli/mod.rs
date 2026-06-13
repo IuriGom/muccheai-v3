@@ -44,7 +44,7 @@ impl OutputFormat {
 #[command(name = "muccheai")]
 #[command(bin_name = "muccheai")]
 #[command(about = "MuccheAI v3.2 — Maximum Assurance Secure AI Agent")]
-#[command(version)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BUILD_DATE"), ")"))]
 pub struct Cli {
     /// Subcommand to execute.
     #[command(subcommand)]

@@ -15,5 +15,8 @@ fn main() {
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    let build_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+
     println!("cargo:rustc-env=GIT_COMMIT_HASH={}", commit);
+    println!("cargo:rustc-env=BUILD_DATE={}", build_date);
 }
