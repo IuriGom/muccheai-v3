@@ -107,6 +107,15 @@ async fn main() {
         return;
     }
 
+    // Handle --version manually so we can also print the update banner.
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("muccheai {} ({})", env!("CARGO_PKG_VERSION"), env!("BUILD_DATE"));
+        if std::env::var("MUCCHEAI_SKIP_UPDATE_CHECK").is_err() {
+            cli::update::print_update_banner().await;
+        }
+        return;
+    }
+
     // ── First-run auto-detection ──────────────────────────────────────────
     // If no config exists and the user isn't asking for help/version/completions,
     // launch the setup wizard automatically.
@@ -115,7 +124,7 @@ async fn main() {
     let skip_setup = matches!(
         args.command,
         Commands::Setup | Commands::Complete { .. } | Commands::Config { .. } | Commands::Update
-    ) || std::env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V");
+    ) || std::env::args().any(|a| a == "--help" || a == "-h");
 
     if is_first_run && !skip_setup {
         let theme = crate::style::Theme::Cyber;
@@ -162,7 +171,7 @@ async fn main() {
         Commands::Complete { .. }
             | Commands::Update
             | Commands::Setup
-    ) || std::env::args().any(|a| a == "--help" || a == "-h" || a == "--version" || a == "-V");
+    ) || std::env::args().any(|a| a == "--help" || a == "-h");
 
     if !skip_version_check {
         cli::update::print_update_banner().await;

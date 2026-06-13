@@ -111,7 +111,9 @@ pub async fn check_for_update() -> Option<(String, String)> {
         .find_map(|line| {
             let trimmed = line.trim();
             // Match exactly `version = "..."` (not `version.workspace = true`)
-            if trimmed.starts_with("version ") || trimmed.starts_with("version=") {
+            if (trimmed.starts_with("version ") || trimmed.starts_with("version="))
+                && !trimmed.contains(".workspace")
+            {
                 trimmed.split('=').nth(1).map(|s| {
                     s.trim()
                         .trim_matches('"')
