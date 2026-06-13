@@ -628,6 +628,7 @@ pub struct ScheduledTask {
 #[derive(Debug, Serialize)]
 struct AgentPreset {
     name: String,
+    emoji: String,
     provider: String,
     model: String,
     description: String,
@@ -1113,6 +1114,7 @@ async fn build_chat_context(
         .unwrap_or_else(|| crate::config::default_personas().into_iter().next()
             .unwrap_or_else(|| crate::config::Persona {
                 name: "Assistant".to_string(),
+                emoji: "🐄".to_string(),
                 description: "Default assistant".to_string(),
                 system_prompt: "You are a helpful assistant.".to_string(),
             }));
@@ -2141,7 +2143,24 @@ async fn call_provider_stream(
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
                             if json["done"].as_bool() == Some(true) { continue; }
                             if let Some(content) = json["message"]["content"].as_str() {
-                                if !content.is_empty() && tx.send(content.to_string()).await.is_err() {
+                                if content.is_empty() { continue; }
+                                // Separate visible content from <think>...</think> reasoning.
+                                if content.contains("<think>") || content.contains("</think>") {
+                                    let mut rest = content;
+                                    while let Some(start) = rest.find("<think>") {
+                                        let before = &rest[..start];
+                                        if !before.is_empty() && tx.send(before.to_string()).await.is_err() { return; }
+                                        rest = &rest[start + 7..];
+                                        let end = rest.find("</think>").unwrap_or(rest.len());
+                                        let think = &rest[..end];
+                                        if !think.is_empty() && tx.send(format!("__THINK__{}", think)).await.is_err() { return; }
+                                        rest = &rest[end..];
+                                        if rest.starts_with("</think>") {
+                                            rest = &rest[8..];
+                                        }
+                                    }
+                                    if !rest.is_empty() && tx.send(rest.to_string()).await.is_err() { return; }
+                                } else if tx.send(content.to_string()).await.is_err() {
                                     return;
                                 }
                             }
@@ -3299,6 +3318,65 @@ async fn switch_persona(
     config.current_persona = req.name.clone();
     config.save()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(PersonasResponse {
+        personas: config.personas.clone(),
+        current: config.current_persona.clone(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePersonaRequest {
+    name: String,
+    emoji: String,
+    description: String,
+    system_prompt: String,
+}
+
+/// Create a new persona.
+async fn create_persona(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreatePersonaRequest>,
+) -> Result<Json<PersonasResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let name = req.name.trim();
+    if name.is_empty() || req.system_prompt.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut config = state.config.lock().await;
+    if config.personas.iter().any(|p| p.name == name) {
+        return Err(StatusCode::CONFLICT);
+    }
+    config.personas.push(crate::config::Persona {
+        name: name.to_string(),
+        emoji: req.emoji.trim().to_string(),
+        description: req.description.trim().to_string(),
+        system_prompt: req.system_prompt.trim().to_string(),
+    });
+    config.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(PersonasResponse {
+        personas: config.personas.clone(),
+        current: config.current_persona.clone(),
+    }))
+}
+
+/// Delete a persona by name.
+async fn delete_persona(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<Json<PersonasResponse>, StatusCode> {
+    if is_duress_session(&state, &headers).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let mut config = state.config.lock().await;
+    config.personas.retain(|p| p.name != name);
+    if config.current_persona == name {
+        config.current_persona = config.personas.first().map(|p| p.name.clone()).unwrap_or_default();
+    }
+    config.save().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(PersonasResponse {
         personas: config.personas.clone(),
         current: config.current_persona.clone(),
@@ -5423,6 +5501,7 @@ async fn list_presets(
     let presets = vec![
         AgentPreset {
             name: "default".into(),
+            emoji: "🐄".into(),
             provider: active_agent.map(|a| a.provider.clone()).unwrap_or_else(|| cfg.ollama_host.clone()),
             model: active_agent.map(|a| a.model.clone()).unwrap_or_else(|| cfg.ollama_model.clone()),
             description: "The default active agent".into(),
@@ -5430,6 +5509,7 @@ async fn list_presets(
         },
         AgentPreset {
             name: "creative".into(),
+            emoji: "✍️".into(),
             provider: "openai".into(),
             model: "gpt-4o".into(),
             description: "Creative writing & brainstorming".into(),
@@ -5437,6 +5517,7 @@ async fn list_presets(
         },
         AgentPreset {
             name: "code-reviewer".into(),
+            emoji: "💻".into(),
             provider: "openai".into(),
             model: "gpt-4o-mini".into(),
             description: "Code review & refactoring".into(),
@@ -5486,6 +5567,7 @@ async fn install_preset(
     } else {
         cfg.personas.push(crate::config::Persona {
             name: preset.name.clone(),
+            emoji: preset.emoji.clone(),
             description: preset.description.clone(),
             system_prompt: preset.system_prompt.clone(),
         });

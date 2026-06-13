@@ -52,6 +52,7 @@ body {
 .app-container { display: flex; height: 100vh; }
 .sidebar {
   width: 280px;
+  min-width: 280px;
   background: var(--bg-sidebar);
   backdrop-filter: blur(20px);
   border-right: 1px solid var(--border);
@@ -59,6 +60,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  transition: width 0.25s ease, min-width 0.25s ease, padding 0.25s ease, opacity 0.25s ease;
+}
+
+.sidebar.closed {
+  width: 0;
+  min-width: 0;
+  padding: 24px 0;
+  opacity: 0;
+  overflow: hidden;
 }
 .brand { font-size: 1.3rem; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,0.2); padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .brand-cow { display: none; }
@@ -216,10 +226,10 @@ body {
 
 .message {
   max-width: 75%;
-  padding: 16px 20px;
-  border-radius: 24px;
-  font-size: 0.95rem;
-  line-height: 1.6;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 0.9rem;
+  line-height: 1.5;
   backdrop-filter: blur(16px);
 }
 .message.user { align-self: flex-end; background: rgba(255,255,255,0.25); border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 4px 16px rgba(0,0,0,0.1); }

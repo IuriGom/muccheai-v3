@@ -5,6 +5,205 @@ let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
+// ===== i18n =====
+const TRANSLATIONS = {
+  en: {
+    newChat: 'New chat',
+    send: 'Send',
+    messagePlaceholder: 'Message {{name}}...',
+    searchChats: 'Search chats',
+    history: 'History',
+    status: 'Status',
+    agents: 'Agents',
+    tools: 'Tools',
+    memory: 'Memory',
+    system: 'System',
+    graph: 'Graph',
+    settings: 'Settings',
+    tasks: 'Scheduled Tasks',
+    research: 'Research Chats',
+    welcome: 'Welcome to {{name}}',
+    offline: 'You are offline — messages will be queued',
+    thinking: 'Thinking...',
+    noChats: 'No chats yet',
+    noMemories: 'No memories yet',
+    noTasks: 'No scheduled tasks yet.',
+    noTools: 'No custom tools yet.',
+    language: 'Language',
+    aiName: 'AI Name',
+    model: 'Model',
+    temperature: 'Temperature',
+    maxTokens: 'Max tokens',
+    save: 'Save',
+    cancel: 'Cancel',
+    delete: 'Delete',
+    edit: 'Edit',
+    copy: 'Copy',
+    regenerate: 'Regenerate',
+    share: 'Share',
+    encryptShare: 'Encrypted Share',
+    close: 'Close',
+    listening: 'Listening...',
+    toastSessionExpired: 'Session expired. Please log in again.',
+    toastNoSessionToShare: 'No active session to share. Send a message first.',
+    toastShareCopied: 'Session link copied to clipboard',
+    toastShareFailed: 'Share failed: {{error}}',
+    toastTaskScheduled: 'Task scheduled',
+    toastTaskDeleted: 'Task deleted',
+    toastToolCreated: 'Tool created',
+    toastToolDeleted: 'Tool deleted',
+    toastMemorySaved: 'Memory saved',
+    toastSettingsSaved: 'Settings saved',
+    toastFailed: 'Failed: {{error}}',
+    rag: 'RAG System',
+    ragDescription: 'Retrieval-Augmented Generation lets the AI search your documents before answering.',
+    chunking: 'Chunking',
+    semanticSearch: 'Semantic search',
+    embeddingModel: 'Embedding model',
+    noEmbeddingModel: 'Use keyword search instead of embeddings',
+  },
+  pt: {
+    newChat: 'Novo chat',
+    send: 'Enviar',
+    messagePlaceholder: 'Mensagem para {{name}}...',
+    searchChats: 'Buscar chats',
+    history: 'Histórico',
+    status: 'Status',
+    agents: 'Agentes',
+    tools: 'Ferramentas',
+    memory: 'Memória',
+    system: 'Sistema',
+    graph: 'Grafo',
+    settings: 'Configurações',
+    tasks: 'Tarefas Agendadas',
+    research: 'Pesquisar Chats',
+    welcome: 'Bem-vindo ao {{name}}',
+    offline: 'Você está offline — as mensagens serão enfileiradas',
+    thinking: 'Pensando...',
+    noChats: 'Nenhum chat ainda',
+    noMemories: 'Nenhuma memória ainda',
+    noTasks: 'Nenhuma tarefa agendada ainda.',
+    noTools: 'Nenhuma ferramenta personalizada ainda.',
+    language: 'Idioma',
+    aiName: 'Nome da IA',
+    model: 'Modelo',
+    temperature: 'Temperatura',
+    maxTokens: 'Máx. tokens',
+    save: 'Salvar',
+    cancel: 'Cancelar',
+    delete: 'Excluir',
+    edit: 'Editar',
+    copy: 'Copiar',
+    regenerate: 'Regenerar',
+    share: 'Compartilhar',
+    encryptShare: 'Compartilhamento Criptografado',
+    close: 'Fechar',
+    listening: 'Ouvindo...',
+    toastSessionExpired: 'Sessão expirada. Faça login novamente.',
+    toastNoSessionToShare: 'Nenhuma sessão ativa para compartilhar. Envie uma mensagem primeiro.',
+    toastShareCopied: 'Link da sessão copiado',
+    toastShareFailed: 'Falha ao compartilhar: {{error}}',
+    toastTaskScheduled: 'Tarefa agendada',
+    toastTaskDeleted: 'Tarefa excluída',
+    toastToolCreated: 'Ferramenta criada',
+    toastToolDeleted: 'Ferramenta excluída',
+    toastMemorySaved: 'Memória salva',
+    toastSettingsSaved: 'Configurações salvas',
+    toastFailed: 'Falha: {{error}}',
+    rag: 'Sistema RAG',
+    ragDescription: 'Geração Aumentada por Recuperação permite que a IA busque seus documentos antes de responder.',
+    chunking: 'Fragmentação',
+    semanticSearch: 'Busca semântica',
+    embeddingModel: 'Modelo de embeddings',
+    noEmbeddingModel: 'Usar busca por palavras-chave em vez de embeddings',
+  },
+  zh: {
+    newChat: '新对话',
+    send: '发送',
+    messagePlaceholder: '给 {{name}} 发消息...',
+    searchChats: '搜索对话',
+    history: '历史',
+    status: '状态',
+    agents: '模型',
+    tools: '工具',
+    memory: '记忆',
+    system: '系统',
+    graph: '图谱',
+    settings: '设置',
+    tasks: '定时任务',
+    research: '搜索对话',
+    welcome: '欢迎使用 {{name}}',
+    offline: '你已离线 — 消息将被排队',
+    thinking: '思考中...',
+    noChats: '暂无对话',
+    noMemories: '暂无记忆',
+    noTasks: '暂无定时任务。',
+    noTools: '暂无自定义工具。',
+    language: '语言',
+    aiName: 'AI 名称',
+    model: '模型',
+    temperature: '温度',
+    maxTokens: '最大 tokens',
+    save: '保存',
+    cancel: '取消',
+    delete: '删除',
+    edit: '编辑',
+    copy: '复制',
+    regenerate: '重新生成',
+    share: '分享',
+    encryptShare: '加密分享',
+    close: '关闭',
+    listening: '聆听中...',
+    toastSessionExpired: '会话已过期，请重新登录。',
+    toastNoSessionToShare: '没有可分享的活跃会话。请先发送消息。',
+    toastShareCopied: '会话链接已复制',
+    toastShareFailed: '分享失败：{{error}}',
+    toastTaskScheduled: '任务已创建',
+    toastTaskDeleted: '任务已删除',
+    toastToolCreated: '工具已创建',
+    toastToolDeleted: '工具已删除',
+    toastMemorySaved: '记忆已保存',
+    toastSettingsSaved: '设置已保存',
+    toastFailed: '失败：{{error}}',
+    rag: 'RAG 系统',
+    ragDescription: '检索增强生成让 AI 在回答前先搜索你的文档。',
+    chunking: '分块',
+    semanticSearch: '语义搜索',
+    embeddingModel: '嵌入模型',
+    noEmbeddingModel: '不使用嵌入模型，改用关键词搜索',
+  }
+};
+
+function t(key, vars = {}) {
+  const lang = localStorage.getItem('language') || document.documentElement.getAttribute('lang') || 'en';
+  let text = TRANSLATIONS[lang]?.[key] ?? TRANSLATIONS.en[key] ?? key;
+  Object.entries(vars).forEach(([k, v]) => {
+    text = text.replace(new RegExp('{{' + k + '}}', 'g'), v);
+  });
+  return text;
+}
+
+function applyTranslations() {
+  const lang = localStorage.getItem('language') || document.documentElement.getAttribute('lang') || 'en';
+  document.documentElement.setAttribute('lang', lang);
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    const vars = {};
+    if (el.dataset.i18nName) vars.name = aiName;
+    el.textContent = t(key, vars);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    const key = el.dataset.i18nPlaceholder;
+    const vars = {};
+    if (el.dataset.i18nName) vars.name = aiName;
+    el.placeholder = t(key, vars);
+  });
+  const input = document.getElementById('input');
+  if (input) input.placeholder = t('messagePlaceholder', { name: aiName });
+  const welcome = document.querySelector('.welcome-message h2');
+  if (welcome) welcome.textContent = '🐄 ' + t('welcome', { name: aiName });
+}
+
 // ===== Sound Notifications =====
 let soundEnabled = localStorage.getItem('soundEnabled') !== 'false'; // default on
 
@@ -76,7 +275,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}.css?v=2`;
+  link.href = `/themes/${name}.css?v=3`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -199,7 +398,7 @@ function addMessage(text, isUser) {
 
   const now = new Date();
   const timeAgoStr = timeAgo(now);
-  div.innerHTML = '<span class="msg-time" title="' + timeAgoStr + '">' + time + '</span>' + actions + '<div class="msg-body">' + formatMarkdown(text) + '</div>';
+  div.innerHTML = '<span class="msg-time" title="' + timeAgoStr + '">' + time + '</span><div class="msg-body">' + formatMarkdown(text) + '</div>' + actions;
   container.appendChild(div);
   highlightCodeBlocks(div);
   if (shouldAutoScroll(container)) {
@@ -384,13 +583,18 @@ function startStream() {
   div.className = 'message ai';
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   div.innerHTML = '<span class="msg-time">' + time + '</span>' +
-    '<div class="msg-actions">' +
-      '<button class="msg-action-btn" data-action="copy" title="Copy">📋</button>' +
-      '<button class="msg-action-btn" data-action="regenerate" title="Regenerate">🔄</button>' +
-      '<button class="msg-action-btn" data-action="delete" title="Delete">🗑️</button>' +
+    '<div class="thinking-block" style="display:none;">' +
+      '<button class="thinking-toggle" type="button">💭 ' + t('thinking') + '</button>' +
+      '<div class="thinking-content"></div>' +
     '</div>' +
     '<div class="msg-body"><span class="stream-cursor">▋</span></div>';
   container.appendChild(div);
+  const thinkingToggle = div.querySelector('.thinking-toggle');
+  if (thinkingToggle) {
+    thinkingToggle.addEventListener('click', () => {
+      div.querySelector('.thinking-block')?.classList.toggle('expanded');
+    });
+  }
   currentStreamEl = div;
   container.scrollTop = container.scrollHeight;
   return div;
@@ -402,6 +606,24 @@ function appendStream(text) {
   if (!body) return;
   const cursor = body.querySelector('.stream-cursor');
   if (cursor) cursor.remove();
+
+  // Separate thinking tokens produced by reasoning models (e.g. <think>).
+  if (text.startsWith('__THINK__')) {
+    const think = text.slice(9);
+    const block = currentStreamEl.querySelector('.thinking-block');
+    const content = currentStreamEl.querySelector('.thinking-content');
+    if (block && content) {
+      block.style.display = 'block';
+      content.textContent = (content.textContent || '') + think;
+    }
+    const progress = document.getElementById('streamProgress');
+    if (progress) {
+      progress.classList.remove('hidden');
+      progress.textContent = t('thinking');
+    }
+    return;
+  }
+
   const raw = (currentStreamEl.dataset.rawText || '') + text;
   currentStreamEl.dataset.rawText = raw;
   body.innerHTML = formatMarkdown(raw) + '<span class="stream-cursor">▋</span>';
@@ -429,6 +651,7 @@ function endStream() {
   const progress = document.getElementById('streamProgress');
   if (progress) progress.classList.add('hidden');
   saveChat();
+  renderChatHistory();
 }
 
 function showTyping(show, label) {
@@ -714,14 +937,33 @@ async function renderPersonas() {
       <div class="emoji">${p.emoji || '🐄'}</div>
       <div class="name">${p.name}</div>
       <div class="desc">${p.description || ''}</div>
+      <button class="btn btn-secondary persona-delete-btn" data-name="${p.name}" title="Delete">🗑️</button>
     </div>
   `).join('');
   grid.querySelectorAll('.persona-card').forEach(card => {
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.persona-delete-btn')) return;
       grid.querySelectorAll('.persona-card').forEach(c => c.classList.remove('active'));
       card.classList.add('active');
       const sel = document.getElementById('personaSelect');
       if (sel) sel.value = card.dataset.id;
+    });
+  });
+  grid.querySelectorAll('.persona-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await fetch(`${API}/api/personas/${encodeURIComponent(btn.dataset.name)}`, {
+          method: 'DELETE',
+          headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await loadPersonasAndAgents();
+        await renderPersonas();
+        showToast('Persona deleted', 'success');
+      } catch (e) {
+        showToast('Failed to delete persona: ' + e.message, 'error');
+      }
     });
   });
 }
@@ -987,6 +1229,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (savedLang) document.documentElement.setAttribute('lang', savedLang);
   loadChat();
   await renderPersonas();
+  document.getElementById('personaCreateBtn')?.addEventListener('click', async () => {
+    const emoji = document.getElementById('personaEmojiInput')?.value.trim() || '🐄';
+    const name = document.getElementById('personaNameInput')?.value.trim();
+    const desc = document.getElementById('personaDescInput')?.value.trim();
+    const prompt = document.getElementById('personaPromptInput')?.value.trim();
+    if (!name || !prompt) {
+      showToast('Name and system prompt are required', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/personas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+        body: JSON.stringify({ name, emoji, description: desc, system_prompt: prompt })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      document.getElementById('personaEmojiInput').value = '';
+      document.getElementById('personaNameInput').value = '';
+      document.getElementById('personaDescInput').value = '';
+      document.getElementById('personaPromptInput').value = '';
+      await loadPersonasAndAgents();
+      await renderPersonas();
+      showToast('Persona created', 'success');
+    } catch (e) {
+      showToast('Failed to create persona: ' + e.message, 'error');
+    }
+  });
   await renderMcp();
   await renderStatus();
   await renderMemories();
@@ -1145,8 +1414,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           document.getElementById('fileInput')?.click();
         } else if (action === 'image') {
           document.getElementById('imageInput')?.click();
-        } else if (action === 'camera') {
-          document.getElementById('cameraInput')?.click();
         }
       });
     });
@@ -1180,33 +1447,72 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Camera capture (visual only)
-  const cameraInput = document.getElementById('cameraInput');
-  if (cameraInput) {
-    cameraInput.addEventListener('change', () => {
-      const file = cameraInput.files[0];
-      if (file) addMessage('📷 Photo: ' + file.name, true);
-      cameraInput.value = '';
-    });
-  }
-
-  // Voice input (visual only)
+  // Voice input using Web Speech API with backend STT fallback
   const voiceBtn = document.getElementById('voiceBtn');
   if (voiceBtn) {
-    voiceBtn.addEventListener('click', () => {
-      addMessage('🎤 Voice input not available in this browser.', false);
-    });
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      let rec = null;
+      let active = false;
+      voiceBtn.addEventListener('click', () => {
+        const input = document.getElementById('input');
+        if (!input) return;
+        if (active && rec) {
+          rec.stop();
+          return;
+        }
+        rec = new SpeechRecognition();
+        rec.lang = document.documentElement.getAttribute('lang') || 'en-US';
+        rec.interimResults = true;
+        rec.continuous = false;
+        rec.onstart = () => {
+          active = true;
+          voiceBtn.classList.add('active');
+          showToast('Listening...', 'info');
+        };
+        rec.onend = () => {
+          active = false;
+          voiceBtn.classList.remove('active');
+        };
+        rec.onresult = (e) => {
+          let final = '';
+          let interim = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) final += t;
+            else interim += t;
+          }
+          input.value = (input.dataset.voiceFinal || '') + final + interim;
+          if (final) input.dataset.voiceFinal = (input.dataset.voiceFinal || '') + final;
+        };
+        rec.onerror = (e) => {
+          showToast('Speech error: ' + e.error, 'error');
+          active = false;
+          voiceBtn.classList.remove('active');
+        };
+        input.dataset.voiceFinal = '';
+        rec.start();
+      });
+    } else {
+      voiceBtn.addEventListener('click', () => {
+        showToast('Speech recognition is not supported in this browser. Try Chrome or Brave.', 'error');
+      });
+    }
   }
 
   // Settings button in sidebar
   const settingsBtn = document.querySelector('.nav-item:not([data-tab])');
   if (settingsBtn) settingsBtn.addEventListener('click', e => { e.preventDefault(); openSettings(); });
 
-  // Close modals via X buttons
-  document.querySelectorAll('.modal .btn-icon, .api-key-modal .btn-icon').forEach(btn => {
+  // Close modals and slide panels via X buttons
+  document.querySelectorAll('.modal .btn-icon, .api-key-modal .btn-icon, .slide-panel-header .btn-icon').forEach(btn => {
     btn.addEventListener('click', () => {
       const modal = btn.closest('.modal, .api-key-modal');
       if (modal) modal.style.display = 'none';
+      const panel = btn.closest('.slide-panel');
+      const backdrop = document.getElementById('apiPanelBackdrop');
+      if (panel) panel.classList.remove('open');
+      if (backdrop) backdrop.classList.remove('open');
     });
   });
 
@@ -1432,15 +1738,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     languageSelect.addEventListener('change', () => {
       localStorage.setItem('language', languageSelect.value);
       document.documentElement.setAttribute('lang', languageSelect.value);
+      applyTranslations();
     });
   }
+  applyTranslations();
 
-  // Sidebar toggle for mobile
+  // Sidebar toggle for mobile and desktop
   const sidebarToggle = document.getElementById('sidebarToggleBtn');
   const sidebar = document.querySelector('.sidebar');
   if (sidebarToggle && sidebar) {
     sidebarToggle.addEventListener('click', () => {
-      sidebar.classList.toggle('open');
+      if (window.innerWidth <= 768) {
+        sidebar.classList.toggle('open');
+      } else {
+        sidebar.classList.toggle('closed');
+        document.querySelector('.app-layout')?.classList.toggle('sidebar-closed', sidebar.classList.contains('closed'));
+      }
     });
   }
 
@@ -1658,7 +1971,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('shareSessionBtn')?.addEventListener('click', async () => {
     const sessionId = currentSession();
     if (!sessionId) {
-      showToast('No active session to share', 'error');
+      showToast('No active session to share. Send a message first.', 'error');
       return;
     }
     try {
@@ -1666,7 +1979,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) }
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error('HTTP ' + res.status + ' ' + body);
+      }
       const data = await res.json();
       const token = data.share_token || data.token;
       const link = data.url || data.link || (token ? location.origin + '/share/' + token : '');
@@ -1727,7 +2043,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('encryptShareBtn')?.addEventListener('click', async () => {
     const sessionId = currentSession();
     if (!sessionId) {
-      showToast('No active session to share', 'error');
+      showToast('No active session to share. Send a message first.', 'error');
       return;
     }
     try {
@@ -1735,7 +2051,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) }
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error('HTTP ' + res.status + ' ' + body);
+      }
       const data = await res.json();
       const token = data.share_token || data.token;
       const link = data.url || data.link || (token ? location.origin + '/encrypt-share/' + token : '');
@@ -1805,11 +2124,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       const allMsgs = Array.from(document.querySelectorAll('.message'));
       const idx = allMsgs.indexOf(msgEl);
       const prevUser = allMsgs.slice(0, idx).reverse().find(m => m.classList.contains('user'));
-      if (prevUser) {
-        const input = document.getElementById('input');
-        if (input) {
-          input.value = prevUser.dataset.rawText || '';
+      const input = document.getElementById('input');
+      if (prevUser && input) {
+        const raw = prevUser.dataset.rawText || prevUser.querySelector('.msg-body')?.textContent || '';
+        if (raw.trim()) {
+          input.value = raw.trim();
           sendChatStream();
+        } else {
+          showToast('No user message to regenerate from', 'error');
         }
       } else {
         showToast('No user message to regenerate from', 'error');
@@ -1995,6 +2317,191 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   checkMemoryQueue();
   setInterval(checkMemoryQueue, 30000);
+
+  // Scheduled Tasks
+  const taskHour = document.getElementById('taskHour');
+  const taskMinute = document.getElementById('taskMinute');
+  if (taskHour) for (let i = 0; i < 24; i++) taskHour.add(new Option(String(i).padStart(2, '0'), i));
+  if (taskMinute) for (let i = 0; i < 60; i += 5) taskMinute.add(new Option(String(i).padStart(2, '0'), i));
+  const taskFreq = document.getElementById('taskFreq');
+  const taskDay = document.getElementById('taskDay');
+  const taskCron = document.getElementById('taskCron');
+  if (taskFreq) {
+    taskFreq.addEventListener('change', () => {
+      const freq = taskFreq.value;
+      if (taskDay) taskDay.style.display = freq === 'weekly' ? 'inline' : 'none';
+      if (taskCron) taskCron.style.display = freq === 'custom' ? 'inline' : 'none';
+      if (taskHour) taskHour.style.display = freq === 'custom' ? 'none' : 'inline';
+      if (taskMinute) taskMinute.style.display = freq === 'custom' ? 'none' : 'inline';
+    });
+  }
+  function buildCron() {
+    const freq = taskFreq?.value || 'daily';
+    if (freq === 'custom') return taskCron?.value?.trim() || '';
+    const h = taskHour?.value || '0';
+    const m = taskMinute?.value || '0';
+    if (freq === 'hourly') return `${m} * * * *`;
+    if (freq === 'weekly') return `${m} ${h} * * ${taskDay?.value || '1'}`;
+    return `${m} ${h} * * *`;
+  }
+  async function renderTasks() {
+    const list = document.getElementById('taskList');
+    if (!list) return;
+    let tasks = [];
+    try {
+      const res = await fetch(`${API}/api/scheduled-tasks`);
+      if (res.ok) tasks = await res.json();
+    } catch (_) {}
+    if (!tasks.length) {
+      list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:0.85rem;">No scheduled tasks yet.</div>';
+      return;
+    }
+    list.innerHTML = tasks.map(t => `
+      <div class="task-item" style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;">
+        <div>
+          <div style="font-weight:500;">${escapeHtml(t.prompt)}</div>
+          <div style="font-size:0.75rem;color:var(--text-dim);">${escapeHtml(t.cron)}</div>
+        </div>
+        <button class="btn btn-secondary task-delete-btn" data-id="${t.id}">Delete</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('.task-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const res = await fetch(`${API}/api/scheduled-tasks/${encodeURIComponent(btn.dataset.id)}`, {
+            method: 'DELETE',
+            headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          await renderTasks();
+          showToast('Task deleted', 'success');
+        } catch (e) {
+          showToast('Failed to delete task: ' + e.message, 'error');
+        }
+      });
+    });
+  }
+  document.getElementById('taskCreateBtn')?.addEventListener('click', async () => {
+    const prompt = document.getElementById('taskPrompt')?.value.trim();
+    const cron = buildCron();
+    if (!prompt || !cron) {
+      showToast('Enter a prompt and schedule', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/scheduled-tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+        body: JSON.stringify({ cron, prompt })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      document.getElementById('taskPrompt').value = '';
+      await renderTasks();
+      showToast('Task scheduled', 'success');
+    } catch (e) {
+      showToast('Failed to schedule task: ' + e.message, 'error');
+    }
+  });
+  renderTasks();
+
+  // RAG settings (saved locally until backend RAG is wired)
+  function loadRagSettings() {
+    const s = JSON.parse(localStorage.getItem('rag_settings') || '{}');
+    const enabled = document.getElementById('ragEnabled');
+    if (enabled) enabled.checked = s.enabled ?? false;
+    const chunkSize = document.getElementById('ragChunkSize');
+    if (chunkSize) chunkSize.value = s.chunkSize ?? 512;
+    const overlap = document.getElementById('ragChunkOverlap');
+    if (overlap) overlap.value = s.chunkOverlap ?? 64;
+    const temp = document.getElementById('ragTemperature');
+    if (temp) temp.value = s.temperature ?? 0.3;
+    const semantic = document.getElementById('ragSemantic');
+    if (semantic) semantic.checked = s.semantic ?? true;
+    const model = document.getElementById('ragEmbeddingModel');
+    if (model) model.value = s.embeddingModel ?? '';
+    const fallback = document.getElementById('ragKeywordFallback');
+    if (fallback) fallback.checked = s.keywordFallback ?? true;
+  }
+  document.getElementById('ragSaveBtn')?.addEventListener('click', () => {
+    const s = {
+      enabled: document.getElementById('ragEnabled')?.checked ?? false,
+      chunkSize: parseInt(document.getElementById('ragChunkSize')?.value || '512', 10),
+      chunkOverlap: parseInt(document.getElementById('ragChunkOverlap')?.value || '64', 10),
+      temperature: parseFloat(document.getElementById('ragTemperature')?.value || '0.3'),
+      semantic: document.getElementById('ragSemantic')?.checked ?? true,
+      embeddingModel: document.getElementById('ragEmbeddingModel')?.value || '',
+      keywordFallback: document.getElementById('ragKeywordFallback')?.checked ?? true,
+    };
+    localStorage.setItem('rag_settings', JSON.stringify(s));
+    showToast('RAG settings saved', 'success');
+  });
+  loadRagSettings();
+
+  // Custom Tools
+  async function renderTools() {
+    const list = document.getElementById('toolList');
+    if (!list) return;
+    let tools = [];
+    try {
+      const res = await fetch(`${API}/api/custom-tools`);
+      if (res.ok) {
+        const data = await res.json();
+        tools = data.tools || [];
+      }
+    } catch (_) {}
+    if (!tools.length) {
+      list.innerHTML = '<div style="padding:12px;color:var(--text-dim);font-size:0.85rem;">No custom tools yet.</div>';
+      return;
+    }
+    list.innerHTML = tools.map(t => `
+      <div class="tool-item" style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;">
+        <div>
+          <div style="font-weight:500;">${escapeHtml(t.name)}</div>
+          <div style="font-size:0.75rem;color:var(--text-dim);">${escapeHtml(t.method)} ${escapeHtml(t.url_template)}</div>
+        </div>
+        <button class="btn btn-secondary tool-delete-btn" data-name="${t.name}">Delete</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('.tool-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const res = await fetch(`${API}/api/custom-tools/${encodeURIComponent(btn.dataset.name)}`, {
+            method: 'DELETE',
+            headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          await renderTools();
+          showToast('Tool deleted', 'success');
+        } catch (e) {
+          showToast('Failed to delete tool: ' + e.message, 'error');
+        }
+      });
+    });
+  }
+  document.getElementById('toolCreateBtn')?.addEventListener('click', async () => {
+    const name = document.getElementById('toolName')?.value.trim();
+    const method = document.getElementById('toolMethod')?.value;
+    const url = document.getElementById('toolUrl')?.value.trim();
+    if (!name || !url) {
+      showToast('Enter tool name and URL', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/custom-tools`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
+        body: JSON.stringify({ name, method, url_template: url })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      document.getElementById('toolName').value = '';
+      document.getElementById('toolUrl').value = '';
+      await renderTools();
+      showToast('Tool created', 'success');
+    } catch (e) {
+      showToast('Failed to create tool: ' + e.message, 'error');
+    }
+  });
+  renderTools();
 
   // Hide splash screen after a brief delay so fonts/styles settle
   setTimeout(() => {

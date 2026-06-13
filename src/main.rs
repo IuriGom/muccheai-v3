@@ -328,6 +328,7 @@ async fn main() {
                         };
                         config.personas.push(crate::config::Persona {
                             name,
+                            emoji: "🐄".to_string(),
                             description,
                             system_prompt,
                         });

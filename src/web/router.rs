@@ -127,6 +127,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/chat/ws", get(ws_chat))
         .route("/search", get(global_search))
         .route("/personas", get(list_personas))
+        .route("/personas", post(create_persona))
+        .route("/personas/:name", delete(delete_persona))
         .route("/personas/switch", post(switch_persona))
         .route("/agents", get(list_agents))
         .route("/agents", post(save_agent))

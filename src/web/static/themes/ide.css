@@ -45,12 +45,22 @@ body {
 .app-container { display: flex; height: 100vh; }
 .sidebar {
   width: 48px;
+  min-width: 48px;
   background: #333333;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 8px 0;
   gap: 4px;
+  transition: width 0.25s ease, min-width 0.25s ease, padding 0.25s ease, opacity 0.25s ease;
+}
+
+.sidebar.closed {
+  width: 0;
+  min-width: 0;
+  padding: 8px 0;
+  opacity: 0;
+  overflow: hidden;
 }
 .brand { display: none; }
 .brand-cow { display: none; }
@@ -206,10 +216,10 @@ body {
 .message {
   padding: 10px 14px;
   border-radius: 6px;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   line-height: 1.5;
 }
-.message.user { align-self: flex-end; background: #0e639c; color: #fff; }
+.message.user { align-self: flex-end; background: #d4d4d4; color: #000; }
 .message.ai { align-self: flex-start; background: #3c3c3c; color: #ccc; }
 .modal, .api-key-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
 .modal[style*="flex"], .api-key-modal[style*="flex"] { display: flex; }

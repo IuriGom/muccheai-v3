@@ -61,6 +61,7 @@ async fn start_repl(config: &MuccheConfig) -> anyhow::Result<()> {
         .cloned()
         .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap_or(crate::config::Persona {
             name: "default".to_string(),
+            emoji: "🐄".to_string(),
             description: "Default assistant".to_string(),
             system_prompt: "You are a helpful assistant.".to_string(),
         }));
@@ -368,6 +369,7 @@ fn process_message(
         .cloned()
         .unwrap_or_else(|| crate::config::default_personas().into_iter().next().unwrap_or(crate::config::Persona {
             name: "default".to_string(),
+            emoji: "🐄".to_string(),
             description: "Default assistant".to_string(),
             system_prompt: "You are a helpful assistant.".to_string(),
         }));

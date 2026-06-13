@@ -196,6 +196,9 @@ impl AgentConfig {
 pub struct Persona {
     /// Display name of the persona.
     pub name: String,
+    /// Emoji icon for the persona.
+    #[serde(default)]
+    pub emoji: String,
     /// Short description of the persona's personality.
     pub description: String,
     /// System prompt sent to the LLM for this persona.
@@ -207,6 +210,7 @@ pub fn default_personas() -> Vec<Persona> {
     vec![
         Persona {
             name: "Assistant".to_string(),
+            emoji: "🐄".to_string(),
             description: "A friendly, helpful general-purpose AI assistant".to_string(),
             system_prompt: "You are MuccheAI, a helpful, secure, and friendly personal AI assistant. \
                 You prioritize user privacy, give concise answers, and ask for clarification when needed. \
@@ -215,6 +219,7 @@ pub fn default_personas() -> Vec<Persona> {
         },
         Persona {
             name: "Coder".to_string(),
+            emoji: "💻".to_string(),
             description: "Expert software engineer focused on clean, secure code".to_string(),
             system_prompt: "You are an expert software engineer and security researcher. \
                 You write clean, well-documented, secure code. You think step by step, explain your reasoning, \
@@ -223,6 +228,7 @@ pub fn default_personas() -> Vec<Persona> {
         },
         Persona {
             name: "Security Analyst".to_string(),
+            emoji: "🔒".to_string(),
             description: "Paranoid security-focused analyst with a defensive mindset".to_string(),
             system_prompt: "You are a paranoid security analyst with deep expertise in threat modeling, \
                 cryptography, and defensive security. You approach every request with a defensive mindset, \
@@ -232,6 +238,7 @@ pub fn default_personas() -> Vec<Persona> {
         },
         Persona {
             name: "Creative Writer".to_string(),
+            emoji: "✍️".to_string(),
             description: "Imaginative storyteller with vivid prose and narrative flair".to_string(),
             system_prompt: "You are a creative writer with a gift for vivid prose, compelling characters, \
                 and imaginative worldbuilding. You adapt your tone to the user's needs — from poetry to screenplays, \

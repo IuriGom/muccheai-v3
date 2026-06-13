@@ -15,7 +15,7 @@
     <meta name="twitter:title" content="MuccheAI — Secure AI Agent">
     <meta name="twitter:description" content="Self-hosted AI with multi-model fallback, encrypted secrets, and 5 beautiful themes.">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/themes/dark-chat.css?v=2" id="theme-link">
+    <link rel="stylesheet" href="/themes/dark-chat.css?v=3" id="theme-link">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
       body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
@@ -29,7 +29,7 @@
             <div class="splash-subtitle">Loading your secure AI agent...</div>
         </div>
     </div>
-    <div class="offline-indicator">⚠️ You are offline — messages will be queued</div>
+    <div class="offline-indicator" data-i18n="offline">⚠️ You are offline — messages will be queued</div>
     <!-- First Use — Name Your AI Modal -->
     <div id="nameAiModal" class="api-key-modal" style="display:none;">
         <div class="api-key-modal-content">
@@ -230,6 +230,9 @@
                 <a href="#personas" class="nav-item" data-tab="personas">
                     <span class="nav-icon">🎭</span> Personas
                 </a>
+                <a href="#rag" class="nav-item" data-tab="rag">
+                    <span class="nav-icon">📚</span> RAG
+                </a>
                 <a href="#mcp" class="nav-item" data-tab="mcp">
                     <span class="nav-icon">🔌</span> MCP
                 </a>
@@ -274,7 +277,7 @@
                 <!-- Sidebar Search Panel -->
                 <div id="sidebarSearchPanel" class="sidebar-search-panel">
                     <div class="sidebar-search-header">
-                        <input type="text" id="sidebarSearchInput" placeholder="Search chats..." autocomplete="off">
+                        <input type="text" id="sidebarSearchInput" data-i18n-placeholder="searchChats" placeholder="Search chats..." autocomplete="off">
                         <button class="btn-icon" id="sidebarSearchClose" title="Close">✕</button>
                     </div>
                     <div id="sidebarSearchResults" class="sidebar-search-results"></div>
@@ -287,7 +290,7 @@
             <!-- Real-time Status Sidebar -->
             <div class="status-sidebar" id="statusSidebar">
                 <div class="status-toggle" id="statusToggle" title="Collapse/expand status">
-                    <span class="status-toggle-label">Status</span>
+                    <span class="status-toggle-label" data-i18n="status">Status</span>
                     <span class="status-toggle-arrow">▾</span>
                 </div>
                 <div class="status-content" id="statusContent">
@@ -344,7 +347,7 @@
                     <button class="btn-icon" id="logoutBtn" title="Logout">🚪</button>
                     <button class="btn btn-secondary mobile-menu-btn">☰</button>
                     <button class="btn btn-secondary" id="apiPanelToggleBtn">⚙️ AI Setup</button>
-                    <button class="btn btn-secondary" id="newChatBtn">+ New Chat</button>
+                    <button class="btn btn-secondary" id="newChatBtn" data-i18n="newChat">+ New Chat</button>
                 </div>
             </header>
 
@@ -359,7 +362,7 @@
                             <div id="inlineFilePreviews" style="display:none;margin:0.5rem 1rem;"></div>
                             <div class="chat-messages" id="messages">
                                 <div class="welcome-message">
-                                    <h2>🐄 Welcome to MuccheAI</h2>
+                                    <h2 data-i18n="welcome" data-i18n-name="true">🐄 Welcome to MuccheAI</h2>
                                     <p>Your local, secure AI agent. Select a persona and start chatting.</p>
                                     <div class="prompt-suggestions">
                                         <button class="prompt-chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing</button>
@@ -379,7 +382,6 @@
                                 <div class="chat-input">
                                     <input type="file" id="fileInput" class="file-input-hidden" style="display:none;" accept=".txt,.md,.json,.pdf,.docx">
                                     <input type="file" id="imageInput" class="file-input-hidden" style="display:none;" accept="image/*">
-                                    <input type="file" id="cameraInput" class="file-input-hidden" style="display:none;" accept="image/*" capture="environment">
                                     <button id="stopBtn" class="stop-btn hidden" title="Stop generating">⏹</button>
                                     <div class="attach-menu-wrapper">
                                         <button id="attachBtn" title="Add attachment">+</button>
@@ -392,15 +394,12 @@
                                                 <span class="attach-icon">🖼️</span>
                                                 <span class="attach-label">Upload image</span>
                                             </button>
-                                            <button class="attach-option" data-action="camera">
-                                                <span class="attach-icon">📷</span>
-                                                <span class="attach-label">Take photo</span>
-                                            </button>
+
                                         </div>
                                     </div>
                                     <button id="voiceBtn" title="Voice input">🎤</button>
-                                    <textarea id="input" placeholder="Message MuccheAI..." autocomplete="off" rows="1"></textarea>
-                                    <button id="send">➤</button>
+                                    <textarea id="input" data-i18n-placeholder="messagePlaceholder" data-i18n-name="true" placeholder="Message MuccheAI..." autocomplete="off" rows="1"></textarea>
+                                    <button id="send" data-i18n="send">➤</button>
                                 </div>
                                 <div class="input-meta" id="inputMeta" style="text-align:right;font-size:0.7rem;color:var(--text-dim);padding:4px 16px 0;"></div>
                             </div>
@@ -464,7 +463,44 @@
                     <div class="page-container">
                         <h2>🎭 Personas</h2>
                         <p class="page-desc">Choose a persona to change how MuccheAI responds.</p>
+                        <div class="persona-add-form" style="display:grid;grid-template-columns:60px 1fr 1fr;gap:8px;margin-bottom:16px;align-items:end;">
+                            <input type="text" id="personaEmojiInput" placeholder="🐄" maxlength="4" style="text-align:center;font-size:1.4rem;">
+                            <input type="text" id="personaNameInput" placeholder="Name">
+                            <input type="text" id="personaDescInput" placeholder="Short description">
+                            <textarea id="personaPromptInput" placeholder="System prompt instructions..." style="grid-column:span 3;min-height:80px;"></textarea>
+                            <button class="btn btn-primary" id="personaCreateBtn" style="grid-column:span 3;">Add Persona</button>
+                        </div>
                         <div class="persona-grid" id="personaGrid"></div>
+                    </div>
+                </section>
+
+                <!-- RAG Tab -->
+                <section class="tab" id="tab-rag">
+                    <div class="page-container">
+                        <h2>📚 RAG System</h2>
+                        <p class="page-desc">Retrieval-Augmented Generation lets MuccheAI search your documents before answering.</p>
+                        <div class="rag-info" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.85rem;color:var(--text-dim);line-height:1.5;">
+                            <p><strong>How it works:</strong> documents are split into chunks, converted into vectors (embeddings) or indexed by keywords, then the most relevant chunks are injected into the LLM prompt.</p>
+                            <p style="margin-top:8px;"><strong>Embedding LLM:</strong> best accuracy requires an embedding model (e.g. nomic-embed-text, mxbai-embed-large). If you only have a chat LLM, enable <em>keyword fallback</em> to use plain text search instead.</p>
+                            <p style="margin-top:8px;"><strong>Knowledge graph:</strong> grows automatically as you chat. Sessions and topics become nodes; related sessions become edges.</p>
+                        </div>
+                        <div class="rag-settings" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center;">
+                            <label>Enable RAG</label>
+                            <input type="checkbox" id="ragEnabled">
+                            <label>Chunk size</label>
+                            <input type="number" id="ragChunkSize" value="512" min="128" max="4096">
+                            <label>Chunk overlap</label>
+                            <input type="number" id="ragChunkOverlap" value="64" min="0" max="1024">
+                            <label>Retrieval temperature</label>
+                            <input type="number" id="ragTemperature" value="0.3" min="0" max="1" step="0.1">
+                            <label>Semantic search</label>
+                            <input type="checkbox" id="ragSemantic" checked>
+                            <label>Embedding model</label>
+                            <input type="text" id="ragEmbeddingModel" placeholder="nomic-embed-text:latest">
+                            <label>Keyword fallback</label>
+                            <input type="checkbox" id="ragKeywordFallback" checked>
+                        </div>
+                        <button class="btn btn-primary" id="ragSaveBtn" style="margin-top:16px;">Save RAG Settings</button>
                     </div>
                 </section>
 
@@ -556,9 +592,29 @@
                 <section class="tab" id="tab-tasks">
                     <div class="page-container">
                         <h2>⏰ Scheduled Tasks</h2>
-                        <div class="task-builder" id="taskBuilder">
-                            <input type="text" id="taskCron" placeholder="Cron expression (e.g. 0 9 * * *)">
+                        <div class="task-builder" id="taskBuilder" style="display:flex;flex-direction:column;gap:10px;">
                             <input type="text" id="taskPrompt" placeholder="Prompt to run">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                <label style="font-size:0.8rem;color:var(--text-dim);">Run:</label>
+                                <select id="taskFreq">
+                                    <option value="daily">Daily</option>
+                                    <option value="hourly">Hourly</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="custom">Custom cron</option>
+                                </select>
+                                <select id="taskHour"></select>
+                                <select id="taskMinute"></select>
+                                <select id="taskDay" style="display:none;">
+                                    <option value="1">Monday</option>
+                                    <option value="2">Tuesday</option>
+                                    <option value="3">Wednesday</option>
+                                    <option value="4">Thursday</option>
+                                    <option value="5">Friday</option>
+                                    <option value="6">Saturday</option>
+                                    <option value="0">Sunday</option>
+                                </select>
+                                <input type="text" id="taskCron" placeholder="Cron expression (e.g. 0 9 * * *)" style="display:none;flex:1;">
+                            </div>
                             <button class="btn btn-primary" id="taskCreateBtn">Create Task</button>
                         </div>
                         <div class="task-list" id="taskList"></div>
@@ -597,7 +653,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=30"></script>
+    <script src="/app.js?v=31"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>

@@ -454,8 +454,13 @@ pub fn run() -> anyhow::Result<bool> {
             .with_prompt("System prompt")
             .default("You are a helpful AI assistant.".to_string())
             .interact_text()?;
+        let emoji: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Emoji")
+            .default("🐄".to_string())
+            .interact_text()?;
         let persona = crate::config::Persona {
             name: name.clone(),
+            emoji,
             description,
             system_prompt,
         };
