@@ -63,6 +63,18 @@ body {
   opacity: 0;
   overflow: hidden;
 }
+
+.sidebar.closed .status-sidebar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 220px;
+  padding: 10px 12px;
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  opacity: 1;
+  z-index: 100;
+}
 .brand { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .brand-cow { display: none; }
 .nav-section { display: flex; flex-direction: column; gap: 2px; }

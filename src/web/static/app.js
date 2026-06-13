@@ -56,11 +56,89 @@ const TRANSLATIONS = {
     toastSettingsSaved: 'Settings saved',
     toastFailed: 'Failed: {{error}}',
     rag: 'RAG System',
-    ragDescription: 'Retrieval-Augmented Generation lets the AI search your documents before answering.',
+    ragDescription: 'Retrieval-Augmented Generation lets MuccheAI search your documents before answering.',
+    ragHowItWorks: 'How it works',
+    ragHowItWorksText: 'Documents are split into chunks, converted into vectors (embeddings) or indexed by keywords, then the most relevant chunks are injected into the LLM prompt.',
+    ragEmbedding: 'Embedding LLM',
+    ragEmbeddingText: 'Best accuracy requires an embedding model (e.g. nomic-embed-text, mxbai-embed-large). If you only have a chat LLM, enable keyword fallback to use plain text search instead.',
+    ragKnowledgeGraph: 'Knowledge graph',
+    ragKnowledgeGraphText: 'Grows automatically as you chat. Sessions and topics become nodes; related sessions become edges.',
+    ragDataLocation: 'Where to put data',
+    ragDataLocationText: 'Drop files into the RAG folder for the active database. Each database is a separate collection.',
+    ragMultipleDbs: 'Multiple databases',
+    ragMultipleDbsText: 'Create separate databases for different projects. Switch between them in the settings below.',
+    ragNoWebSearch: 'RAG is local document search. It is separate from web search or online LLMs.',
     chunking: 'Chunking',
     semanticSearch: 'Semantic search',
     embeddingModel: 'Embedding model',
     noEmbeddingModel: 'Use keyword search instead of embeddings',
+    agent: 'Agent',
+    toolsSection: 'Tools',
+    systemSection: 'System',
+    chat: 'Chat',
+    analytics: 'Analytics',
+    presets: 'Presets',
+    knowledgeGraph: 'Knowledge Graph',
+    customTools: 'Custom Tools',
+    scheduledTasks: 'Scheduled Tasks',
+    statusSection: 'Status',
+    settingsSection: 'Settings',
+    personaSubtitle: 'Choose a persona to change how {{name}} responds.',
+    memorySubtitle: 'Save facts and preferences so {{name}} remembers them.',
+    tasksSubtitle: 'Schedule prompts to run automatically.',
+    toolsSubtitle: 'Register custom HTTP tools {{name}} can call.',
+    statusSubtitle: 'System health and active configuration.',
+    settingsSubtitle: 'Customize language, model, and UI behavior.',
+    presetSubtitle: 'Quick agent presets.',
+    graphSubtitle: 'Visual map of sessions and topics.',
+    add: 'Add',
+    type: 'Type',
+    key: 'Key',
+    value: 'Value',
+    fact: 'Fact',
+    preference: 'Preference',
+    prompt: 'Prompt',
+    description: 'Description',
+    command: 'Command',
+    url: 'URL',
+    test: 'Test',
+    search: 'Search',
+    createTask: 'Create Task',
+    run: 'Run',
+    daily: 'Daily',
+    hourly: 'Hourly',
+    weekly: 'Weekly',
+    custom: 'Custom cron',
+    cronExpression: 'Cron expression',
+    promptToRun: 'Prompt to run',
+    mcpServers: 'MCP Servers',
+    addMcpServer: 'Add MCP Server',
+    active: 'Active',
+    inactive: 'Inactive',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
+    online: 'Online',
+    offlineStatus: 'Offline',
+    chooseLanguage: 'Choose your language',
+    chooseAiName: 'Choose a name for your AI',
+    start: 'Start',
+    memoriesLabel: 'Memories',
+    ragDatabases: 'Databases',
+    ragUpload: 'Upload documents',
+    ragUploadBtn: 'Choose files',
+    ragEnable: 'Enable RAG',
+    ragChunkOverlap: 'Chunk overlap',
+    ragRetrievalTemp: 'Retrieval temperature',
+    saveRag: 'Save RAG Settings',
+    approvalQueue: 'Approval Queue',
+    searchMemories: 'Search memories...',
+    backup: 'Backup',
+    restore: 'Restore',
+    addMemory: 'Add Memory',
+    factsLabel: 'Facts',
+    preferencesLabel: 'Preferences',
+    taskHistory: 'Task History',
+    welcomeSubtitle: 'Your local, secure AI agent. Select a persona and start chatting, or try one of the suggestions below.',
   },
   pt: {
     newChat: 'Novo chat',
@@ -111,11 +189,89 @@ const TRANSLATIONS = {
     toastSettingsSaved: 'Configurações salvas',
     toastFailed: 'Falha: {{error}}',
     rag: 'Sistema RAG',
-    ragDescription: 'Geração Aumentada por Recuperação permite que a IA busque seus documentos antes de responder.',
+    ragDescription: 'Geração Aumentada por Recuperação permite que {{name}} busque seus documentos antes de responder.',
+    ragHowItWorks: 'Como funciona',
+    ragHowItWorksText: 'Documentos são divididos em fragmentos, convertidos em vetores (embeddings) ou indexados por palavras-chave, e os fragmentos mais relevantes são injetados no prompt do LLM.',
+    ragEmbedding: 'LLM de embeddings',
+    ragEmbeddingText: 'A melhor precisão exige um modelo de embeddings (ex: nomic-embed-text, mxbai-embed-large). Se você só tem um LLM de chat, habilite a busca por palavras-chave.',
+    ragKnowledgeGraph: 'Grafo de conhecimento',
+    ragKnowledgeGraphText: 'Cresce automaticamente conforme você conversa. Sessões e tópicos viram nós; sessões relacionadas viram arestas.',
+    ragDataLocation: 'Onde colocar os dados',
+    ragDataLocationText: 'Coloque arquivos na pasta RAG do banco de dados ativo. Cada banco é uma coleção separada.',
+    ragMultipleDbs: 'Múltiplos bancos',
+    ragMultipleDbsText: 'Crie bancos separados para projetos diferentes. Troque entre eles nas configurações abaixo.',
+    ragNoWebSearch: 'RAG é busca local em documentos. É separado de busca na web ou LLMs online.',
     chunking: 'Fragmentação',
     semanticSearch: 'Busca semântica',
     embeddingModel: 'Modelo de embeddings',
     noEmbeddingModel: 'Usar busca por palavras-chave em vez de embeddings',
+    agent: 'Agente',
+    toolsSection: 'Ferramentas',
+    systemSection: 'Sistema',
+    chat: 'Chat',
+    analytics: 'Análises',
+    presets: 'Predefinições',
+    knowledgeGraph: 'Grafo de Conhecimento',
+    customTools: 'Ferramentas Personalizadas',
+    scheduledTasks: 'Tarefas Agendadas',
+    statusSection: 'Status',
+    settingsSection: 'Configurações',
+    personaSubtitle: 'Escolha uma persona para mudar como {{name}} responde.',
+    memorySubtitle: 'Salve fatos e preferências para {{name}} lembrar.',
+    tasksSubtitle: 'Agende prompts para rodar automaticamente.',
+    toolsSubtitle: 'Registre ferramentas HTTP que {{name}} pode chamar.',
+    statusSubtitle: 'Saúde do sistema e configuração ativa.',
+    settingsSubtitle: 'Personalize idioma, modelo e comportamento da interface.',
+    presetSubtitle: 'Predefinições rápidas de agente.',
+    graphSubtitle: 'Mapa visual de sessões e tópicos.',
+    add: 'Adicionar',
+    type: 'Tipo',
+    key: 'Chave',
+    value: 'Valor',
+    fact: 'Fato',
+    preference: 'Preferência',
+    prompt: 'Prompt',
+    description: 'Descrição',
+    command: 'Comando',
+    url: 'URL',
+    test: 'Testar',
+    search: 'Buscar',
+    createTask: 'Criar Tarefa',
+    run: 'Rodar',
+    daily: 'Diário',
+    hourly: 'Por hora',
+    weekly: 'Semanal',
+    custom: 'Cron personalizado',
+    cronExpression: 'Expressão cron',
+    promptToRun: 'Prompt a executar',
+    mcpServers: 'Servidores MCP',
+    addMcpServer: 'Adicionar Servidor MCP',
+    active: 'Ativo',
+    inactive: 'Inativo',
+    connected: 'Conectado',
+    disconnected: 'Desconectado',
+    online: 'Online',
+    offlineStatus: 'Offline',
+    chooseLanguage: 'Escolha seu idioma',
+    chooseAiName: 'Escolha um nome para sua IA',
+    start: 'Iniciar',
+    memoriesLabel: 'Memórias',
+    ragDatabases: 'Bancos de dados',
+    ragUpload: 'Enviar documentos',
+    ragUploadBtn: 'Escolher arquivos',
+    ragEnable: 'Ativar RAG',
+    ragChunkOverlap: 'Sobreposição',
+    ragRetrievalTemp: 'Temperatura de recuperação',
+    saveRag: 'Salvar Configurações RAG',
+    approvalQueue: 'Fila de Aprovação',
+    searchMemories: 'Buscar memórias...',
+    backup: 'Backup',
+    restore: 'Restaurar',
+    addMemory: 'Adicionar Memória',
+    factsLabel: 'Fatos',
+    preferencesLabel: 'Preferências',
+    taskHistory: 'Histórico de Tarefas',
+    welcomeSubtitle: 'Seu agente de IA local e seguro. Escolha uma persona e comece a conversar, ou experimente uma das sugestões abaixo.',
   },
   zh: {
     newChat: '新对话',
@@ -166,12 +322,123 @@ const TRANSLATIONS = {
     toastSettingsSaved: '设置已保存',
     toastFailed: '失败：{{error}}',
     rag: 'RAG 系统',
-    ragDescription: '检索增强生成让 AI 在回答前先搜索你的文档。',
+    ragDescription: '检索增强生成让 {{name}} 在回答前先搜索你的文档。',
+    ragHowItWorks: '工作原理',
+    ragHowItWorksText: '文档被切分成块，转换为向量（embeddings）或按关键词索引，然后将最相关的块注入到 LLM 提示词中。',
+    ragEmbedding: '嵌入模型',
+    ragEmbeddingText: '最佳精度需要一个嵌入模型（例如 nomic-embed-text、mxbai-embed-large）。如果你只有聊天 LLM，请启用关键词回退。',
+    ragKnowledgeGraph: '知识图谱',
+    ragKnowledgeGraphText: '随着你聊天自动增长。会话和主题成为节点；相关会话成为边。',
+    ragDataLocation: '数据放在哪里',
+    ragDataLocationText: '将文件放入活动数据库的 RAG 文件夹中。每个数据库是一个独立的集合。',
+    ragMultipleDbs: '多个数据库',
+    ragMultipleDbsText: '为不同项目创建独立数据库。在下方设置中切换。',
+    ragNoWebSearch: 'RAG 是本地文档搜索，与网络搜索或在线 LLM 是分开的。',
     chunking: '分块',
     semanticSearch: '语义搜索',
     embeddingModel: '嵌入模型',
     noEmbeddingModel: '不使用嵌入模型，改用关键词搜索',
+    agent: '代理',
+    toolsSection: '工具',
+    systemSection: '系统',
+    chat: '聊天',
+    analytics: '分析',
+    presets: '预设',
+    knowledgeGraph: '知识图谱',
+    customTools: '自定义工具',
+    scheduledTasks: '定时任务',
+    statusSection: '状态',
+    settingsSection: '设置',
+    personaSubtitle: '选择一个人格来改变 {{name}} 的回复方式。',
+    memorySubtitle: '保存事实和偏好，让 {{name}} 记住。',
+    tasksSubtitle: '安排提示词自动运行。',
+    toolsSubtitle: '注册 {{name}} 可以调用的 HTTP 工具。',
+    statusSubtitle: '系统健康和活动配置。',
+    settingsSubtitle: '自定义语言、模型和界面行为。',
+    presetSubtitle: '快速代理预设。',
+    graphSubtitle: '会话和主题的可视化地图。',
+    add: '添加',
+    type: '类型',
+    key: '键',
+    value: '值',
+    fact: '事实',
+    preference: '偏好',
+    prompt: '提示词',
+    description: '描述',
+    command: '命令',
+    url: 'URL',
+    test: '测试',
+    search: '搜索',
+    createTask: '创建任务',
+    run: '运行',
+    daily: '每天',
+    hourly: '每小时',
+    weekly: '每周',
+    custom: '自定义 cron',
+    cronExpression: 'Cron 表达式',
+    promptToRun: '要运行的提示词',
+    mcpServers: 'MCP 服务器',
+    addMcpServer: '添加 MCP 服务器',
+    active: '活跃',
+    inactive: '非活跃',
+    connected: '已连接',
+    disconnected: '未连接',
+    online: '在线',
+    offlineStatus: '离线',
+    chooseLanguage: '选择你的语言',
+    chooseAiName: '为你的 AI 选择一个名称',
+    start: '开始',
+    memoriesLabel: '记忆',
+    ragDatabases: '数据库',
+    ragUpload: '上传文档',
+    ragUploadBtn: '选择文件',
+    ragEnable: '启用 RAG',
+    ragChunkOverlap: '块重叠',
+    ragRetrievalTemp: '检索温度',
+    saveRag: '保存 RAG 设置',
+    approvalQueue: '审批队列',
+    searchMemories: '搜索记忆...',
+    backup: '备份',
+    restore: '恢复',
+    addMemory: '添加记忆',
+    factsLabel: '事实',
+    preferencesLabel: '偏好',
+    taskHistory: '任务历史',
+    welcomeSubtitle: '你的本地安全 AI 助手。选择人格并开始聊天，或尝试下面的建议。',
   }
+};
+
+const SUGGESTIONS = {
+  en: [
+    { label: 'Summarize my notes', prompt: 'Can you summarize the key points from my notes?' },
+    { label: 'Draft an email', prompt: 'Help me draft a professional email.' },
+    { label: 'Explain a concept', prompt: 'Explain quantum computing in simple terms.' },
+    { label: 'Debug my code', prompt: 'Help me debug this code.\n\n[paste your code here]' },
+    { label: 'Plan my day', prompt: 'Can you help me plan my day?' },
+    { label: 'Write a blog post', prompt: 'Write a short blog post about AI privacy.' },
+    { label: 'Compare options', prompt: 'Compare Rust vs Go for a backend service.' },
+    { label: 'Brainstorm ideas', prompt: 'Brainstorm marketing ideas for a coffee shop.' },
+  ],
+  pt: [
+    { label: 'Resumir minhas notas', prompt: 'Você pode resumir os pontos principais das minhas notas?' },
+    { label: 'Escrever um email', prompt: 'Me ajude a escrever um email profissional.' },
+    { label: 'Explicar um conceito', prompt: 'Explique computação quântica de forma simples.' },
+    { label: 'Depurar meu código', prompt: 'Me ajude a depurar este código.\n\n[cole seu código aqui]' },
+    { label: 'Planejar meu dia', prompt: 'Você pode me ajudar a planejar meu dia?' },
+    { label: 'Escrever um post', prompt: 'Escreva um post curto sobre privacidade em IA.' },
+    { label: 'Comparar opções', prompt: 'Compare Rust vs Go para um serviço backend.' },
+    { label: 'Brainstorm de ideias', prompt: 'Sugira ideias de marketing para uma cafeteria.' },
+  ],
+  zh: [
+    { label: '总结我的笔记', prompt: '你能总结我笔记的要点吗？' },
+    { label: '起草一封邮件', prompt: '帮我起草一封专业的邮件。' },
+    { label: '解释一个概念', prompt: '用简单的语言解释量子计算。' },
+    { label: '调试我的代码', prompt: '帮我调试这段代码。\n\n[在此粘贴你的代码]' },
+    { label: '规划我的一天', prompt: '你能帮我规划今天吗？' },
+    { label: '写一篇博客', prompt: '写一篇关于 AI 隐私的短文。' },
+    { label: '比较选项', prompt: '比较 Rust 和 Go 用于后端服务。' },
+    { label: '头脑风暴', prompt: '为一家咖啡店头脑风暴营销创意。' },
+  ]
 };
 
 function t(key, vars = {}) {
@@ -188,20 +455,63 @@ function applyTranslations() {
   document.documentElement.setAttribute('lang', lang);
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.dataset.i18n;
-    const vars = {};
-    if (el.dataset.i18nName) vars.name = aiName;
-    el.textContent = t(key, vars);
+    const vars = { name: aiName };
+    if (el.dataset.i18nHtml === 'true') {
+      el.innerHTML = t(key, vars);
+    } else {
+      el.textContent = t(key, vars);
+    }
   });
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     const key = el.dataset.i18nPlaceholder;
-    const vars = {};
-    if (el.dataset.i18nName) vars.name = aiName;
-    el.placeholder = t(key, vars);
+    el.placeholder = t(key, { name: aiName });
   });
   const input = document.getElementById('input');
   if (input) input.placeholder = t('messagePlaceholder', { name: aiName });
   const welcome = document.querySelector('.welcome-message h2');
   if (welcome) welcome.textContent = '🐄 ' + t('welcome', { name: aiName });
+  const messagesEl = document.getElementById('messages');
+  if (messagesEl && messagesEl.querySelector('.welcome-message') && messagesEl.children.length === 1) {
+    showWelcome();
+  }
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+function getWelcomeHTML() {
+  const lang = localStorage.getItem('language') || document.documentElement.getAttribute('lang') || 'en';
+  const pool = SUGGESTIONS[lang] || SUGGESTIONS.en;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const picks = shuffled.slice(0, 4);
+  const chips = picks.map(s =>
+    `<button class="prompt-chip" data-prompt="${escapeHtml(s.prompt)}">${escapeHtml(s.label)}</button>`
+  ).join('');
+  return `
+    <div class="welcome-message">
+      <h2>🐄 ${t('welcome', { name: aiName })}</h2>
+      <p>${t('welcomeSubtitle', { name: aiName })}</p>
+      <div class="prompt-suggestions">
+        ${chips}
+      </div>
+    </div>
+  `;
+}
+
+function showWelcome() {
+  const messages = document.getElementById('messages');
+  if (!messages) return;
+  messages.innerHTML = getWelcomeHTML();
+  messages.querySelectorAll('.prompt-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const input = document.getElementById('input');
+      if (input) {
+        input.value = chip.dataset.prompt;
+        input.focus();
+      }
+    });
+  });
 }
 
 // ===== Sound Notifications =====
@@ -275,7 +585,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}.css?v=3`;
+  link.href = `/themes/${name}.css?v=4`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -316,7 +626,7 @@ function logout() {
 }
 
 function maybeShowNameAiModal() {
-  if (!localStorage.getItem('aiName')) {
+  if (!localStorage.getItem('aiName') || !localStorage.getItem('language')) {
     setTimeout(() => openModal('nameAiModal'), 400);
   }
 }
@@ -1228,6 +1538,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const savedLang = localStorage.getItem('language');
   if (savedLang) document.documentElement.setAttribute('lang', savedLang);
   loadChat();
+  const messagesEl = document.getElementById('messages');
+  if (messagesEl && (!messagesEl.children.length || messagesEl.querySelector('.welcome-message'))) {
+    showWelcome();
+  }
   await renderPersonas();
   document.getElementById('personaCreateBtn')?.addEventListener('click', async () => {
     const emoji = document.getElementById('personaEmojiInput')?.value.trim() || '🐄';
@@ -1304,12 +1618,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (val) {
         aiName = val;
         localStorage.setItem('aiName', aiName);
-        document.querySelector('.welcome-message h2').textContent = '🐄 Welcome to ' + aiName;
-        document.getElementById('input').placeholder = 'Message ' + aiName + '...';
+        document.getElementById('input').placeholder = t('messagePlaceholder', { name: aiName });
       }
       if (lang) {
         localStorage.setItem('language', lang);
         document.documentElement.setAttribute('lang', lang);
+      }
+      applyTranslations();
+      const messages = document.getElementById('messages');
+      if (messages && messages.querySelector('.welcome-message')) {
+        showWelcome();
       }
       try {
         const headers = { 'Content-Type': 'application/json' };
@@ -1549,11 +1867,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const newChatBtn = document.getElementById('newChatBtn');
   if (newChatBtn) {
     newChatBtn.addEventListener('click', () => {
-      document.getElementById('messages').innerHTML = `
-        <div class="welcome-message">
-          <h2>🐄 Welcome to ${aiName}</h2>
-          <p>Your local, secure AI agent. Select a persona and start chatting.</p>
-        </div>`;
+      showWelcome();
       clearChatStorage();
       localStorage.removeItem('session_id');
     });
@@ -2024,17 +2338,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('clearChatBtn')?.addEventListener('click', () => {
     if (confirm('Clear all messages? This cannot be undone.')) {
-      document.getElementById('messages').innerHTML = `
-        <div class="welcome-message">
-          <h2>🐄 Welcome to ${aiName}</h2>
-          <p>Your local, secure AI agent. Select a persona and start chatting.</p>
-          <div class="prompt-suggestions">
-            <button class="prompt-chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing</button>
-            <button class="prompt-chip" data-prompt="Write a Python script to parse JSON">Write Python script</button>
-            <button class="prompt-chip" data-prompt="Summarize the theory of relativity">Summarize relativity</button>
-            <button class="prompt-chip" data-prompt="Debug this Rust code: fn main() { println!(\"Hello\"); }">Debug Rust code</button>
-          </div>
-        </div>`;
+      showWelcome();
       clearChatStorage();
       localStorage.removeItem('session_id');
       showToast('Chat cleared', 'info');
@@ -2405,8 +2709,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderTasks();
 
   // RAG settings (saved locally until backend RAG is wired)
+  function getRagSettings() {
+    return JSON.parse(localStorage.getItem('rag_settings') || '{}');
+  }
+  function saveRagSettings(s) {
+    localStorage.setItem('rag_settings', JSON.stringify(s));
+  }
+  function renderRagDbs() {
+    const s = getRagSettings();
+    const select = document.getElementById('ragDbSelect');
+    const path = document.getElementById('ragDbPath');
+    if (!select) return;
+    const dbs = s.databases || ['default'];
+    const active = s.activeDatabase || 'default';
+    select.innerHTML = dbs.map(db => `<option value="${db}" ${db === active ? 'selected' : ''}>${db}</option>`).join('');
+    if (path) path.textContent = `~/.muccheai/rag/${active}/`;
+  }
   function loadRagSettings() {
-    const s = JSON.parse(localStorage.getItem('rag_settings') || '{}');
+    const s = getRagSettings();
     const enabled = document.getElementById('ragEnabled');
     if (enabled) enabled.checked = s.enabled ?? false;
     const chunkSize = document.getElementById('ragChunkSize');
@@ -2421,18 +2741,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (model) model.value = s.embeddingModel ?? '';
     const fallback = document.getElementById('ragKeywordFallback');
     if (fallback) fallback.checked = s.keywordFallback ?? true;
+    renderRagDbs();
+  }
+  document.getElementById('ragDbSelect')?.addEventListener('change', () => {
+    const s = getRagSettings();
+    s.activeDatabase = document.getElementById('ragDbSelect')?.value || 'default';
+    saveRagSettings(s);
+    renderRagDbs();
+  });
+  document.getElementById('ragDbAddBtn')?.addEventListener('click', () => {
+    const name = prompt('Database name:');
+    if (!name) return;
+    const s = getRagSettings();
+    s.databases = s.databases || ['default'];
+    if (!s.databases.includes(name)) s.databases.push(name);
+    s.activeDatabase = name;
+    saveRagSettings(s);
+    renderRagDbs();
+  });
+  const ragFileInput = document.getElementById('ragFileInput');
+  document.getElementById('ragUploadBtn')?.addEventListener('click', () => ragFileInput?.click());
+  if (ragFileInput) {
+    ragFileInput.addEventListener('change', () => {
+      const files = Array.from(ragFileInput.files || []);
+      const list = document.getElementById('ragFileList');
+      if (list) list.textContent = files.map(f => f.name).join(', ') || '';
+      showToast(`${files.length} file(s) selected. Save settings to queue for indexing.`, 'info');
+    });
   }
   document.getElementById('ragSaveBtn')?.addEventListener('click', () => {
-    const s = {
-      enabled: document.getElementById('ragEnabled')?.checked ?? false,
-      chunkSize: parseInt(document.getElementById('ragChunkSize')?.value || '512', 10),
-      chunkOverlap: parseInt(document.getElementById('ragChunkOverlap')?.value || '64', 10),
-      temperature: parseFloat(document.getElementById('ragTemperature')?.value || '0.3'),
-      semantic: document.getElementById('ragSemantic')?.checked ?? true,
-      embeddingModel: document.getElementById('ragEmbeddingModel')?.value || '',
-      keywordFallback: document.getElementById('ragKeywordFallback')?.checked ?? true,
-    };
-    localStorage.setItem('rag_settings', JSON.stringify(s));
+    const s = getRagSettings();
+    s.enabled = document.getElementById('ragEnabled')?.checked ?? false;
+    s.chunkSize = parseInt(document.getElementById('ragChunkSize')?.value || '512', 10);
+    s.chunkOverlap = parseInt(document.getElementById('ragChunkOverlap')?.value || '64', 10);
+    s.temperature = parseFloat(document.getElementById('ragTemperature')?.value || '0.3');
+    s.semantic = document.getElementById('ragSemantic')?.checked ?? true;
+    s.embeddingModel = document.getElementById('ragEmbeddingModel')?.value || '';
+    s.keywordFallback = document.getElementById('ragKeywordFallback')?.checked ?? true;
+    s.databases = s.databases || ['default'];
+    s.activeDatabase = s.activeDatabase || 'default';
+    saveRagSettings(s);
     showToast('RAG settings saved', 'success');
   });
   loadRagSettings();

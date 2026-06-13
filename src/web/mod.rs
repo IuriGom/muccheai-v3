@@ -1130,6 +1130,11 @@ async fn build_chat_context(
     system_prompt.push_str("\n\n--- Diary Instruction ---\n");
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
 
+    if config.show_reasoning {
+        system_prompt.push_str("\n\n--- Reasoning Instruction ---\n");
+        system_prompt.push_str("Before giving your final answer, briefly show your reasoning inside <think>...</think> tags. Keep the reasoning concise.");
+    }
+
     // Inject approved structured memories into the system prompt.
     // When no authentication token is present (e.g. web UI with auth removed),
     // simply skip memory injection rather than failing the request.

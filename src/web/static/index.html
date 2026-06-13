@@ -15,7 +15,7 @@
     <meta name="twitter:title" content="MuccheAI — Secure AI Agent">
     <meta name="twitter:description" content="Self-hosted AI with multi-model fallback, encrypted secrets, and 5 beautiful themes.">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/themes/dark-chat.css?v=3" id="theme-link">
+    <link rel="stylesheet" href="/themes/dark-chat.css?v=4" id="theme-link">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
       body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
@@ -34,16 +34,16 @@
     <div id="nameAiModal" class="api-key-modal" style="display:none;">
         <div class="api-key-modal-content">
             <h3>👋 Welcome</h3>
-            <p>I'm your AI assistant. What would you like to call me?</p>
+            <p data-i18n="chooseAiName">Choose a name for your AI</p>
             <form>
-                <label for="languageSelect" style="display:block;margin-bottom:4px;font-size:0.8rem;color:var(--text-dim);">Language</label>
+                <label for="languageSelect" style="display:block;margin-bottom:4px;font-size:0.8rem;color:var(--text-dim);" data-i18n="chooseLanguage">Choose your language</label>
                 <select id="languageSelect" style="margin-bottom:12px;">
                     <option value="en">English</option>
                     <option value="pt">Português (Brasil)</option>
                     <option value="zh">中文 (简体)</option>
                 </select>
                 <input type="text" id="aiNameInput" placeholder="e.g. MuccheAI, Assistant, etc." autocomplete="off" maxlength="30">
-                <button type="submit" class="btn btn-primary">Start</button>
+                <button type="submit" class="btn btn-primary" data-i18n="start">Start</button>
             </form>
         </div>
     </div>
@@ -220,48 +220,48 @@
                 <span id="versionDisplay">— Secure AI Agent</span>
             </div>
             <nav class="nav-section">
-                <div class="nav-label">Agent</div>
+                <div class="nav-label" data-i18n="agent">Agent</div>
                 <a href="#chat" class="nav-item active" data-tab="chat">
-                    <span class="nav-icon">💬</span> Chat
+                    <span class="nav-icon">💬</span> <span data-i18n="chat">Chat</span>
                 </a>
                 <a href="#memory" class="nav-item" data-tab="memory">
-                    <span class="nav-icon">🧠</span> Memory
+                    <span class="nav-icon">🧠</span> <span data-i18n="memory">Memory</span>
                 </a>
                 <a href="#personas" class="nav-item" data-tab="personas">
-                    <span class="nav-icon">🎭</span> Personas
+                    <span class="nav-icon">🎭</span> <span data-i18n="personas">Personas</span>
                 </a>
                 <a href="#rag" class="nav-item" data-tab="rag">
-                    <span class="nav-icon">📚</span> RAG
+                    <span class="nav-icon">📚</span> <span data-i18n="rag">RAG</span>
                 </a>
                 <a href="#mcp" class="nav-item" data-tab="mcp">
-                    <span class="nav-icon">🔌</span> MCP
+                    <span class="nav-icon">🔌</span> <span>MCP</span>
                 </a>
             </nav>
             <nav class="nav-section">
-                <div class="nav-label">Tools</div>
+                <div class="nav-label" data-i18n="toolsSection">Tools</div>
                 <a href="#analytics" class="nav-item" data-tab="analytics">
-                    <span class="nav-icon">📈</span> Analytics
+                    <span class="nav-icon">📈</span> <span data-i18n="analytics">Analytics</span>
                 </a>
                 <a href="#presets" class="nav-item" data-tab="presets">
-                    <span class="nav-icon">🎛️</span> Presets
+                    <span class="nav-icon">🎛️</span> <span data-i18n="presets">Presets</span>
                 </a>
                 <a href="#graph" class="nav-item" data-tab="graph">
-                    <span class="nav-icon">🕸️</span> Knowledge Graph
+                    <span class="nav-icon">🕸️</span> <span data-i18n="knowledgeGraph">Knowledge Graph</span>
                 </a>
                 <a href="#tools" class="nav-item" data-tab="tools">
-                    <span class="nav-icon">🔧</span> Custom Tools
+                    <span class="nav-icon">🔧</span> <span data-i18n="customTools">Custom Tools</span>
                 </a>
                 <a href="#tasks" class="nav-item" data-tab="tasks">
-                    <span class="nav-icon">⏰</span> Scheduled Tasks
+                    <span class="nav-icon">⏰</span> <span data-i18n="scheduledTasks">Scheduled Tasks</span>
                 </a>
             </nav>
             <nav class="nav-section">
-                <div class="nav-label">System</div>
+                <div class="nav-label" data-i18n="systemSection">System</div>
                 <a href="#status" class="nav-item" data-tab="status">
-                    <span class="nav-icon">📊</span> Status
+                    <span class="nav-icon">📊</span> <span data-i18n="statusSection">Status</span>
                 </a>
                 <a href="#" class="nav-item">
-                    <span class="nav-icon">⚙️</span> Settings
+                    <span class="nav-icon">⚙️</span> <span data-i18n="settingsSection">Settings</span>
                 </a>
             </nav>
 
@@ -361,16 +361,6 @@
                             </div>
                             <div id="inlineFilePreviews" style="display:none;margin:0.5rem 1rem;"></div>
                             <div class="chat-messages" id="messages">
-                                <div class="welcome-message">
-                                    <h2 data-i18n="welcome" data-i18n-name="true">🐄 Welcome to MuccheAI</h2>
-                                    <p>Your local, secure AI agent. Select a persona and start chatting.</p>
-                                    <div class="prompt-suggestions">
-                                        <button class="prompt-chip" data-prompt="Explain quantum computing in simple terms">Explain quantum computing</button>
-                                        <button class="prompt-chip" data-prompt="Write a Python script to parse JSON">Write Python script</button>
-                                        <button class="prompt-chip" data-prompt="Summarize the theory of relativity">Summarize relativity</button>
-                                        <button class="prompt-chip" data-prompt="Debug this Rust code: fn main() { println!(\"Hello\"); }">Debug Rust code</button>
-                                    </div>
-                                </div>
                                 <button id="scrollBottomBtn" class="scroll-bottom-btn" title="Scroll to bottom">⬇</button>
                             </div>
                             <div class="chat-input-area">
@@ -411,41 +401,41 @@
                 <section class="tab" id="tab-memory">
                     <div class="page-container">
                         <div class="page-header">
-                            <h2>🧠 Memory</h2>
+                            <h2 data-i18n="memory">🧠 Memory</h2>
                             <div class="memory-subtabs">
-                                <button class="subtab-btn active" id="subtab-memories">Memories</button>
-                                <button class="subtab-btn" id="subtab-queue">Approval Queue <span id="queueBadge" class="badge" style="display:none;">0</span></button>
+                                <button class="subtab-btn active" id="subtab-memories" data-i18n="memoriesLabel">Memories</button>
+                                <button class="subtab-btn" id="subtab-queue"><span data-i18n="approvalQueue">Approval Queue</span> <span id="queueBadge" class="badge" style="display:none;">0</span></button>
                             </div>
                         </div>
 
                         <!-- Memories Subtab -->
                         <div id="memory-subtab-memories" class="memory-subtab-content">
                             <div class="memory-toolbar" style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
-                                <input type="text" id="memorySearchInput" placeholder="Search memories..." style="flex:1;min-width:200px;">
-                                <button class="btn btn-secondary" id="backupMemoriesBtn" title="Backup">⬇️ Backup</button>
-                                <button class="btn btn-secondary" id="restoreMemoriesBtn" title="Restore">⬆️ Restore</button>
+                                <input type="text" id="memorySearchInput" data-i18n-placeholder="searchMemories" placeholder="Search memories..." style="flex:1;min-width:200px;">
+                                <button class="btn btn-secondary" id="backupMemoriesBtn" title="Backup">⬇️ <span data-i18n="backup">Backup</span></button>
+                                <button class="btn btn-secondary" id="restoreMemoriesBtn" title="Restore">⬆️ <span data-i18n="restore">Restore</span></button>
                             </div>
                             <div class="memory-add-form">
-                                <h3>Add Memory</h3>
+                                <h3 data-i18n="addMemory">Add Memory</h3>
                                 <select id="memoryTypeSelect">
-                                    <option value="Fact">Fact</option>
-                                    <option value="Preference">Preference</option>
+                                    <option value="Fact" data-i18n="fact">Fact</option>
+                                    <option value="Preference" data-i18n="preference">Preference</option>
                                 </select>
                                 <input type="text" id="memoryKeyInput" placeholder="Key (e.g., birthday, timezone)">
-                                <input type="text" id="memoryValueInput" placeholder="Value">
-                                <button>Save</button>
+                                <input type="text" id="memoryValueInput" data-i18n-placeholder="value" placeholder="Value">
+                                <button data-i18n="save">Save</button>
                             </div>
                             <div class="memory-sections">
                                 <div class="memory-section">
-                                    <h3>📌 Facts</h3>
+                                    <h3>📌 <span data-i18n="factsLabel">Facts</span></h3>
                                     <div id="factsList" class="memory-list"></div>
                                 </div>
                                 <div class="memory-section">
-                                    <h3>⚙️ Preferences</h3>
+                                    <h3>⚙️ <span data-i18n="preferencesLabel">Preferences</span></h3>
                                     <div id="preferencesList" class="memory-list"></div>
                                 </div>
                                 <div class="memory-section">
-                                    <h3>📋 Task History</h3>
+                                    <h3>📋 <span data-i18n="taskHistory">Task History</span></h3>
                                     <div id="taskHistoryList" class="memory-list"></div>
                                 </div>
                             </div>
@@ -479,28 +469,48 @@
                     <div class="page-container">
                         <h2>📚 RAG System</h2>
                         <p class="page-desc">Retrieval-Augmented Generation lets MuccheAI search your documents before answering.</p>
+
                         <div class="rag-info" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;font-size:0.85rem;color:var(--text-dim);line-height:1.5;">
-                            <p><strong>How it works:</strong> documents are split into chunks, converted into vectors (embeddings) or indexed by keywords, then the most relevant chunks are injected into the LLM prompt.</p>
-                            <p style="margin-top:8px;"><strong>Embedding LLM:</strong> best accuracy requires an embedding model (e.g. nomic-embed-text, mxbai-embed-large). If you only have a chat LLM, enable <em>keyword fallback</em> to use plain text search instead.</p>
-                            <p style="margin-top:8px;"><strong>Knowledge graph:</strong> grows automatically as you chat. Sessions and topics become nodes; related sessions become edges.</p>
+                            <p><strong data-i18n="ragHowItWorks">How it works:</strong> <span data-i18n="ragHowItWorksText">documents are split into chunks, converted into vectors (embeddings) or indexed by keywords, then the most relevant chunks are injected into the LLM prompt.</span></p>
+                            <p style="margin-top:8px;"><strong data-i18n="ragEmbedding">Embedding LLM:</strong> <span data-i18n="ragEmbeddingText">best accuracy requires an embedding model (e.g. nomic-embed-text, mxbai-embed-large). If you only have a chat LLM, enable keyword fallback to use plain text search instead.</span></p>
+                            <p style="margin-top:8px;"><strong data-i18n="ragDataLocation">Where to put data:</strong> <span data-i18n="ragDataLocationText">drop files into the RAG folder for the active database. Each database is a separate collection.</span> <code style="background:rgba(0,0,0,0.2);padding:2px 4px;border-radius:4px;">~/.muccheai/rag/&lt;database&gt;/</code></p>
+                            <p style="margin-top:8px;"><strong data-i18n="ragMultipleDbs">Multiple databases:</strong> <span data-i18n="ragMultipleDbsText">create separate databases for different projects. Switch between them in the settings below.</span></p>
+                            <p style="margin-top:8px;" data-i18n="ragNoWebSearch">RAG is local document search. It is separate from web search or online LLMs.</p>
                         </div>
+
+                        <div class="rag-databases" style="margin-bottom:16px;">
+                            <h3 data-i18n="ragDatabases">Databases</h3>
+                            <div style="display:flex;gap:8px;margin-bottom:8px;">
+                                <select id="ragDbSelect" style="flex:1;"></select>
+                                <button class="btn btn-secondary" id="ragDbAddBtn" data-i18n="add">Add</button>
+                            </div>
+                            <div style="font-size:0.8rem;color:var(--text-dim);" id="ragDbPath"></div>
+                        </div>
+
+                        <div class="rag-upload" style="margin-bottom:16px;">
+                            <h3 data-i18n="ragUpload">Upload documents</h3>
+                            <input type="file" id="ragFileInput" multiple accept=".txt,.md,.pdf,.docx,.json" style="display:none;">
+                            <button class="btn btn-secondary" id="ragUploadBtn" data-i18n="ragUploadBtn">Choose files</button>
+                            <div id="ragFileList" style="margin-top:8px;font-size:0.8rem;color:var(--text-dim);"></div>
+                        </div>
+
                         <div class="rag-settings" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center;">
-                            <label>Enable RAG</label>
+                            <label data-i18n="ragEnable">Enable RAG</label>
                             <input type="checkbox" id="ragEnabled">
-                            <label>Chunk size</label>
+                            <label data-i18n="chunking">Chunk size</label>
                             <input type="number" id="ragChunkSize" value="512" min="128" max="4096">
-                            <label>Chunk overlap</label>
+                            <label data-i18n="ragChunkOverlap">Chunk overlap</label>
                             <input type="number" id="ragChunkOverlap" value="64" min="0" max="1024">
-                            <label>Retrieval temperature</label>
+                            <label data-i18n="ragRetrievalTemp">Retrieval temperature</label>
                             <input type="number" id="ragTemperature" value="0.3" min="0" max="1" step="0.1">
-                            <label>Semantic search</label>
+                            <label data-i18n="semanticSearch">Semantic search</label>
                             <input type="checkbox" id="ragSemantic" checked>
-                            <label>Embedding model</label>
+                            <label data-i18n="embeddingModel">Embedding model</label>
                             <input type="text" id="ragEmbeddingModel" placeholder="nomic-embed-text:latest">
-                            <label>Keyword fallback</label>
+                            <label data-i18n="noEmbeddingModel">Keyword fallback</label>
                             <input type="checkbox" id="ragKeywordFallback" checked>
                         </div>
-                        <button class="btn btn-primary" id="ragSaveBtn" style="margin-top:16px;">Save RAG Settings</button>
+                        <button class="btn btn-primary" id="ragSaveBtn" style="margin-top:16px;" data-i18n="saveRag">Save RAG Settings</button>
                     </div>
                 </section>
 
@@ -653,7 +663,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=31"></script>
+    <script src="/app.js?v=33"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>
