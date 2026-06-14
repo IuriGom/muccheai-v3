@@ -84,6 +84,40 @@ pub struct ChatSession {
     pub tags: Vec<String>,
 }
 
+/// Load persisted chat sessions from disk, if any.
+pub fn load_chat_sessions() -> Vec<ChatSession> {
+    let path = crate::config::MuccheConfig::chat_sessions_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!("Failed to read chat sessions from {:?}: {}", path, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Persist chat sessions to disk.
+pub fn save_chat_sessions(sessions: &[ChatSession]) {
+    let path = crate::config::MuccheConfig::chat_sessions_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!("Failed to create chat sessions directory {:?}: {}", parent, e);
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(sessions) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!("Failed to write chat sessions to {:?}: {}", path, e);
+            }
+        }
+        Err(e) => tracing::warn!("Failed to serialize chat sessions: {}", e),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatSessionSummary {
     pub id: String,
@@ -1526,6 +1560,7 @@ async fn process_chat(
         });
         secret
     };
+    save_chat_sessions(&sessions);
     drop(sessions);
 
     ChatResponse {
@@ -3620,6 +3655,7 @@ async fn login(
         {
             let mut sessions = state.chat_sessions.lock().await;
             sessions.retain(|s| s.owner_hash != owner_hash);
+            save_chat_sessions(&sessions);
         }
         {
             let mut sessions = state.sessions.lock().await;
@@ -4246,6 +4282,7 @@ async fn delete_chat_session(
             || !muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     if sessions.len() < before {
+        save_chat_sessions(&sessions);
         StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
@@ -4277,6 +4314,7 @@ async fn update_session_title(
             && muccheai_crypto::constant_time::eq(s.owner_hash.as_bytes(), owner.as_bytes())
     }) {
         s.title = req.title.chars().take(100).collect();
+        save_chat_sessions(&sessions);
         StatusCode::OK
     } else {
         StatusCode::NOT_FOUND
@@ -4368,6 +4406,7 @@ async fn branch_session(
         tags: parent.tags.clone(),
         messages: branched_messages,
     });
+    save_chat_sessions(&sessions);
 
     Ok(Json(BranchResponse {
         session_id: new_id,
@@ -4868,6 +4907,7 @@ async fn chat_stream(
                         ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
                     ],
                 });
+                save_chat_sessions(&sessions);
                 s
             }
         };
@@ -5881,6 +5921,7 @@ async fn chat_with_image(
                 folder: String::new(),
                 tags: Vec::new(),
             });
+            save_chat_sessions(&sessions);
             id
         }
     };
@@ -5954,6 +5995,7 @@ async fn update_session_folder(
                 return Err(StatusCode::BAD_REQUEST);
             }
             s.folder = folder.to_string();
+            save_chat_sessions(&sessions);
             Ok(StatusCode::OK)
         }
         None => Err(StatusCode::FORBIDDEN),
@@ -5995,7 +6037,11 @@ async fn update_session_tags(
             && muccheai_crypto::constant_time::eq(s.session_secret.as_bytes(), secret.as_bytes())
     });
     match found {
-        Some(s) => { s.tags = payload.tags; Ok(StatusCode::OK) }
+        Some(s) => {
+            s.tags = payload.tags;
+            save_chat_sessions(&sessions);
+            Ok(StatusCode::OK)
+        }
         None => Err(StatusCode::FORBIDDEN),
     }
 }

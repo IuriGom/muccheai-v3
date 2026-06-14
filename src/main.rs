@@ -977,7 +977,7 @@ async fn run_web_server(bind: &str) {
         rate_limiter: Mutex::new(std::collections::HashMap::new()),
         revoked_tokens: Mutex::new(crate::web::load_revoked_tokens()),
         config: Mutex::new(config.clone()),
-        chat_sessions: Mutex::new(Vec::new()),
+        chat_sessions: Mutex::new(crate::web::load_chat_sessions()),
         memory: Mutex::new(memory),
         structured_memory: Mutex::new(structured_memory),
         bootstrap_context,

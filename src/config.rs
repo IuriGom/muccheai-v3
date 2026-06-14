@@ -491,6 +491,12 @@ impl MuccheConfig {
         home.join(".muccheai")
     }
 
+    /// Path to the persisted chat sessions file.
+    pub fn chat_sessions_path() -> PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".muccheai").join("chat_sessions.json")
+    }
+
     /// Create a directory and restrict its permissions to owner-only (0o700).
     fn ensure_private_dir(path: &std::path::Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(path)?;

@@ -5,6 +5,14 @@ let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
+const THINKING_WORDS = [
+  'Reflecting', 'Synthesizing', 'Reasoning', 'Analyzing', 'Evaluating',
+  'Contemplating', 'Formulating', 'Inferring', 'Weighing', 'Deliberating',
+  'Pondering', 'Examining', 'Constructing', 'Unpacking', 'Distilling',
+  'Interpreting', 'Cross-referencing', 'Validating', 'Refining', 'Imagining'
+];
+let thinkingWordInterval = null;
+
 // ===== i18n =====
 const TRANSLATIONS = {
   en: {
@@ -122,6 +130,8 @@ const TRANSLATIONS = {
     disconnected: 'Disconnected',
     online: 'Online',
     offlineStatus: 'Offline',
+    aiSetup: 'AI Setup',
+    connecting: 'Connecting',
     chooseLanguage: 'Choose your language',
     chooseAiName: 'Choose a name for your AI',
     start: 'Start',
@@ -258,6 +268,8 @@ const TRANSLATIONS = {
     disconnected: 'Desconectado',
     online: 'Online',
     offlineStatus: 'Offline',
+    aiSetup: 'Configuração de IA',
+    connecting: 'Conectando',
     chooseLanguage: 'Escolha seu idioma',
     chooseAiName: 'Escolha um nome para sua IA',
     start: 'Iniciar',
@@ -394,6 +406,8 @@ const TRANSLATIONS = {
     disconnected: '未连接',
     online: '在线',
     offlineStatus: '离线',
+    aiSetup: 'AI 设置',
+    connecting: '连接中',
     chooseLanguage: '选择你的语言',
     chooseAiName: '为你的 AI 选择一个名称',
     start: '开始',
@@ -482,6 +496,29 @@ function applyTranslations() {
   const messagesEl = document.getElementById('messages');
   if (messagesEl && messagesEl.querySelector('.welcome-message') && messagesEl.children.length === 1) {
     showWelcome();
+  }
+  // Update dynamic page title and connection status label
+  const activeTab = document.querySelector('.tab.active');
+  if (activeTab) {
+    const tabId = activeTab.id.replace('tab-', '');
+    const tabTitles = {
+      chat: 'chat', memory: 'memory', personas: 'personas', rag: 'rag',
+      analytics: 'analytics', presets: 'presets', graph: 'knowledgeGraph',
+      tools: 'customTools', tasks: 'scheduledTasks', status: 'statusSection',
+      settings: 'settingsSection', mcp: 'mcpServers'
+    };
+    const pageTitle = document.getElementById('pageTitle');
+    if (pageTitle) {
+      const key = tabTitles[tabId] || tabId;
+      pageTitle.dataset.i18n = key;
+      pageTitle.textContent = t(key);
+    }
+  }
+  const statusLabel = document.querySelector('#connectionStatus .status-label');
+  if (statusLabel) {
+    const key = document.getElementById('connectionStatus')?.classList.contains('online') ? 'online' : 'offlineStatus';
+    statusLabel.dataset.i18n = key;
+    statusLabel.textContent = t(key);
   }
 }
 
@@ -594,7 +631,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}.css?v=100`;
+  link.href = `/themes/${name}-v4.css?v=2`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -648,8 +685,26 @@ async function switchTab(tabId) {
   if (tab) tab.classList.add('active');
   const nav = document.querySelector(`.nav-item[data-tab="${tabId}"]`);
   if (nav) nav.classList.add('active');
-  const title = tabId.charAt(0).toUpperCase() + tabId.slice(1);
-  document.getElementById('pageTitle').textContent = title;
+  const tabTitles = {
+    chat: 'chat',
+    memory: 'memory',
+    personas: 'personas',
+    rag: 'rag',
+    analytics: 'analytics',
+    presets: 'presets',
+    graph: 'knowledgeGraph',
+    tools: 'customTools',
+    tasks: 'scheduledTasks',
+    status: 'statusSection',
+    settings: 'settingsSection',
+    mcp: 'mcpServers'
+  };
+  const pageTitle = document.getElementById('pageTitle');
+  if (pageTitle) {
+    const key = tabTitles[tabId] || tabId;
+    pageTitle.dataset.i18n = key;
+    pageTitle.textContent = t(key);
+  }
   if (tabId === 'graph') await renderGraph();
 }
 
@@ -686,11 +741,16 @@ function timeAgo(date) {
   return Math.floor(diff / 86400) + 'd ago';
 }
 
+function stripMemoryTags(text) {
+  return String(text).replace(/<memory\b[^>]*>[\s\S]*?<\/memory>/gi, '').trim();
+}
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
   if (welcome) welcome.remove();
 
+  text = stripMemoryTags(text);
   const div = document.createElement('div');
   div.className = 'message ' + (isUser ? 'user' : 'ai');
   div.dataset.rawText = text;
@@ -888,6 +948,7 @@ function highlightCodeBlocks(root) {
 }
 
 function startStream() {
+  currentThinkingWordIndex = 0;
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
   if (welcome) welcome.remove();
@@ -921,6 +982,7 @@ function startStream() {
 
 function appendStream(text) {
   if (!currentStreamEl) return;
+  text = stripMemoryTags(text);
   const body = currentStreamEl.querySelector('.msg-body');
   if (!body) return;
   const cursor = body.querySelector('.stream-cursor');
@@ -931,14 +993,21 @@ function appendStream(text) {
     const think = text.slice(9);
     const block = currentStreamEl.querySelector('.thinking-block');
     const content = currentStreamEl.querySelector('.thinking-content');
+    const toggle = currentStreamEl.querySelector('.thinking-toggle');
     if (block && content) {
       block.style.display = 'block';
       content.textContent = (content.textContent || '') + think;
     }
+    if (toggle) {
+      const word = THINKING_WORDS[currentThinkingWordIndex % THINKING_WORDS.length];
+      currentThinkingWordIndex++;
+      toggle.textContent = '💭 ' + word + '...';
+    }
     const progress = document.getElementById('streamProgress');
     if (progress) {
       progress.classList.remove('hidden');
-      progress.textContent = t('thinking');
+      const word = THINKING_WORDS[currentThinkingWordIndex % THINKING_WORDS.length];
+      progress.textContent = word + '...';
     }
     return;
   }
@@ -973,16 +1042,40 @@ function endStream() {
   renderChatHistory();
 }
 
+function startThinkingWords() {
+  const word = document.getElementById('typingWord');
+  if (!word) return;
+  let i = Math.floor(Math.random() * THINKING_WORDS.length);
+  word.textContent = THINKING_WORDS[i];
+  if (thinkingWordInterval) clearInterval(thinkingWordInterval);
+  thinkingWordInterval = setInterval(() => {
+    i = (i + 1) % THINKING_WORDS.length;
+    word.textContent = THINKING_WORDS[i];
+  }, 1800);
+}
+function stopThinkingWords() {
+  if (thinkingWordInterval) clearInterval(thinkingWordInterval);
+  thinkingWordInterval = null;
+}
 function showTyping(show, label) {
   const el = document.getElementById('typingIndicator');
   const word = document.getElementById('typingWord');
   if (el) el.classList.toggle('hidden', !show);
-  if (word) word.textContent = label || '';
+  if (!show) {
+    stopThinkingWords();
+    if (word) word.textContent = '';
+  } else if (label) {
+    stopThinkingWords();
+    if (word) word.textContent = label;
+  } else {
+    startThinkingWords();
+  }
 }
 
 let chatRetryCount = 0;
 let autoScrollEnabled = localStorage.getItem('autoScrollEnabled') !== 'false';
 let unreadMessages = 0;
+let currentThinkingWordIndex = 0;
 
 async function sendChat() {
   const input = document.getElementById('input');
@@ -1188,6 +1281,18 @@ function closeSettings() { document.getElementById('settingsModal').style.displa
 function openModal(id) { document.getElementById(id).style.display = 'flex'; }
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
+// Close modals when clicking outside their content
+function initModalOutsideClick() {
+  document.addEventListener('click', (e) => {
+    const modal = e.target.closest('.modal, .api-key-modal');
+    if (!modal || modal.style.display === 'none') return;
+    const content = modal.querySelector('.modal-content, .api-key-modal-content, .slide-panel');
+    if (content && !content.contains(e.target)) {
+      modal.style.display = 'none';
+    }
+  });
+}
+
 // ===== Toast Notifications =====
 function showToast(message, type) {
   const container = document.getElementById('toastContainer');
@@ -1217,15 +1322,17 @@ async function renderChatHistory() {
     }
   } catch (_) {}
   if (!sessions.length) {
-    list.innerHTML = `<div class="nav-item" style="font-size:0.8rem;padding:6px 10px;color:var(--text-dim);">No chats yet</div>`;
+    list.innerHTML = `<div class="nav-item" style="font-size:0.8rem;padding:6px 10px;color:var(--text-dim);" data-i18n="noChats">${t('noChats')}</div>`;
     return;
   }
-  list.innerHTML = sessions.map(h => `
+  list.innerHTML = sessions.map(h => {
+    const dateStr = h.created_at ? new Date(h.created_at * 1000).toLocaleDateString() : (h.date || '');
+    return `
     <a href="#" class="nav-item chat-history-item" data-session="${h.id}" style="font-size:0.8rem;padding:6px 10px;">
-      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${h.title || 'Untitled'}</span>
-      <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;white-space:nowrap;">${h.date || ''}</span>
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${escapeHtml(h.title || 'Untitled')}</span>
+      <span style="font-size:0.65rem;color:var(--text-dim);margin-left:4px;white-space:nowrap;">${dateStr}</span>
     </a>
-  `).join('');
+  `}).join('');
   list.querySelectorAll('.chat-history-item').forEach(item => {
     item.addEventListener('click', async (e) => {
       e.preventDefault();
@@ -2065,6 +2172,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
   applyTranslations();
+  initModalOutsideClick();
 
   // Sidebar toggle for mobile and desktop
   const sidebarToggle = document.getElementById('sidebarToggleBtn');
@@ -2532,14 +2640,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       const res = await fetch(API + '/api/status', { method: 'GET', signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         statusEl.className = 'connection-status online';
-        statusEl.querySelector('.status-label').textContent = 'Online';
+        const label = statusEl.querySelector('.status-label');
+        if (label) { label.dataset.i18n = 'online'; label.textContent = t('online'); }
         statusEl.title = 'Backend connected';
       } else {
         throw new Error('Status ' + res.status);
       }
     } catch (e) {
       statusEl.className = 'connection-status offline';
-      statusEl.querySelector('.status-label').textContent = 'Offline';
+      const label = statusEl.querySelector('.status-label');
+      if (label) { label.dataset.i18n = 'offlineStatus'; label.textContent = t('offlineStatus'); }
       statusEl.title = 'Backend unreachable — check if server is running';
     }
   }
