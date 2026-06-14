@@ -490,18 +490,17 @@ body {
 
 .message.user {
   align-self: flex-end;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  color: #fff;
+  background: #ffffff;
+  color: #000000;
   border-bottom-right-radius: 4px;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
 }
 
 .message.ai {
   align-self: flex-start;
-  background: #1f2937;
-  border: 1px solid #374151;
+  background: #ffffff;
+  color: #000000;
+  border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 
 .msg-time {

@@ -146,6 +146,8 @@ const TRANSLATIONS = {
     ragRetrievalTemp: 'Retrieval temperature',
     saveRag: 'Save RAG Settings',
     approvalQueue: 'Approval Queue',
+    approvalQueuePending: 'Memory approval queue pending',
+    goToMemory: 'Go to Memory',
     searchMemories: 'Search memories...',
     backup: 'Backup',
     restore: 'Restore',
@@ -286,6 +288,8 @@ const TRANSLATIONS = {
     ragRetrievalTemp: 'Temperatura de recuperação',
     saveRag: 'Salvar Configurações RAG',
     approvalQueue: 'Fila de Aprovação',
+    approvalQueuePending: 'Fila de aprovação de memória pendente',
+    goToMemory: 'Ir para Memória',
     searchMemories: 'Buscar memórias...',
     backup: 'Backup',
     restore: 'Restaurar',
@@ -426,6 +430,8 @@ const TRANSLATIONS = {
     ragRetrievalTemp: '检索温度',
     saveRag: '保存 RAG 设置',
     approvalQueue: '审批队列',
+    approvalQueuePending: '记忆审批队列待处理',
+    goToMemory: '前往记忆',
     searchMemories: '搜索记忆...',
     backup: '备份',
     restore: '恢复',
@@ -637,7 +643,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=3`;
+  link.href = `/themes/${name}-v4.css?v=4`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -953,8 +959,29 @@ function highlightCodeBlocks(root) {
   });
 }
 
+function startStreamProgressWords() {
+  const progress = document.getElementById('streamProgress');
+  if (!progress) return;
+  progress.classList.remove('hidden');
+  let i = Math.floor(Math.random() * THINKING_WORDS.length);
+  progress.textContent = THINKING_WORDS[i] + '...';
+  if (streamProgressInterval) clearInterval(streamProgressInterval);
+  streamProgressInterval = setInterval(() => {
+    i = (i + 1) % THINKING_WORDS.length;
+    progress.textContent = THINKING_WORDS[i] + '...';
+  }, 1800);
+}
+
+function stopStreamProgressWords() {
+  if (streamProgressInterval) clearInterval(streamProgressInterval);
+  streamProgressInterval = null;
+  const progress = document.getElementById('streamProgress');
+  if (progress) progress.classList.add('hidden');
+}
+
 function startStream() {
   currentThinkingWordIndex = 0;
+  stopStreamProgressWords();
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
   if (welcome) welcome.remove();
@@ -982,6 +1009,7 @@ function startStream() {
     });
   }
   currentStreamEl = div;
+  startStreamProgressWords();
   container.scrollTop = container.scrollHeight;
   return div;
 }
@@ -1009,15 +1037,10 @@ function appendStream(text) {
       currentThinkingWordIndex++;
       toggle.textContent = '💭 ' + word + '...';
     }
-    const progress = document.getElementById('streamProgress');
-    if (progress) {
-      progress.classList.remove('hidden');
-      const word = THINKING_WORDS[currentThinkingWordIndex % THINKING_WORDS.length];
-      progress.textContent = word + '...';
-    }
     return;
   }
 
+  stopStreamProgressWords();
   const raw = (currentStreamEl.dataset.rawText || '') + text;
   currentStreamEl.dataset.rawText = raw;
   body.innerHTML = formatMarkdown(raw) + '<span class="stream-cursor">▋</span>';
@@ -1040,10 +1063,9 @@ function endStream() {
   }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
+  stopStreamProgressWords();
   const stopBtn = document.getElementById('stopBtn');
   if (stopBtn) stopBtn.classList.add('hidden');
-  const progress = document.getElementById('streamProgress');
-  if (progress) progress.classList.add('hidden');
   saveChat();
   renderChatHistory();
 }
@@ -1082,6 +1104,7 @@ let chatRetryCount = 0;
 let autoScrollEnabled = localStorage.getItem('autoScrollEnabled') !== 'false';
 let unreadMessages = 0;
 let currentThinkingWordIndex = 0;
+let streamProgressInterval = null;
 
 async function sendChat() {
   const input = document.getElementById('input');
@@ -2739,6 +2762,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       if (approvalToast) {
         approvalToast.style.display = pending.length > 0 ? 'flex' : 'none';
+      }
+      const toastList = document.getElementById('approvalToastList');
+      if (toastList) {
+        toastList.innerHTML = pending.slice(0, 3).map(p => {
+          const label = `${p.memory_type || 'memory'}: ${p.key || 'unknown'}`;
+          return `<li>${escapeHtml(label)}${pending.length > 3 ? '...' : ''}</li>`;
+        }).join('');
       }
     } catch (_) {
       // Backend may not support this endpoint
