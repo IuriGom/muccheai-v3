@@ -44,6 +44,8 @@ const TRANSLATIONS = {
     maxTokens: 'Max tokens',
     save: 'Save',
     cancel: 'Cancel',
+    remove: 'Remove',
+    newDatabaseName: 'New database name',
     delete: 'Delete',
     edit: 'Edit',
     copy: 'Copy',
@@ -182,6 +184,8 @@ const TRANSLATIONS = {
     maxTokens: 'Máx. tokens',
     save: 'Salvar',
     cancel: 'Cancelar',
+    remove: 'Remover',
+    newDatabaseName: 'Nome do novo banco',
     delete: 'Excluir',
     edit: 'Editar',
     copy: 'Copiar',
@@ -320,6 +324,8 @@ const TRANSLATIONS = {
     maxTokens: '最大 tokens',
     save: '保存',
     cancel: '取消',
+    remove: '移除',
+    newDatabaseName: '新数据库名称',
     delete: '删除',
     edit: '编辑',
     copy: '复制',
@@ -631,7 +637,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=2`;
+  link.href = `/themes/${name}-v4.css?v=3`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -2875,12 +2881,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderRagDbs();
   });
   document.getElementById('ragDbAddBtn')?.addEventListener('click', () => {
-    const name = prompt('Database name:');
+    const input = document.getElementById('ragDbNameInput');
+    const name = input?.value.trim();
     if (!name) return;
     const s = getRagSettings();
     s.databases = s.databases || ['default'];
     if (!s.databases.includes(name)) s.databases.push(name);
     s.activeDatabase = name;
+    saveRagSettings(s);
+    renderRagDbs();
+    if (input) input.value = '';
+  });
+  document.getElementById('ragDbRemoveBtn')?.addEventListener('click', () => {
+    const s = getRagSettings();
+    const active = s.activeDatabase || 'default';
+    if (active === 'default') {
+      showToast('Cannot remove the default database', 'warning');
+      return;
+    }
+    if (!confirm(`Remove database "${active}"? Files on disk are not deleted.`)) return;
+    s.databases = (s.databases || ['default']).filter(db => db !== active);
+    s.activeDatabase = s.databases[0] || 'default';
     saveRagSettings(s);
     renderRagDbs();
   });
