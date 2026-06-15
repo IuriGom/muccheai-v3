@@ -15,10 +15,15 @@
     <meta name="twitter:title" content="MuccheAI — Secure AI Agent">
     <meta name="twitter:description" content="Self-hosted AI with multi-model fallback, encrypted secrets, and 5 beautiful themes.">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐄%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/themes/dark-chat-v4.css?v=4" id="theme-link">
+    <link rel="stylesheet" href="/themes/dark-chat-v4.css?v=5" id="theme-link">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <style>
       body.theme-transitioning { opacity: 0.85; transition: opacity 0.25s ease; }
+      /* Critical bubble and button colors — overrides any stale cached theme */
+      .message.user, .message.ai { background: #ffffff !important; color: #000000 !important; }
+      .message.ai { border: 1px solid rgba(255,255,255,0.15) !important; }
+      .chat-input button { background: #3b82f6 !important; color: #ffffff !important; }
+      .chat-input button:hover { background: #2563eb !important; }
     </style>
 </head>
 <body>
@@ -681,7 +686,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="/app.js?v=37"></script>
+    <script src="/app.js?v=38"></script>
 
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container"></div>

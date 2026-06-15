@@ -643,7 +643,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=4`;
+  link.href = `/themes/${name}-v4.css?v=5`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -1254,12 +1254,14 @@ async function uploadFile(file) {
       body: formData
     });
     if (!res.ok) {
+      let msg = 'Upload failed: ' + res.status;
+      try { const err = await res.json(); if (err.error) msg = err.error; } catch (_) {}
       if (res.status === 403) {
         addMessage('Session expired. Please log in again.', false);
         logout();
         return null;
       }
-      throw new Error('Upload failed: ' + res.status);
+      throw new Error(msg);
     }
     return await res.json();
   } catch (e) {
@@ -1507,6 +1509,60 @@ async function renderMemories() {
       <div class="memory-item"><span><strong>${m.key}</strong>: ${m.value}</span><button>Delete</button></div>
     `).join('') : emptyHtml;
   }
+}
+
+async function renderMemoryQueue() {
+  const list = document.getElementById('queueList');
+  if (!list) return;
+  list.innerHTML = '<div style="color:var(--text-dim);padding:1rem;">Loading queue...</div>';
+  let proposals = [];
+  try {
+    const res = await fetch(`${API}/api/memory/queue`);
+    if (res.ok) {
+      const data = await res.json();
+      proposals = data.proposals || [];
+    }
+  } catch (_) {}
+  if (!proposals.length) {
+    list.innerHTML = '<div style="color:var(--text-dim);padding:1rem;">No pending approvals.</div>';
+    return;
+  }
+  list.innerHTML = proposals.map(p => `
+    <div class="queue-item" data-id="${p.id}">
+      <div style="flex:1;">
+        <div><strong>${escapeHtml(p.memory_type || 'memory')}</strong>: ${escapeHtml(p.key || '')}</div>
+        <div style="font-size:0.8rem;color:var(--text-dim);margin-top:2px;">${escapeHtml(String(p.value || ''))}</div>
+        ${p.justification ? `<div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;font-style:italic;">${escapeHtml(p.justification)}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-primary queue-approve-btn" data-id="${p.id}" style="padding:4px 10px;font-size:0.75rem;">Approve</button>
+        <button class="btn btn-secondary queue-reject-btn" data-id="${p.id}" style="padding:4px 10px;font-size:0.75rem;">Reject</button>
+      </div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.queue-approve-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      try {
+        const res = await fetch(`${API}/api/memory/queue/${id}/approve`, { method: 'POST', headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {} });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await renderMemoryQueue();
+        await renderMemories();
+        showToast('Approved', 'success');
+      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    });
+  });
+  list.querySelectorAll('.queue-reject-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      try {
+        const res = await fetch(`${API}/api/memory/queue/${id}/reject`, { method: 'POST', headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {} });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await renderMemoryQueue();
+        showToast('Rejected', 'info');
+      } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    });
+  });
 }
 
 async function renderPresets() {
@@ -1884,17 +1940,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // File upload
   const fileInput = document.getElementById('fileInput');
+  const inputMeta = document.getElementById('inputMeta');
   if (fileInput) {
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files[0];
-      if (file) {
-        addMessage('📎 Uploading **' + file.name + '**...', true);
-        const data = await uploadFile(file);
-        if (data) {
-          addMessage('✅ Uploaded **' + file.name + '** — ' + data.mime_type + ' (' + (data.size / 1024).toFixed(1) + ' KB)', false);
-        } else {
-          addMessage('❌ Failed to upload **' + file.name + '**', false);
-        }
+      if (!file) return;
+      if (inputMeta) inputMeta.textContent = '📎 Uploading ' + file.name + '...';
+      const data = await uploadFile(file);
+      if (data) {
+        addMessage('✅ Uploaded **' + file.name + '** — ' + data.mime_type + ' (' + (data.size / 1024).toFixed(1) + ' KB)', false);
+        if (inputMeta) inputMeta.textContent = '📎 ' + file.name + ' uploaded';
+        setTimeout(() => { if (inputMeta) inputMeta.textContent = ''; }, 3000);
+      } else {
+        addMessage('❌ Failed to upload **' + file.name + '**', false);
+        if (inputMeta) inputMeta.textContent = '';
       }
       fileInput.value = '';
     });
@@ -1917,6 +1976,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (SpeechRecognition) {
       let rec = null;
       let active = false;
+      const langMap = { en: 'en-US', pt: 'pt-BR', zh: 'zh-CN' };
       voiceBtn.addEventListener('click', () => {
         const input = document.getElementById('input');
         if (!input) return;
@@ -1925,41 +1985,41 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
         rec = new SpeechRecognition();
-        rec.lang = document.documentElement.getAttribute('lang') || 'en-US';
+        const lang = document.documentElement.getAttribute('lang') || 'en';
+        rec.lang = langMap[lang] || lang || 'en-US';
         rec.interimResults = true;
-        rec.continuous = false;
+        rec.continuous = true;
         rec.onstart = () => {
           active = true;
-          voiceBtn.classList.add('active');
+          voiceBtn.classList.add('active', 'pulse');
           showToast('Listening...', 'info');
         };
         rec.onend = () => {
           active = false;
-          voiceBtn.classList.remove('active');
+          voiceBtn.classList.remove('active', 'pulse');
         };
         rec.onresult = (e) => {
           let final = '';
           let interim = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
             const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) final += t;
+            if (e.results[i].isFinal) final += t + ' ';
             else interim += t;
           }
           input.value = (input.dataset.voiceFinal || '') + final + interim;
           if (final) input.dataset.voiceFinal = (input.dataset.voiceFinal || '') + final;
+          input.dispatchEvent(new Event('input'));
         };
         rec.onerror = (e) => {
           showToast('Speech error: ' + e.error, 'error');
           active = false;
-          voiceBtn.classList.remove('active');
+          voiceBtn.classList.remove('active', 'pulse');
         };
         input.dataset.voiceFinal = '';
-        rec.start();
+        try { rec.start(); } catch (err) { showToast('Could not start microphone: ' + err.message, 'error'); }
       });
     } else {
-      voiceBtn.addEventListener('click', () => {
-        showToast('Speech recognition is not supported in this browser. Try Chrome or Brave.', 'error');
-      });
+      voiceBtn.style.display = 'none';
     }
   }
 
@@ -2297,6 +2357,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       subtabMemories.classList.remove('active');
       document.getElementById('memory-subtab-memories').style.display = 'none';
       document.getElementById('memory-subtab-queue').style.display = 'block';
+      renderMemoryQueue();
     });
   }
 

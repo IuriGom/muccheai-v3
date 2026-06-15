@@ -65,7 +65,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let permissions_policy = tower_http::set_header::SetResponseHeaderLayer::overriding(
         axum::http::header::HeaderName::from_static("permissions-policy"),
         axum::http::HeaderValue::from_static(
-            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(self), payment=(), usb=()"
         ),
     );
     let xcto = tower_http::set_header::SetResponseHeaderLayer::overriding(
