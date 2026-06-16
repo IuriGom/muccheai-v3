@@ -2081,6 +2081,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     let mediaRecorder = null;
     let audioChunks = [];
     let recording = false;
+    let webSpeechRec = null;
+
+    function startWebSpeech(input) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        showToast('Local STT is not configured and this browser does not support Web Speech. Install whisper (`pip install openai-whisper`) for offline STT.', 'error');
+        return;
+      }
+      const langMap = { en: 'en-US', pt: 'pt-BR', zh: 'zh-CN' };
+      webSpeechRec = new SpeechRecognition();
+      const lang = document.documentElement.getAttribute('lang') || 'en';
+      webSpeechRec.lang = langMap[lang] || lang || 'en-US';
+      webSpeechRec.interimResults = true;
+      webSpeechRec.continuous = true;
+      webSpeechRec.onstart = () => {
+        voiceBtn.classList.add('active', 'pulse');
+        showToast('Listening via browser...', 'info');
+      };
+      webSpeechRec.onend = () => {
+        voiceBtn.classList.remove('active', 'pulse');
+      };
+      webSpeechRec.onresult = (e) => {
+        let final = '';
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) final += t + ' ';
+          else interim += t;
+        }
+        input.value = (input.value ? input.value + ' ' : '') + final + interim;
+        input.dispatchEvent(new Event('input'));
+      };
+      webSpeechRec.onerror = (e) => {
+        showToast('Browser speech error: ' + e.error, 'error');
+        voiceBtn.classList.remove('active', 'pulse');
+      };
+      input.dataset.voiceFinal = '';
+      try { webSpeechRec.start(); } catch (err) { showToast('Could not start microphone: ' + err.message, 'error'); }
+    }
+
+    function stopWebSpeech() {
+      if (webSpeechRec) { try { webSpeechRec.stop(); } catch (_) {} webSpeechRec = null; }
+    }
 
     async function startRecording() {
       const input = document.getElementById('input');
@@ -2100,12 +2143,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
           try {
             const res = await fetch(`${API}/api/stt`, { method: 'POST', headers, body: formData });
-            if (!res.ok) throw new Error('STT failed: ' + res.status);
+            if (!res.ok) {
+              let msg = 'Local STT failed (' + res.status + ')';
+              try { const err = await res.json(); if (err.error) msg = err.error; } catch (_) {}
+              throw new Error(msg);
+            }
             const data = await res.json();
             input.value = (input.value ? input.value + ' ' : '') + (data.transcription || '');
             input.dispatchEvent(new Event('input'));
           } catch (e) {
-            showToast(e.message, 'error');
+            showToast(e.message + '. Falling back to browser speech...', 'warning');
+            startWebSpeech(input);
           }
         };
         mediaRecorder.start();
@@ -2121,6 +2169,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (recording && mediaRecorder) {
         mediaRecorder.stop();
         mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      } else if (webSpeechRec) {
+        stopWebSpeech();
       } else {
         startRecording();
       }
