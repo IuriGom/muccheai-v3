@@ -663,7 +663,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=7`;
+  link.href = `/themes/${name}-v4.css?v=8`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }

@@ -352,7 +352,7 @@ body {
 }
 
 .thinking-panel {
-  margin: 0 4px 10px;
+  margin: 0 0 12px;
   border: 1px solid rgba(59, 130, 246, 0.35);
   border-radius: 12px;
   background: rgba(17, 24, 39, 0.85);
@@ -360,6 +360,12 @@ body {
   overflow: hidden;
   transition: all 0.2s ease;
   animation: thinking-pulse 2s ease-in-out infinite;
+}
+.chat-messages .thinking-panel {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  margin: 0 8px 12px;
 }
 .thinking-panel.hidden { display: none; }
 .thinking-panel-header {

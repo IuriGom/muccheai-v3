@@ -457,7 +457,7 @@ impl Default for MuccheConfig {
             trusted_proxies: Vec::new(),
             web_search_enabled: false,
             web_search_approval: default_web_search_approval(),
-            stt_enabled: false,
+            stt_enabled: true,
             stt_model: default_stt_model(),
             auto_summarize_sessions: true,
             summarize_after_messages: 50,
