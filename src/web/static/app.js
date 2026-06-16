@@ -9,7 +9,24 @@ const THINKING_WORDS = [
   'Riflettendo', 'Sintetizzando', 'Ragionando', 'Analizzando', 'Valutando',
   'Contemplando', 'Formulando', 'Inferendo', 'Ponderando', 'Deliberando',
   'Esaminando', 'Costruendo', 'Distillando', 'Interpretando', 'Verificando',
-  'Affinando', 'Confrontando', 'Immaginando', 'Soppesando', 'Elaborando'
+  'Affinando', 'Confrontando', 'Immaginando', 'Soppesando', 'Elaborando',
+  'Processando', 'Decodificando', 'Calibrando', 'Compilando', 'Contextualizzando',
+  'Definendo', 'Derivando', 'Sviluppando', 'Espandendo', 'Estratto',
+  'Filtrando', 'Generalizzando', 'Ipotizzando', 'Integrando', 'Mappando',
+  'Modellando', 'Navigando', 'Osservando', 'Ottimizzando', 'Parsing',
+  'Penetrando', 'Pianificando', 'Precisando', 'Progettando', 'Prospettando',
+  'Quantificando', 'Raccogliendo', 'Rianalizzando', 'Ricapitolando', 'Ricollegando',
+  'Riformulando', 'Risolvendo', 'Ruminatione', 'Scansionando', 'Scrutando',
+  'Selezionando', 'Sondando', 'Stratificando', 'Strutturando', 'Tessendo',
+  'Traslando', 'Unificando', 'Valicando', 'Verbalizzando', 'Visionando',
+  'Abbinando', 'Accertando', 'Approfondendo', 'Argomentando', 'Arricchendo',
+  'Assimilando', 'Categorizzando', 'Circoscrivere', 'Coagulando', 'Collazionando',
+  'Concretizzando', 'Coniugando', 'Correlando', 'Decifrando', 'Delineando',
+  'Differentiando', 'Discernendo', 'Dissezionando', 'Estrapolando', 'Focalizzando',
+  'Giustapporre', 'Indagando', 'Mediazione', 'Mettendo a fuoco', 'Ordinando',
+  'Ponderazione', 'Raffinando', 'Ricalibrando', 'Ricostruendo', 'Rileggendo',
+  'Rinormalizzando', 'Risistemando', 'Rivedendo', 'Schematizzando', 'Scomporre',
+  'Sintetizzazione', 'Sommando', 'Sottolineando', 'Specificando', 'Trasformando'
 ];
 let thinkingWordInterval = null;
 
