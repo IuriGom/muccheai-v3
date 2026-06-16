@@ -6,10 +6,10 @@ let currentTheme = localStorage.getItem('theme') || 'dark-chat';
 let aiName = localStorage.getItem('aiName') || 'MuccheAI';
 
 const THINKING_WORDS = [
-  'Reflecting', 'Synthesizing', 'Reasoning', 'Analyzing', 'Evaluating',
-  'Contemplating', 'Formulating', 'Inferring', 'Weighing', 'Deliberating',
-  'Pondering', 'Examining', 'Constructing', 'Unpacking', 'Distilling',
-  'Interpreting', 'Cross-referencing', 'Validating', 'Refining', 'Imagining'
+  'Riflettendo', 'Sintetizzando', 'Ragionando', 'Analizzando', 'Valutando',
+  'Contemplando', 'Formulando', 'Inferendo', 'Ponderando', 'Deliberando',
+  'Esaminando', 'Costruendo', 'Distillando', 'Interpretando', 'Verificando',
+  'Affinando', 'Confrontando', 'Immaginando', 'Soppesando', 'Elaborando'
 ];
 let thinkingWordInterval = null;
 
