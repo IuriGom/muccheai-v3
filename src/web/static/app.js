@@ -663,7 +663,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=6`;
+  link.href = `/themes/${name}-v4.css?v=7`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -777,6 +777,18 @@ function stripMemoryTags(text) {
   return String(text).replace(/<memory\b[^>]*>[\s\S]*?<\/memory>/gi, '').trim();
 }
 
+function smartSpacing(text) {
+  // Fix models that occasionally generate text without spaces
+  let s = text;
+  // Space after sentence-ending punctuation followed by capital letter
+  s = s.replace(/([.!?])([A-Z])/g, '$1 $2');
+  // Space between lowercase letter and uppercase letter (camelCase separation)
+  s = s.replace(/([a-z])([A-Z])/g, '$1 $2');
+  // Space after comma if missing
+  s = s.replace(/([a-zA-Z]),([a-zA-Z])/g, '$1, $2');
+  return s;
+}
+
 function addMessage(text, isUser) {
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
@@ -878,6 +890,9 @@ function formatMarkdown(text) {
     </div>`);
     return placeholder;
   });
+
+  // Apply smart spacing only to non-code text
+  text = smartSpacing(text);
 
   // Escape remaining HTML
   let html = escapeHtml(text);
@@ -981,27 +996,51 @@ function highlightCodeBlocks(root) {
 
 function startStreamProgressWords() {
   const progress = document.getElementById('streamProgress');
-  if (!progress) return;
-  progress.classList.remove('hidden');
-  let i = Math.floor(Math.random() * THINKING_WORDS.length);
-  progress.textContent = THINKING_WORDS[i] + '...';
-  if (streamProgressInterval) clearInterval(streamProgressInterval);
-  streamProgressInterval = setInterval(() => {
-    i = (i + 1) % THINKING_WORDS.length;
-    progress.textContent = THINKING_WORDS[i] + '...';
-  }, 1800);
+  if (progress) progress.classList.add('hidden');
 }
 
 function stopStreamProgressWords() {
-  if (streamProgressInterval) clearInterval(streamProgressInterval);
-  streamProgressInterval = null;
   const progress = document.getElementById('streamProgress');
   if (progress) progress.classList.add('hidden');
+}
+
+// Global thinking panel (Claude/Kimi style) above the input
+let thinkingPanelInterval = null;
+function showThinkingPanel() {
+  const panel = document.getElementById('thinkingPanel');
+  const word = document.getElementById('thinkingPanelWord');
+  const content = document.getElementById('thinkingPanelContent');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  if (content) content.textContent = '';
+  let i = Math.floor(Math.random() * THINKING_WORDS.length);
+  if (word) word.textContent = THINKING_WORDS[i] + '...';
+  if (thinkingPanelInterval) clearInterval(thinkingPanelInterval);
+  thinkingPanelInterval = setInterval(() => {
+    i = (i + 1) % THINKING_WORDS.length;
+    if (word) word.textContent = THINKING_WORDS[i] + '...';
+  }, 1800);
+}
+function hideThinkingPanel() {
+  const panel = document.getElementById('thinkingPanel');
+  if (thinkingPanelInterval) clearInterval(thinkingPanelInterval);
+  thinkingPanelInterval = null;
+  if (panel) {
+    panel.classList.add('hidden');
+    panel.classList.remove('expanded');
+  }
+}
+function appendThinkingPanel(text) {
+  const content = document.getElementById('thinkingPanelContent');
+  if (!content) return;
+  content.textContent = (content.textContent || '') + text;
+  content.scrollTop = content.scrollHeight;
 }
 
 function startStream() {
   currentThinkingWordIndex = 0;
   stopStreamProgressWords();
+  showThinkingPanel();
   const container = document.getElementById('messages');
   const welcome = container.querySelector('.welcome-message');
   if (welcome) welcome.remove();
@@ -1016,29 +1055,9 @@ function startStream() {
   div.className = 'message ai';
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   div.innerHTML = '<span class="msg-time">' + time + '</span>' +
-    '<div class="thinking-block streaming">' +
-      '<button class="thinking-toggle" type="button">💭 ' + THINKING_WORDS[0] + '...</button>' +
-      '<div class="thinking-content"></div>' +
-    '</div>' +
     '<div class="msg-body"><span class="stream-cursor">▋</span></div>';
   container.appendChild(div);
-  const block = div.querySelector('.thinking-block');
-  const thinkingToggle = div.querySelector('.thinking-toggle');
-  if (thinkingToggle) {
-    thinkingToggle.addEventListener('click', () => {
-      block?.classList.toggle('expanded');
-    });
-  }
-  // Rotate thinking words in the toggle while streaming
-  if (thinkingToggle) {
-    let i = 0;
-    div.dataset.thinkingInterval = setInterval(() => {
-      i = (i + 1) % THINKING_WORDS.length;
-      thinkingToggle.textContent = '💭 ' + THINKING_WORDS[i] + '...';
-    }, 1800);
-  }
   currentStreamEl = div;
-  startStreamProgressWords();
   container.scrollTop = container.scrollHeight;
   return div;
 }
@@ -1054,12 +1073,9 @@ function appendStream(text) {
   // Separate thinking tokens produced by reasoning models (e.g. <think>).
   if (text.startsWith('__THINK__')) {
     const think = text.slice(9);
-    const block = currentStreamEl.querySelector('.thinking-block');
-    const content = currentStreamEl.querySelector('.thinking-content');
-    if (block && content) {
-      block.classList.add('has-content');
-      content.textContent = (content.textContent || '') + think;
-    }
+    appendThinkingPanel(think);
+    const panel = document.getElementById('thinkingPanel');
+    if (panel && !panel.classList.contains('expanded')) panel.classList.add('expanded');
     return;
   }
 
@@ -1085,24 +1101,10 @@ function endStream() {
     const cursor = body.querySelector('.stream-cursor');
     if (cursor) cursor.remove();
   }
-  if (el.dataset.thinkingInterval) {
-    clearInterval(parseInt(el.dataset.thinkingInterval));
-    delete el.dataset.thinkingInterval;
-  }
-  const block = el.querySelector('.thinking-block');
-  const toggle = el.querySelector('.thinking-toggle');
-  const content = el.querySelector('.thinking-content');
-  if (block) {
-    block.classList.remove('streaming');
-    if (!content?.textContent?.trim()) {
-      block.style.display = 'none';
-    } else {
-      if (toggle) toggle.textContent = '💭 ' + t('thinking');
-    }
-  }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
   stopStreamProgressWords();
+  hideThinkingPanel();
   const stopBtn = document.getElementById('stopBtn');
   if (stopBtn) stopBtn.classList.add('hidden');
   saveChat();
@@ -2076,57 +2078,53 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Voice input using Web Speech API with backend STT fallback
   const voiceBtn = document.getElementById('voiceBtn');
   if (voiceBtn) {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      let rec = null;
-      let active = false;
-      const langMap = { en: 'en-US', pt: 'pt-BR', zh: 'zh-CN' };
-      voiceBtn.addEventListener('click', () => {
-        const input = document.getElementById('input');
-        if (!input) return;
-        if (active && rec) {
-          rec.stop();
-          return;
-        }
-        rec = new SpeechRecognition();
-        const lang = document.documentElement.getAttribute('lang') || 'en';
-        rec.lang = langMap[lang] || lang || 'en-US';
-        rec.interimResults = true;
-        rec.continuous = true;
-        rec.onstart = () => {
-          active = true;
-          voiceBtn.classList.add('active', 'pulse');
-          showToast('Listening...', 'info');
-        };
-        rec.onend = () => {
-          active = false;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let recording = false;
+
+    async function startRecording() {
+      const input = document.getElementById('input');
+      if (!input) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
           voiceBtn.classList.remove('active', 'pulse');
-        };
-        rec.onresult = (e) => {
-          let final = '';
-          let interim = '';
-          for (let i = e.resultIndex; i < e.results.length; i++) {
-            const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) final += t + ' ';
-            else interim += t;
+          recording = false;
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('audio', blob, 'voice.webm');
+          const headers = {};
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+          try {
+            const res = await fetch(`${API}/api/stt`, { method: 'POST', headers, body: formData });
+            if (!res.ok) throw new Error('STT failed: ' + res.status);
+            const data = await res.json();
+            input.value = (input.value ? input.value + ' ' : '') + (data.transcription || '');
+            input.dispatchEvent(new Event('input'));
+          } catch (e) {
+            showToast(e.message, 'error');
           }
-          input.value = (input.dataset.voiceFinal || '') + final + interim;
-          if (final) input.dataset.voiceFinal = (input.dataset.voiceFinal || '') + final;
-          input.dispatchEvent(new Event('input'));
         };
-        rec.onerror = (e) => {
-          showToast('Speech error: ' + e.error, 'error');
-          active = false;
-          voiceBtn.classList.remove('active', 'pulse');
-        };
-        input.dataset.voiceFinal = '';
-        try { rec.start(); } catch (err) { showToast('Could not start microphone: ' + err.message, 'error'); }
-      });
-    } else {
-      voiceBtn.addEventListener('click', () => {
-        showToast('Speech recognition is not supported in this browser. Try Chrome, Brave or Edge.', 'error');
-      });
+        mediaRecorder.start();
+        recording = true;
+        voiceBtn.classList.add('active', 'pulse');
+        showToast('Recording... click again to stop', 'info');
+      } catch (e) {
+        showToast('Microphone error: ' + e.message, 'error');
+      }
     }
+
+    voiceBtn.addEventListener('click', () => {
+      if (recording && mediaRecorder) {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      } else {
+        startRecording();
+      }
+    });
   }
 
   // Settings button in sidebar
@@ -2368,6 +2366,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   applyTranslations();
   initModalOutsideClick();
+
+  // Thinking panel expand/collapse
+  const thinkingPanel = document.getElementById('thinkingPanel');
+  const thinkingPanelHeader = thinkingPanel?.querySelector('.thinking-panel-header');
+  if (thinkingPanelHeader) {
+    thinkingPanelHeader.addEventListener('click', () => {
+      thinkingPanel.classList.toggle('expanded');
+    });
+  }
+
+  // Status sidebar collapse/expand
+  const statusToggle = document.getElementById('statusToggle');
+  const statusSidebar = document.getElementById('statusSidebar');
+  if (statusToggle && statusSidebar) {
+    statusToggle.addEventListener('click', () => {
+      statusSidebar.classList.toggle('collapsed');
+      localStorage.setItem('statusSidebarCollapsed', statusSidebar.classList.contains('collapsed') ? '1' : '0');
+    });
+    if (localStorage.getItem('statusSidebarCollapsed') === '1') {
+      statusSidebar.classList.add('collapsed');
+    }
+  }
 
   // Sidebar toggle for mobile and desktop
   const sidebarToggle = document.getElementById('sidebarToggleBtn');

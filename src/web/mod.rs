@@ -104,17 +104,17 @@ pub fn save_chat_sessions(sessions: &[ChatSession]) {
     let path = crate::config::MuccheConfig::chat_sessions_path();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!("Failed to create chat sessions directory {:?}: {}", parent, e);
+            eprintln!("[muccheai] Failed to create chat sessions directory {:?}: {}", parent, e);
             return;
         }
     }
     match serde_json::to_string_pretty(sessions) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
-                tracing::warn!("Failed to write chat sessions to {:?}: {}", path, e);
+                eprintln!("[muccheai] Failed to write chat sessions to {:?}: {}", path, e);
             }
         }
-        Err(e) => tracing::warn!("Failed to serialize chat sessions: {}", e),
+        Err(e) => eprintln!("[muccheai] Failed to serialize chat sessions: {}", e),
     }
 }
 
@@ -1163,6 +1163,9 @@ async fn build_chat_context(
     }
     system_prompt.push_str("\n\n--- Diary Instruction ---\n");
     system_prompt.push_str("At the end of each day, reflect on your interactions, what you have learned, and how you felt during the day. Maintain an internal diary summarizing conversations, insights, and emotional tone. Reference past diary entries when relevant to provide continuity and personalized responses.");
+
+    system_prompt.push_str("\n\n--- Formatting Instruction ---\n");
+    system_prompt.push_str("Always use normal spacing between words and after punctuation marks. Never concatenate words together.");
 
     if config.show_reasoning {
         system_prompt.push_str("\n\n--- Reasoning Instruction ---\n");
@@ -4943,10 +4946,10 @@ async fn chat_stream(
                         ChatMessage { role: "ai".to_string(), content: full_text.trim().to_string(), timestamp: timestamp + 1 },
                     ],
                 });
-                save_chat_sessions(&sessions);
                 s
             }
         };
+        save_chat_sessions(&sessions);
     });
 
     Sse::new(ReceiverStream::new(rx))
