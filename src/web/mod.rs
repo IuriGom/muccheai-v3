@@ -1675,6 +1675,16 @@ async fn call_provider(
     image_b64: Option<&str>,
     tools: Vec<crate::ollama_tools::ToolDefinition>,
 ) -> Result<String, String> {
+    // Test mode: bypass real LLM calls for fast integration testing.
+    if std::env::var("MUCCHEAI_MOCK_LLM").unwrap_or_default() == "1" {
+        return Ok(format!(
+            "[mock] {} says: {} (provider={}, model={})",
+            system_prompt.split_whitespace().next().unwrap_or("AI"),
+            user_message,
+            provider,
+            agent.model
+        ));
+    }
     match provider {
         "openai" => {
             let base_url = agent.base_url.as_deref().unwrap_or("https://api.openai.com/v1");

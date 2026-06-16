@@ -118,7 +118,8 @@ async fn main() {
 
     // ── First-run auto-detection ──────────────────────────────────────────
     // If no config exists and the user isn't asking for help/version/completions,
-    // launch the setup wizard automatically.
+    // launch the setup wizard automatically (interactive) or create a default
+    // config silently when running headless.
     let is_first_run = cli::setup::is_first_run();
     let args = Cli::parse();
     let skip_setup = matches!(
@@ -127,27 +128,36 @@ async fn main() {
     ) || std::env::args().any(|a| a == "--help" || a == "-h");
 
     if is_first_run && !skip_setup {
-        let theme = crate::style::Theme::Cyber;
-        theme.print_banner();
-        theme.print_header(&format!("First-Time Setup v{}", env!("CARGO_PKG_VERSION")));
-        println!(
-            "  {}\n",
-            theme.style_secondary().apply_to(
-                "Welcome! It looks like this is your first time running MuccheAI. \
-                 Let's get you set up."
-            )
-        );
-        match cli::setup::run() {
-            Ok(true) => {
-                println!();
-                theme.print_success("Setup complete! Running your command...\n");
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            let theme = crate::style::Theme::Cyber;
+            theme.print_banner();
+            theme.print_header(&format!("First-Time Setup v{}", env!("CARGO_PKG_VERSION")));
+            println!(
+                "  {}\n",
+                theme.style_secondary().apply_to(
+                    "Welcome! It looks like this is your first time running MuccheAI. \
+                     Let's get you set up."
+                )
+            );
+            match cli::setup::run() {
+                Ok(true) => {
+                    println!();
+                    theme.print_success("Setup complete! Running your command...\n");
+                }
+                Ok(false) => {
+                    // User cancelled setup.
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    theme.print_error(&format!("Setup failed: {e}"));
+                    std::process::exit(1);
+                }
             }
-            Ok(false) => {
-                // User cancelled setup.
-                std::process::exit(0);
-            }
-            Err(e) => {
-                theme.print_error(&format!("Setup failed: {e}"));
+        } else {
+            eprintln!("No config found; creating default configuration for headless run.");
+            if let Err(e) = crate::config::MuccheConfig::ensure_default() {
+                eprintln!("Failed to create default configuration: {e}");
                 std::process::exit(1);
             }
         }

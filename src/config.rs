@@ -491,6 +491,19 @@ impl MuccheConfig {
         home.join(".muccheai")
     }
 
+    /// Create a default configuration and encrypted keypair without any
+    /// interactive prompts. Used for headless / first-run server boots.
+    pub fn ensure_default() -> anyhow::Result<Self> {
+        let mut config = Self::default();
+        let kp = muccheai_crypto::generate_hybrid_keypair()
+            .map_err(|e| anyhow::anyhow!("key generation failed: {}", e))?;
+        config.keypair = kp.into();
+        config.save()?;
+        config.save_keypair()?;
+        config.save_api_key()?;
+        Ok(config)
+    }
+
     /// Path to the persisted chat sessions file.
     pub fn chat_sessions_path() -> PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));

@@ -90,6 +90,9 @@ pub async fn rate_limit_middleware(
     next: Next,
 ) -> Response {
     let direct_ip = addr.ip();
+    // Local loopback is effectively the same trusted user; apply a very high
+    // limit so single-user automated tests / rapid UI actions are not throttled.
+    let is_loopback = direct_ip.is_loopback();
     let config = state.config.lock().await;
     let trusted = config.trusted_proxies.clone();
     drop(config);
@@ -98,9 +101,9 @@ pub async fn rate_limit_middleware(
     let window = Duration::from_secs(60);
     // GET requests get a higher limit than mutating requests.
     let max_requests = if request.method() == axum::http::Method::GET {
-        300u32
+        if is_loopback { 100_000u32 } else { 300u32 }
     } else {
-        100u32
+        if is_loopback { 50_000u32 } else { 100u32 }
     };
 
     let mut limiter = state.rate_limiter.lock().await;

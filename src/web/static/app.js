@@ -676,7 +676,9 @@ function showThemePicker() {
 function initTheme() {
   const saved = localStorage.getItem('theme');
   if (!saved) {
-    setTimeout(showThemePicker, 500);
+    // Default to dark-chat so first load is usable without forcing a choice.
+    localStorage.setItem('theme', 'dark-chat');
+    applyTheme('dark-chat');
   } else {
     applyTheme(saved);
   }
@@ -2267,6 +2269,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Theme picker close controls
+  const themePickerModal = document.getElementById('themePickerModal');
+  const themePickerClose = document.getElementById('themePickerClose');
+  if (themePickerClose && themePickerModal) {
+    themePickerClose.addEventListener('click', () => {
+      themePickerModal.style.display = 'none';
+    });
+  }
+  if (themePickerModal) {
+    themePickerModal.addEventListener('click', (e) => {
+      if (e.target === themePickerModal) themePickerModal.style.display = 'none';
+    });
+  }
+
   // Change theme button in settings
   const changeThemeBtn = document.getElementById('changeThemeBtn');
   if (changeThemeBtn) {
@@ -2973,16 +2989,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   const approvalToast = document.getElementById('approvalToast');
   const approvalToastBtn = document.getElementById('approvalToastBtn');
   const approvalToastDismiss = document.getElementById('approvalToastDismiss');
+  let approvalToastTimeout = null;
+  function hideApprovalToast() {
+    if (approvalToast) approvalToast.style.display = 'none';
+    if (approvalToastTimeout) clearTimeout(approvalToastTimeout);
+    approvalToastTimeout = null;
+  }
+  function showApprovalToast() {
+    if (approvalToast) approvalToast.style.display = 'flex';
+    if (approvalToastTimeout) clearTimeout(approvalToastTimeout);
+    approvalToastTimeout = setTimeout(hideApprovalToast, 10000);
+  }
   if (approvalToastBtn) {
     approvalToastBtn.addEventListener('click', async () => {
       await switchTab('memory');
-      if (approvalToast) approvalToast.style.display = 'none';
+      hideApprovalToast();
     });
   }
   if (approvalToastDismiss) {
-    approvalToastDismiss.addEventListener('click', () => {
-      if (approvalToast) approvalToast.style.display = 'none';
-    });
+    approvalToastDismiss.addEventListener('click', hideApprovalToast);
   }
 
   // Poll memory queue for pending approvals
@@ -2998,7 +3023,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         queueBadge.style.display = pending.length > 0 ? 'inline-flex' : 'none';
       }
       if (approvalToast) {
-        approvalToast.style.display = pending.length > 0 ? 'flex' : 'none';
+        if (pending.length > 0) showApprovalToast(); else hideApprovalToast();
       }
       const toastList = document.getElementById('approvalToastList');
       if (toastList) {
