@@ -3836,6 +3836,42 @@ async fn upload_file(
     Ok(Json(result))
 }
 
+/// List files in a RAG database folder.
+async fn list_rag_files(
+    Path(database): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let safe_db: String = database
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if safe_db.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".muccheai")
+        .join("rag")
+        .join(safe_db);
+    let mut files = Vec::new();
+    if dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        files.push(serde_json::json!({
+                            "name": name,
+                            "size": meta.len(),
+                            "modified": meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(serde_json::json!({ "files": files, "path": dir.to_string_lossy() })))
+}
+
 /// Speech-to-Text endpoint.
 /// Accepts a multipart form with an `audio` file, transcribes it, and returns the text.
 async fn stt(

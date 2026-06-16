@@ -74,18 +74,27 @@ body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  gap: 12px;
-  overflow-y: auto;
+  padding: 0;
+  overflow: hidden;
   transition: width 0.25s ease, min-width 0.25s ease, padding 0.25s ease, opacity 0.25s ease;
 }
 
 .sidebar.closed {
   width: 0;
   min-width: 0;
-  padding: 16px 0;
+  padding: 0;
   opacity: 0;
   overflow: hidden;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .sidebar.closed .status-sidebar {
@@ -414,6 +423,7 @@ body {
 
 .chat-input button:hover { transform: scale(1.08); filter: brightness(1.15); }
 .chat-input button.pulse { animation: pulse-glow 1.5s ease-in-out infinite; }
+.chat-input button.active { background: #2563eb !important; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4); }
 
 /* ===== Attachment Menu (+ button dropdown) ===== */
 .attach-menu-wrapper { position: relative; }
@@ -517,28 +527,58 @@ body {
   border-radius: 8px;
   background: rgba(255,255,255,0.03);
   overflow: hidden;
+  transition: all 0.2s ease;
+}
+.thinking-block.streaming {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.35);
+  animation: thinking-pulse 2s ease-in-out infinite;
+}
+.thinking-block.has-content {
+  border-color: rgba(59, 130, 246, 0.5);
+}
+@keyframes thinking-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.15); }
+  50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.05); }
 }
 .thinking-toggle {
   width: 100%;
   text-align: left;
-  padding: 6px 10px;
+  padding: 8px 12px;
   font-size: 0.8rem;
   color: var(--text-dim);
   background: transparent;
   border: none;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.thinking-toggle::after {
+  content: '▸';
+  margin-left: auto;
+  transition: transform 0.2s ease;
+}
+.thinking-block.expanded .thinking-toggle::after {
+  transform: rotate(90deg);
 }
 .thinking-content {
   display: none;
-  padding: 8px 10px;
+  padding: 8px 12px;
   font-size: 0.8rem;
   color: var(--text-dim);
   white-space: pre-wrap;
   max-height: 240px;
   overflow-y: auto;
+  border-top: 1px solid var(--border);
 }
 .thinking-block.expanded .thinking-content {
   display: block;
+  animation: contentIn 0.2s ease forwards;
+}
+@keyframes contentIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .msg-actions {
@@ -1320,4 +1360,76 @@ body.chat-fullscreen .chat-input-area { padding-left: 5%; padding-right: 5%; }
 }
 #researchLoading { color: var(--text-dim); font-size: 0.9rem; }
 
+/* ===== Global animations and spacing ===== */
+.page-section {
+  animation: fadeSlideUp 0.35s ease forwards;
+}
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
+.card, .preset-card, .memory-item, .queue-item, .agent-card, .status-card, .analytics-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.card:hover, .preset-card:hover, .agent-card:hover, .status-card:hover, .analytics-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+
+/* List spacing */
+ul, ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+li {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+
+/* Form spacing */
+label {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+input[type="text"], input[type="password"], input[type="number"], textarea, select {
+  margin-bottom: 4px;
+}
+
+/* Modal animation */
+.modal, .api-key-modal {
+  animation: modalFadeIn 0.2s ease forwards;
+}
+.modal-content, .api-key-modal-content {
+  animation: modalScaleIn 0.25s ease forwards;
+}
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modalScaleIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Sidebar nav item spacing */
+.nav-item {
+  margin: 2px 0;
+}
+
+/* Chat history item spacing */
+.chat-history-item {
+  margin: 3px 0;
+}
+
+/* Button press feedback */
+button:active {
+  transform: scale(0.97);
+}
+
+/* Smooth page transitions */
+.main-content {
+  transition: margin-left 0.25s ease, max-width 0.25s ease;
+}

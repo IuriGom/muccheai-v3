@@ -141,6 +141,7 @@ const TRANSLATIONS = {
     ragDatabases: 'Databases',
     ragUpload: 'Upload documents',
     ragUploadBtn: 'Choose files',
+    ragScanBtn: '📁 Scan folder',
     ragEnable: 'Enable RAG',
     ragChunkOverlap: 'Chunk overlap',
     ragRetrievalTemp: 'Retrieval temperature',
@@ -283,6 +284,7 @@ const TRANSLATIONS = {
     ragDatabases: 'Bancos de dados',
     ragUpload: 'Enviar documentos',
     ragUploadBtn: 'Escolher arquivos',
+    ragScanBtn: '📁 Escanear pasta',
     ragEnable: 'Ativar RAG',
     ragChunkOverlap: 'Sobreposição',
     ragRetrievalTemp: 'Temperatura de recuperação',
@@ -425,6 +427,7 @@ const TRANSLATIONS = {
     ragDatabases: '数据库',
     ragUpload: '上传文档',
     ragUploadBtn: '选择文件',
+    ragScanBtn: '📁 扫描文件夹',
     ragEnable: '启用 RAG',
     ragChunkOverlap: '块重叠',
     ragRetrievalTemp: '检索温度',
@@ -643,7 +646,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=5`;
+  link.href = `/themes/${name}-v4.css?v=6`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -996,17 +999,26 @@ function startStream() {
   div.className = 'message ai';
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   div.innerHTML = '<span class="msg-time">' + time + '</span>' +
-    '<div class="thinking-block" style="display:none;">' +
-      '<button class="thinking-toggle" type="button">💭 ' + t('thinking') + '</button>' +
+    '<div class="thinking-block streaming">' +
+      '<button class="thinking-toggle" type="button">💭 ' + THINKING_WORDS[0] + '...</button>' +
       '<div class="thinking-content"></div>' +
     '</div>' +
     '<div class="msg-body"><span class="stream-cursor">▋</span></div>';
   container.appendChild(div);
+  const block = div.querySelector('.thinking-block');
   const thinkingToggle = div.querySelector('.thinking-toggle');
   if (thinkingToggle) {
     thinkingToggle.addEventListener('click', () => {
-      div.querySelector('.thinking-block')?.classList.toggle('expanded');
+      block?.classList.toggle('expanded');
     });
+  }
+  // Rotate thinking words in the toggle while streaming
+  if (thinkingToggle) {
+    let i = 0;
+    div.dataset.thinkingInterval = setInterval(() => {
+      i = (i + 1) % THINKING_WORDS.length;
+      thinkingToggle.textContent = '💭 ' + THINKING_WORDS[i] + '...';
+    }, 1800);
   }
   currentStreamEl = div;
   startStreamProgressWords();
@@ -1027,15 +1039,9 @@ function appendStream(text) {
     const think = text.slice(9);
     const block = currentStreamEl.querySelector('.thinking-block');
     const content = currentStreamEl.querySelector('.thinking-content');
-    const toggle = currentStreamEl.querySelector('.thinking-toggle');
     if (block && content) {
-      block.style.display = 'block';
+      block.classList.add('has-content');
       content.textContent = (content.textContent || '') + think;
-    }
-    if (toggle) {
-      const word = THINKING_WORDS[currentThinkingWordIndex % THINKING_WORDS.length];
-      currentThinkingWordIndex++;
-      toggle.textContent = '💭 ' + word + '...';
     }
     return;
   }
@@ -1056,10 +1062,26 @@ function appendStream(text) {
 
 function endStream() {
   if (!currentStreamEl) return;
-  const body = currentStreamEl.querySelector('.msg-body');
+  const el = currentStreamEl;
+  const body = el.querySelector('.msg-body');
   if (body) {
     const cursor = body.querySelector('.stream-cursor');
     if (cursor) cursor.remove();
+  }
+  if (el.dataset.thinkingInterval) {
+    clearInterval(parseInt(el.dataset.thinkingInterval));
+    delete el.dataset.thinkingInterval;
+  }
+  const block = el.querySelector('.thinking-block');
+  const toggle = el.querySelector('.thinking-toggle');
+  const content = el.querySelector('.thinking-content');
+  if (block) {
+    block.classList.remove('streaming');
+    if (!content?.textContent?.trim()) {
+      block.style.display = 'none';
+    } else {
+      if (toggle) toggle.textContent = '💭 ' + t('thinking');
+    }
   }
   currentStreamEl = null;
   if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
@@ -1105,16 +1127,37 @@ let autoScrollEnabled = localStorage.getItem('autoScrollEnabled') !== 'false';
 let unreadMessages = 0;
 let currentThinkingWordIndex = 0;
 let streamProgressInterval = null;
+let attachedImage = null;
 
 async function sendChat() {
   const input = document.getElementById('input');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && !attachedImage) return;
   input.value = '';
   localStorage.removeItem('chat_draft');
   const meta = document.getElementById('inputMeta');
   if (meta) meta.textContent = '';
-  addMessage(text, true);
+
+  let imageB64 = null;
+  if (attachedImage) {
+    try { imageB64 = await fileToBase64(attachedImage); } catch (e) { showToast('Image read failed', 'error'); }
+  }
+
+  if (attachedImage) {
+    const container = document.getElementById('messages');
+    const welcome = container.querySelector('.welcome-message');
+    if (welcome) welcome.remove();
+    const div = document.createElement('div');
+    div.className = 'message user';
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const url = URL.createObjectURL(attachedImage);
+    div.innerHTML = `<span class="msg-time">${time}</span><div>${escapeHtml(text || '')}</div><img src="${url}" style="max-width:200px;max-height:200px;border-radius:8px;margin-top:6px;">`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  } else {
+    addMessage(text, true);
+  }
+  clearAttachedImage();
   showTyping(true);
 
   try {
@@ -1126,7 +1169,7 @@ async function sendChat() {
     const res = await fetch(`${API}/api/chat`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: text, session_id: currentSession() })
+      body: JSON.stringify({ message: text || '', session_id: currentSession(), image_b64: imageB64 })
     });
     showTyping(false, aiName + ' is thinking...');
     if (!res.ok) {
@@ -1169,10 +1212,31 @@ async function sendChat() {
 async function sendChatStream() {
   const input = document.getElementById('input');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && !attachedImage) return;
   input.value = '';
   localStorage.removeItem('chat_draft');
-  addMessage(text, true);
+
+  let imageB64 = null;
+  if (attachedImage) {
+    try { imageB64 = await fileToBase64(attachedImage); } catch (e) { showToast('Image read failed', 'error'); }
+  }
+
+  // Render user message with image preview if attached
+  if (attachedImage) {
+    const container = document.getElementById('messages');
+    const welcome = container.querySelector('.welcome-message');
+    if (welcome) welcome.remove();
+    const div = document.createElement('div');
+    div.className = 'message user';
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const url = URL.createObjectURL(attachedImage);
+    div.innerHTML = `<span class="msg-time">${time}</span><div>${escapeHtml(text || '')}</div><img src="${url}" style="max-width:200px;max-height:200px;border-radius:8px;margin-top:6px;">`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  } else {
+    addMessage(text, true);
+  }
+  clearAttachedImage();
   showTyping(true);
 
   try {
@@ -1184,7 +1248,7 @@ async function sendChatStream() {
     const res = await fetch(`${API}/api/chat/stream`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: text, session_id: currentSession() })
+      body: JSON.stringify({ message: text || '', session_id: currentSession(), image_b64: imageB64 })
     });
     showTyping(false);
     if (!res.ok) {
@@ -1240,6 +1304,20 @@ async function sendChatStream() {
 
 function currentSession() {
   return localStorage.getItem('session_id') || '';
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') { reject(new Error('Failed to read image')); return; }
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 async function uploadFile(file) {
@@ -1959,15 +2037,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Image upload (visual only)
+  // Image attachment for multi-modal chat
   const imageInput = document.getElementById('imageInput');
   if (imageInput) {
     imageInput.addEventListener('change', () => {
       const file = imageInput.files[0];
-      if (file) addMessage('🖼️ Image: ' + file.name, true);
+      if (!file) return;
+      attachedImage = file;
+      if (inputMeta) inputMeta.innerHTML = '🖼️ ' + escapeHtml(file.name) + ' <button type="button" id="clearImageBtn" style="background:none;border:none;color:var(--accent);cursor:pointer;margin-left:6px;">✕</button>';
+      const clearBtn = document.getElementById('clearImageBtn');
+      if (clearBtn) clearBtn.addEventListener('click', clearAttachedImage);
       imageInput.value = '';
     });
   }
+  function clearAttachedImage() {
+    attachedImage = null;
+    if (inputMeta) inputMeta.textContent = '';
+  }
+  window.clearAttachedImage = clearAttachedImage;
 
   // Voice input using Web Speech API with backend STT fallback
   const voiceBtn = document.getElementById('voiceBtn');
@@ -2019,7 +2106,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         try { rec.start(); } catch (err) { showToast('Could not start microphone: ' + err.message, 'error'); }
       });
     } else {
-      voiceBtn.style.display = 'none';
+      voiceBtn.addEventListener('click', () => {
+        showToast('Speech recognition is not supported in this browser. Try Chrome, Brave or Edge.', 'error');
+      });
     }
   }
 
@@ -2996,16 +3085,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveRagSettings(s);
     renderRagDbs();
   });
-  const ragFileInput = document.getElementById('ragFileInput');
-  document.getElementById('ragUploadBtn')?.addEventListener('click', () => ragFileInput?.click());
-  if (ragFileInput) {
-    ragFileInput.addEventListener('change', () => {
-      const files = Array.from(ragFileInput.files || []);
-      const list = document.getElementById('ragFileList');
-      if (list) list.textContent = files.map(f => f.name).join(', ') || '';
-      showToast(`${files.length} file(s) selected. Save settings to queue for indexing.`, 'info');
-    });
+  async function scanRagFolder() {
+    const s = getRagSettings();
+    const active = s.activeDatabase || 'default';
+    const list = document.getElementById('ragFileList');
+    if (list) list.innerHTML = '<span style="color:var(--text-dim);">Scanning...</span>';
+    try {
+      const res = await fetch(`${API}/api/rag/${encodeURIComponent(active)}/files`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const files = data.files || [];
+      if (list) {
+        if (!files.length) {
+          list.innerHTML = '<span style="color:var(--text-dim);">No files in folder. Drop documents into:<br><code>' + escapeHtml(data.path || '') + '</code></span>';
+        } else {
+          list.innerHTML = '<ul style="margin:0;padding-left:18px;">' + files.map(f =>
+            `<li>${escapeHtml(f.name)} <span style="color:var(--text-dim);">(${(f.size / 1024).toFixed(1)} KB)</span></li>`
+          ).join('') + '</ul>';
+        }
+      }
+    } catch (e) {
+      if (list) list.innerHTML = '<span style="color:#ff6b6b;">Failed to scan: ' + escapeHtml(e.message) + '</span>';
+    }
   }
+  document.getElementById('ragScanBtn')?.addEventListener('click', scanRagFolder);
+  document.getElementById('ragDbSelect')?.addEventListener('change', () => {
+    const list = document.getElementById('ragFileList');
+    if (list) list.innerHTML = '';
+  });
   document.getElementById('ragSaveBtn')?.addEventListener('click', () => {
     const s = getRagSettings();
     s.enabled = document.getElementById('ragEnabled')?.checked ?? false;

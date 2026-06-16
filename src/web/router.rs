@@ -178,6 +178,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sandbox/detect", post(detect_code_blocks))
         .route("/sandbox/execute", post(execute_code_block))
         .route("/web-search", post(web_search))
+        .route("/rag/:database/files", get(list_rag_files))
         .route("/memory/recompute-tiers", post(recompute_memory_tiers))
         .route("/pipeline/run", post(run_pipeline))
         .route_layer(middleware::from_fn_with_state(
