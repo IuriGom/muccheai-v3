@@ -231,51 +231,56 @@ pub fn run_update() -> anyhow::Result<()> {
         }
 
         // Fetch remote latest commit hash for verification.
-        if let Some(remote_hash) = fetch_latest_commit_hash() {
+        let needs_pull = if let Some(remote_hash) = fetch_latest_commit_hash() {
             println!("  Remote latest:  {}", &remote_hash[..12.min(remote_hash.len())]);
             if before_hash == remote_hash {
-                println!("  Already up to date.");
-                return Ok(());
-            }
-            if !confirm("  Proceed with update?") {
-                anyhow::bail!("Update cancelled by user.");
+                println!("  Local repo is on the latest commit.");
+                false
+            } else {
+                if !confirm("  Proceed with update?") {
+                    anyhow::bail!("Update cancelled by user.");
+                }
+                true
             }
         } else {
             println!("  ⚠️  Could not fetch remote commit hash. Proceeding blindly.");
             if !confirm("  Proceed without verification?") {
                 anyhow::bail!("Update cancelled by user.");
             }
-        }
+            true
+        };
 
-        println!("  Pulling latest changes...\n");
+        if needs_pull {
+            println!("  Pulling latest changes...\n");
 
-        // Try git pull with HTTP/2 disabled first (fixes curl 16 framing errors).
-        let status = Command::new("git")
-            .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "pull", "origin", "main"])
-            .status()?;
-
-        if !status.success() {
-            eprintln!("  ⚠️  git pull failed. Trying fetch + merge fallback...");
-            let fetch_status = Command::new("git")
-                .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "fetch", "origin", "main"])
+            // Try git pull with HTTP/2 disabled first (fixes curl 16 framing errors).
+            let status = Command::new("git")
+                .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "pull", "origin", "main"])
                 .status()?;
-            if !fetch_status.success() {
-                anyhow::bail!("git fetch failed — check your network connection and try again.");
-            }
-            let merge_status = Command::new("git")
-                .args(["-C", &path.to_string_lossy(), "merge", "origin/main"])
-                .status()?;
-            if !merge_status.success() {
-                anyhow::bail!("git merge failed — you may have local changes that conflict with the remote.");
-            }
-        }
 
-        let hash_output = Command::new("git")
-            .args(["-C", &path.to_string_lossy(), "rev-parse", "HEAD"])
-            .output()?;
-        let after_hash = String::from_utf8_lossy(&hash_output.stdout).trim().to_string();
-        if after_hash.len() == 40 {
-            println!("  New commit: {}\n", &after_hash[..12]);
+            if !status.success() {
+                eprintln!("  ⚠️  git pull failed. Trying fetch + merge fallback...");
+                let fetch_status = Command::new("git")
+                    .args(["-C", &path.to_string_lossy(), "-c", "http.version=HTTP/1.1", "fetch", "origin", "main"])
+                    .status()?;
+                if !fetch_status.success() {
+                    anyhow::bail!("git fetch failed — check your network connection and try again.");
+                }
+                let merge_status = Command::new("git")
+                    .args(["-C", &path.to_string_lossy(), "merge", "origin/main"])
+                    .status()?;
+                if !merge_status.success() {
+                    anyhow::bail!("git merge failed — you may have local changes that conflict with the remote.");
+                }
+            }
+
+            let hash_output = Command::new("git")
+                .args(["-C", &path.to_string_lossy(), "rev-parse", "HEAD"])
+                .output()?;
+            let after_hash = String::from_utf8_lossy(&hash_output.stdout).trim().to_string();
+            if after_hash.len() == 40 {
+                println!("  New commit: {}\n", &after_hash[..12]);
+            }
         }
 
         println!("  Building and installing...\n");
