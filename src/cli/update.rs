@@ -281,18 +281,20 @@ pub fn run_update() -> anyhow::Result<()> {
             if after_hash.len() == 40 {
                 println!("  New commit: {}\n", &after_hash[..12]);
             }
+
+            println!("  Building and installing...\n");
+            let install_status = Command::new("cargo")
+                .args(["install", "--path", &path.to_string_lossy(), "--force"])
+                .status()?;
+
+            if !install_status.success() {
+                anyhow::bail!("cargo install failed.");
+            }
+
+            theme.print_success("Update complete!");
+        } else {
+            println!("  Local repo is already on the latest commit. Nothing to do.");
         }
-
-        println!("  Building and installing...\n");
-        let install_status = Command::new("cargo")
-            .args(["install", "--path", &path.to_string_lossy(), "--force"])
-            .status()?;
-
-        if !install_status.success() {
-            anyhow::bail!("cargo install failed.");
-        }
-
-        theme.print_success("Update complete!");
     } else {
         println!("  No local git repo found — installing from GitHub...\n");
         println!("  ⚠️  Installing from remote git without commit verification.");
