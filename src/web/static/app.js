@@ -1,5 +1,7 @@
 // ===== MuccheAI Web UI =====
 const API = (window.location.port === '8888') ? 'http://127.0.0.1:3000' : '';
+const THEME_CSS_VERSION = '12';
+const APP_JS_VERSION = '48';
 let token = ''; // Auth disabled — no login required
 let csrfToken = localStorage.getItem('csrf_token') || '';
 let currentTheme = localStorage.getItem('theme') || 'dark-chat';
@@ -663,7 +665,7 @@ function applyTheme(name) {
   }
   // Smooth transition: add a class that dims the body, swap, then restore
   document.body.classList.add('theme-transitioning');
-  link.href = `/themes/${name}-v4.css?v=8`;
+  link.href = `/themes/${name}-v4.css?v=${THEME_CSS_VERSION}`;
   document.body.setAttribute('data-theme', name);
   setTimeout(() => document.body.classList.remove('theme-transitioning'), 350);
 }
@@ -2088,7 +2090,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function startWebSpeech(input) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        showToast('Local STT is not configured and this browser does not support Web Speech. Install whisper (`pip install openai-whisper`) for offline STT.', 'error');
+        showToast('Local STT is not configured. Run `muccheai setup` to install whisper, or install it manually with `pip install openai-whisper`.', 'error');
         return;
       }
       const langMap = { en: 'en-US', pt: 'pt-BR', zh: 'zh-CN' };
