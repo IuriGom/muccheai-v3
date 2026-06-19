@@ -319,12 +319,6 @@ pub struct MuccheConfig {
     /// Web search approval mode: "disabled", "approval_required", "always_allow".
     #[serde(default = "default_web_search_approval")]
     pub web_search_approval: String,
-    /// Enable the speech-to-text API endpoint.
-    #[serde(default)]
-    pub stt_enabled: bool,
-    /// Path or name of the whisper model / binary to use for STT.
-    #[serde(default = "default_stt_model")]
-    pub stt_model: String,
     /// Automatically summarize chat sessions when they grow long.
     #[serde(default = "default_true")]
     pub auto_summarize_sessions: bool,
@@ -380,8 +374,6 @@ impl std::fmt::Debug for MuccheConfig {
             .field("show_reasoning", &self.show_reasoning)
             .field("web_search_enabled", &self.web_search_enabled)
             .field("web_search_approval", &self.web_search_approval)
-            .field("stt_enabled", &self.stt_enabled)
-            .field("stt_model", &self.stt_model)
             .field("auto_summarize_sessions", &self.auto_summarize_sessions)
             .field("summarize_after_messages", &self.summarize_after_messages)
             .field("native_tool_calling", &self.native_tool_calling)
@@ -419,10 +411,6 @@ fn default_summarize_after_messages() -> usize {
     50
 }
 
-fn default_stt_model() -> String {
-    "whisper".to_string()
-}
-
 fn default_web_search_approval() -> String {
     "approval_required".to_string()
 }
@@ -457,8 +445,6 @@ impl Default for MuccheConfig {
             trusted_proxies: Vec::new(),
             web_search_enabled: false,
             web_search_approval: default_web_search_approval(),
-            stt_enabled: true,
-            stt_model: default_stt_model(),
             auto_summarize_sessions: true,
             summarize_after_messages: 50,
             native_tool_calling: true,

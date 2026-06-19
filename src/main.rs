@@ -37,7 +37,6 @@ mod style;
 mod users;
 mod web;
 mod web_search;
-mod stt;
 
 use cli::{Cli, Commands, ConfigCommands, DaemonCommands, OutputFormat, PersonaCommands, PolicyCommands, VaultCommands};
 

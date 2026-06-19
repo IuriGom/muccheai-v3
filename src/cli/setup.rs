@@ -10,39 +10,7 @@ use muccheai_policy_engine::rules::RuleAction;
 use rand::RngCore;
 use std::io::Write;
 
-const TOTAL_STEPS: usize = 8;
-
-fn whisper_installed() -> bool {
-    std::process::Command::new("whisper")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn install_whisper(theme: &crate::style::Theme) -> anyhow::Result<bool> {
-    theme.print_info("Attempting to install whisper via pip...");
-    let python = if std::process::Command::new("python3").arg("--version").stdout(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
-        "python3"
-    } else if std::process::Command::new("python").arg("--version").stdout(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
-        "python"
-    } else {
-        theme.print_warning("Python not found. Please install Python 3 and run `pip install openai-whisper`.");
-        return Ok(false);
-    };
-    let status = std::process::Command::new(python)
-        .args(["-m", "pip", "install", "openai-whisper"])
-        .status()?;
-    if status.success() {
-        theme.print_success("whisper installed successfully");
-        Ok(true)
-    } else {
-        theme.print_warning("whisper installation failed. You can install it later with `pip install openai-whisper`.");
-        Ok(false)
-    }
-}
+const TOTAL_STEPS: usize = 7;
 
 pub fn is_first_run() -> bool {
     !MuccheConfig::config_path().exists()
@@ -315,35 +283,8 @@ pub fn run() -> anyhow::Result<bool> {
         }
     };
 
-    // ── Step 3: Speech-to-Text ────────────────────────────────────────────
-    theme.print_step(3, TOTAL_STEPS, "Speech-to-Text (Optional)");
-    println!(
-        "  {}\n",
-        theme.style_secondary().apply_to(
-            "MuccheAI can transcribe your voice locally using OpenAI's whisper model. \
-             This keeps voice input fully offline."
-        )
-    );
-
-    let whisper_already = whisper_installed();
-    let mut stt_enabled = true;
-    if whisper_already {
-        theme.print_success("whisper is already installed");
-    } else {
-        let install = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Install whisper for offline voice input?")
-            .default(true)
-            .interact()?;
-        if install {
-            stt_enabled = install_whisper(&theme)?;
-        } else {
-            theme.print_info("Skipping whisper installation. You can install it later with `pip install openai-whisper`.");
-            stt_enabled = false;
-        }
-    }
-
-    // ── Step 4: Tools ─────────────────────────────────────────────────────
-    theme.print_step(4, TOTAL_STEPS, "Choose Your Tools");
+    // ── Step 3: Tools ─────────────────────────────────────────────────────
+    theme.print_step(3, TOTAL_STEPS, "Choose Your Tools");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -367,8 +308,8 @@ pub fn run() -> anyhow::Result<bool> {
         theme.print_success(&format!("Enabled: {}", allowed_tools.join(", ")));
     }
 
-    // ── Step 5: Security ──────────────────────────────────────────────────
-    theme.print_step(5, TOTAL_STEPS, "Security Preferences");
+    // ── Step 4: Security ──────────────────────────────────────────────────
+    theme.print_step(4, TOTAL_STEPS, "Security Preferences");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -412,8 +353,8 @@ pub fn run() -> anyhow::Result<bool> {
 
     theme.print_success("Security preferences configured");
 
-    // ── Step 6: Vault ─────────────────────────────────────────────────────
-    theme.print_step(6, TOTAL_STEPS, "Create Your Vault");
+    // ── Step 5: Vault ─────────────────────────────────────────────────────
+    theme.print_step(5, TOTAL_STEPS, "Create Your Vault");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -483,8 +424,8 @@ pub fn run() -> anyhow::Result<bool> {
         theme.style_secondary().apply_to("5.")
     );
 
-    // ── Step 7: Persona ───────────────────────────────────────────────────
-    theme.print_step(7, TOTAL_STEPS, "Configure Your Persona");
+    // ── Step 6: Persona ───────────────────────────────────────────────────
+    theme.print_step(6, TOTAL_STEPS, "Configure Your Persona");
     println!(
         "  {}\n",
         theme.style_secondary().apply_to(
@@ -530,8 +471,8 @@ pub fn run() -> anyhow::Result<bool> {
 
     theme.print_success("Persona configured");
 
-    // ── Step 8: Save & Finish ─────────────────────────────────────────────
-    theme.print_step(8, TOTAL_STEPS, "Save Configuration");
+    // ── Step 7: Save & Finish ─────────────────────────────────────────────
+    theme.print_step(7, TOTAL_STEPS, "Save Configuration");
 
     let mut config = MuccheConfig {
         ollama_host: host,
@@ -540,8 +481,6 @@ pub fn run() -> anyhow::Result<bool> {
         default_action,
         business_hours_restriction: false,
         approval_tier,
-        stt_enabled,
-
         shamir_threshold: threshold,
         keypair: keypair.into(),
         personas,

@@ -170,7 +170,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sessions/:id/digest", get(get_session_digest))
         .route("/sessions/:id/encrypt-share", post(create_encrypted_share))
         .route("/upload", post(upload_file))
-        .route("/stt", post(stt))
         .route("/mcp/servers", get(list_mcp_servers))
         .route("/mcp/servers", post(add_mcp_server))
         .route("/mcp/servers/:name", delete(delete_mcp_server))
